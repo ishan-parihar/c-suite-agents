@@ -131,6 +131,15 @@ export class MessagingSystem extends EventEmitter {
       CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
     `);
 
+    // Migration: Add vector column if it doesn't exist (legacy database compatibility)
+    try {
+      this.db.exec(`SELECT vector FROM messages LIMIT 0`);
+    } catch {
+      logger.info("Migrating: adding vector column to messages table");
+      this.db.run(`ALTER TABLE messages ADD COLUMN vector TEXT DEFAULT '[]'`);
+      await this.persist();
+    }
+
     await this.persist();
     logger.info({ dbPath: this.dbPath }, "Messaging database initialized");
   }
@@ -184,7 +193,7 @@ export class MessagingSystem extends EventEmitter {
     const vector = await this.generateEmbedding(content);
     
     this.db.run(
-      "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
       [message_id, thread_id, from, to, content, priority, requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
     );
 
@@ -221,7 +230,7 @@ export class MessagingSystem extends EventEmitter {
     const vector = await this.generateEmbedding(content);
 
     this.db.run(
-      "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
       [message_id, thread_id, from, otherParticipant, content, "P3", requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
     );
 
