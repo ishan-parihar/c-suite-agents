@@ -1,0 +1,22 @@
+[Unit]
+Description=Strategos Orchestrator (MCP + ACP)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/strategos
+Environment=NODE_ENV=production
+Environment=TELEGRAM_BOT_TOKEN=
+Environment=TELEGRAM_CHAT_ID=
+Environment=OLLAMA_EMBED_MODEL=qwen3-embedding
+Environment=LANCEDB_DIR=/opt/strategos/.lancedb
+Environment=KANBAN_DB=/opt/strategos/kanban.db
+ExecStart=/usr/bin/node /opt/strategos/build/index.js
+Restart=always
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

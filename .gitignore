@@ -1,0 +1,41 @@
+# Secrets
+.env
+
+# Dependencies
+node_modules/
+
+# Build output
+build/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# LanceDB
+lancedb/
+*.lancedb/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local data
+data/
+.temp/
+
+# Coverage
+coverage/
+
+# TypeScript
+*.tsbuildinfo
