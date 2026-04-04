@@ -3,8 +3,13 @@
 
 import { v4 as uuidv4 } from "uuid";
 import initSqlJs from "sql.js";
-import { promises as fs } from "node:fs";
+import * as fs from "node:fs/promises";
+import { resolve } from "node:path";
 import { logger } from "../logger.js";
+
+function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
+  try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+}
 
 type DBAny = any;
 
@@ -42,10 +47,14 @@ export class ReportsAndSessions {
   private constructor(private db: DBAny, private path: string) {}
 
   static async init(path: string = "reports_sessions.db"): Promise<ReportsAndSessions> {
+    const resolved = resolve(path);
+    if (!resolved.endsWith(".db") && !resolved.endsWith(".sqlite")) {
+      throw new Error(`Invalid database path: ${path}`);
+    }
     const SQL = await initSqlJs({ locateFile: (f: string) => `node_modules/sql.js/dist/${f}` });
     let db: DBAny;
     try {
-      const buf = await fs.readFile(path);
+      const buf = await fs.readFile(resolved);
       db = new SQL.Database(new Uint8Array(buf));
     } catch {
       db = new SQL.Database();
@@ -110,7 +119,13 @@ export class ReportsAndSessions {
   private async persist() {
     if (!this.db) return;
     const data = this.db.export();
-    await fs.writeFile(this.path, Buffer.from(data));
+    const tmpPath = `${this.path}.tmp`;
+    await fs.writeFile(tmpPath, Buffer.from(data));
+    await fs.rename(tmpPath, this.path);
+  }
+
+  async close(): Promise<void> {
+    await this.persist();
   }
 
   // Reports
@@ -127,10 +142,10 @@ export class ReportsAndSessions {
   }
 
   async getLatestReports(agent_id: string, limit = 5): Promise<Report[]> {
-    const rows = this.db.exec(`SELECT * FROM reports WHERE agent_id = '${agent_id}' ORDER BY created_at DESC LIMIT ${limit}`);
-    return rows[0]?.values.map((row: any[]) => ({
-      id: row[0], agent_id: row[1], period: row[2], summary: row[3],
-      metrics: JSON.parse(row[4] || "{}"), actions: JSON.parse(row[5] || "[]"), created_at: row[6]
+    const rows = this.db.prepare("SELECT * FROM reports WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?").all([agent_id, limit]);
+    return rows.map((row: any) => ({
+      id: row.id, agent_id: row.agent_id, period: row.period, summary: row.summary,
+      metrics: safeJsonParse(row.metrics, {}), actions: safeJsonParse(row.actions, []), created_at: row.created_at
     })) || [];
   }
 
@@ -147,15 +162,15 @@ export class ReportsAndSessions {
   }
 
   async getSession(session_id: string): Promise<Session | null> {
-    const row = this.db.exec(`SELECT * FROM sessions WHERE id = '${session_id}'`)[0]?.values?.[0];
+    const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get([session_id]);
     if (!row) return null;
-    return { id: row[0], agent_id: row[1], chat_id: row[2], started_at: row[3], last_active: row[4], status: row[5] };
+    return { id: row.id, agent_id: row.agent_id, chat_id: row.chat_id, started_at: row.started_at, last_active: row.last_active, status: row.status };
   }
 
   async getActiveSession(agent_id: string, chat_id: string): Promise<Session | null> {
-    const row = this.db.exec(`SELECT * FROM sessions WHERE agent_id = '${agent_id}' AND chat_id = '${chat_id}' AND status = 'active' ORDER BY last_active DESC LIMIT 1`)[0]?.values?.[0];
+    const row = this.db.prepare("SELECT * FROM sessions WHERE agent_id = ? AND chat_id = ? AND status = 'active' ORDER BY last_active DESC LIMIT 1").get([agent_id, chat_id]);
     if (!row) return null;
-    return { id: row[0], agent_id: row[1], chat_id: row[2], started_at: row[3], last_active: row[4], status: row[5] };
+    return { id: row.id, agent_id: row.agent_id, chat_id: row.chat_id, started_at: row.started_at, last_active: row.last_active, status: row.status };
   }
 
   async updateSessionLastActive(session_id: string): Promise<void> {
@@ -181,10 +196,10 @@ export class ReportsAndSessions {
   }
 
   async getSessionSteps(session_id: string, limit = 10): Promise<SessionStep[]> {
-    const rows = this.db.exec(`SELECT * FROM session_steps WHERE session_id = '${session_id}' ORDER BY step_num DESC LIMIT ${limit}`);
-    return rows[0]?.values.map((row: any[]) => ({
-      id: row[0], session_id: row[1], step_num: row[2], step_type: row[3],
-      tool: row[4], args_hash: row[5], obs_summary: row[6], ts: row[7]
+    const rows = this.db.prepare("SELECT * FROM session_steps WHERE session_id = ? ORDER BY step_num DESC LIMIT ?").all([session_id, limit]);
+    return rows.map((row: any) => ({
+      id: row.id, session_id: row.session_id, step_num: row.step_num, step_type: row.step_type,
+      tool: row.tool, args_hash: row.args_hash, obs_summary: row.obs_summary, ts: row.ts
     })) || [];
   }
 
@@ -198,14 +213,14 @@ export class ReportsAndSessions {
   }
 
   async getToolResult(id: string): Promise<string | null> {
-    const row = this.db.exec(`SELECT result FROM tool_correlations WHERE id = '${id}'`)[0]?.values?.[0];
-    return row ? row[0] : null;
+    const row = this.db.prepare("SELECT result FROM tool_correlations WHERE id = ?").get([id]);
+    return row ? row.result : null;
   }
 
   // OpenCode session persistence
   async getOcSession(chat_id: string, agent_id: string): Promise<string | null> {
-    const row = this.db.exec(`SELECT oc_session_id FROM oc_sessions WHERE chat_id = '${chat_id}' AND agent_id = '${agent_id}'`)[0]?.values?.[0];
-    return row ? row[0] : null;
+    const row = this.db.prepare("SELECT oc_session_id FROM oc_sessions WHERE chat_id = ? AND agent_id = ?").get([chat_id, agent_id]);
+    return row ? row.oc_session_id : null;
   }
   async upsertOcSession(chat_id: string, agent_id: string, oc_session_id: string): Promise<void> {
     const id = `${chat_id}:${agent_id}`;

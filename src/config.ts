@@ -1,7 +1,49 @@
-export const cfg = {
-  telegramToken: process.env.TELEGRAM_BOT_TOKEN || "",
-  telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
-  ollamaEmbedModel: process.env.OLLAMA_EMBED_MODEL || "embeddinggemma",
-  lancedbDir: process.env.LANCEDB_DIR || ".lancedb",
-  kanbanDb: process.env.KANBAN_DB || "kanban.db",
+import { loadConfig, getConfigPath } from "./config/loader.js";
+
+// Load config once at module initialization (defaults < .env < ~/.strategos/config.json)
+let _config: ReturnType<typeof loadConfig> | null = null;
+
+function getConfig() {
+  if (!_config) {
+    try {
+      _config = loadConfig();
+    } catch (err: unknown) {
+      console.error(`[strategos] Config load failed: ${(err as Error).message}. Using defaults.`);
+      _config = loadConfig(); // Will succeed with defaults even if file is bad
+    }
+  }
+  return _config;
+}
+
+// Re-export for advanced usage
+export { getConfig, getConfigPath };
+
+// Backward-compatible API for existing importers (5 files)
+export const cfg = new Proxy({} as typeof legacyCfg, {
+  get(_target, prop: string) {
+    const c = getConfig();
+    switch (prop) {
+      case "telegramToken":
+        return c.telegram?.botToken ?? "";
+      case "telegramChatId":
+        return c.telegram?.chatId ?? "";
+      case "ollamaEmbedModel":
+        return "embeddinggemma"; // Still hardcoded — no config section yet
+      case "lancedbDir":
+        return c.paths?.lancedb ?? ".lancedb";
+      case "kanbanDb":
+        return c.paths?.kanbanDb ?? "kanban.db";
+      default:
+        return undefined;
+    }
+  },
+});
+
+const legacyCfg = {
+  telegramToken: "",
+  telegramChatId: "",
+  ollamaEmbedModel: "embeddinggemma",
+  lancedbDir: ".lancedb",
+  kanbanDb: "kanban.db",
 };
+export type Cfg = typeof legacyCfg;

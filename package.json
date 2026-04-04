@@ -1,19 +1,27 @@
 {
   "name": "strategos",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "strategos": "./bin/strategos.mjs"
+  },
   "scripts": {
-    "build": "tsc && chmod 755 build/index.js",
+    "build": "bun build src/index.ts --outdir build --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm && bun build src/cli/program.ts --outdir build/cli --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm",
+    "build:cli": "bun build src/cli/program.ts --outdir build/cli --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm",
     "start": "node build/index.js",
-    "dev": "node --loader ts-node/esm src/index.ts",
+    "dev": "bun run src/index.ts",
     "deploy": "bash deploy.sh"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.11.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.8.0",
+    "cron-parser": "^5.5.0",
     "dotenv": "^16.4.5",
     "ollama": "^0.5.18",
+    "openai": "^4.104.0",
     "pino": "^9.3.2",
     "sql.js": "^1.12.0",
     "telegraf": "^4.16.3",
@@ -23,7 +31,6 @@
   "devDependencies": {
     "@types/node": "^22.9.1",
     "@types/uuid": "^10.0.0",
-    "ts-node": "^10.9.2",
     "typescript": "^5.6.3"
   }
 }

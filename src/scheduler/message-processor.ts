@@ -1,26 +1,30 @@
 // Message Processor - Polls for messages and triggers agent responses
 
 import { logger } from "../logger.js";
-import { getCoreStaffIds } from "../staff/core-staff.js";
+import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { getOpenCodeClient } from "../acp/opencode-client.js";
 import { AgentContextManager } from "../organic/context.js";
 import { Kanban } from "../kanban/sqlite.js";
 import { Memory } from "../memory/lancedb.js";
-import { getSessionManager, validateAgentIdentity } from "../auth/session.js";
-import { getStaffById } from "../staff/core-staff.js";
-import { getPromptForRole } from "../staff/prompts.js";
+import { getSessionRegistry } from "./session-registry.js";
+import { autoStore, autoRecall } from "../memory/auto.js";
 
-interface AgentSessionCache {
-  sessionId: string;
-  lastUsed: number;
-}
+const AGENT_ID_MAP: Record<string, string> = {
+  "ceo-strategic": "ceo-strategic",
+  "coo-productivity": "coo-productivity",
+  "cfo-financial": "cfo-financial",
+  "cmo-content": "cmo-content",
+  "cro-relational": "cro-relational",
+  "physician-health": "cpso-health",
+  "cpo-psychologist": "cpo-psychologist",
+  "cio-intelligence": "cio-intelligence",
+};
 
 export class MessageProcessor {
   private intervalMs: number;
   private running = false;
-  private sessionCache: Map<string, AgentSessionCache> = new Map();
-  private sessionTimeoutMs: number = 30 * 60 * 1000; // 30 minutes
+  private timerId: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private kanban: Kanban,
@@ -43,11 +47,17 @@ export class MessageProcessor {
     await this.processAllAgents();
 
     // Schedule periodic processing
-    setInterval(() => this.processAllAgents(), this.intervalMs);
+    this.timerId = setInterval(() => {
+      if (this.running) this.processAllAgents();
+    }, this.intervalMs);
   }
 
   stop() {
     this.running = false;
+    if (this.timerId) {
+      clearInterval(this.timerId);
+      this.timerId = null;
+    }
     logger.info("Message processor stopped");
   }
 
@@ -60,7 +70,7 @@ export class MessageProcessor {
 
     for (const agentId of getCoreStaffIds()) {
       try {
-        await this.processAgent(agentId, messaging, acp, contextManager);
+        await this.processAgent(agentId, messaging, contextManager);
       } catch (err: any) {
         logger.error({ agentId, err: err.message }, "Failed to process agent messages");
       }
@@ -70,7 +80,6 @@ export class MessageProcessor {
   private async processAgent(
     agentId: string,
     messaging: any,
-    acp: any,
     contextManager: AgentContextManager
   ) {
     // Get pending responses
@@ -80,23 +89,42 @@ export class MessageProcessor {
       return; // Nothing to process
     }
 
+    // Filter out self-messages (ceo-strategic → ceo-strategic threads have only 1 participant)
+    const validResponses = context.pending_responses.filter((msg: any) => msg.from !== agentId);
+    if (validResponses.length === 0 && context.unread_count === 0) {
+      return;
+    }
+
     logger.info(
       { agentId, pending: context.pending_responses.length, unread: context.unread_count },
       "Processing agent messages"
     );
 
-    // Ensure OpenCode session for this agent
-    const sessionId = await this.ensureAgentSession(agentId, acp);
+    const sessionRegistry = getSessionRegistry();
+    let sessionId = await sessionRegistry.getOrCreate(agentId, {});
+    const acp = getOpenCodeClient();
 
-    // Process each pending response
-    for (const msg of context.pending_responses) {
+    if (!(await acp.verifySession(sessionId))) {
+      await sessionRegistry.invalidate(agentId);
+      sessionId = await sessionRegistry.getOrCreate(agentId, {});
+    }
+
+    // Process each valid pending response
+    for (const msg of validResponses) {
       try {
-        // Build prompt with message context
         const wakeCtx = await contextManager.getWakeContext(agentId);
-        const prompt = this.buildAgentResponsePrompt(msg, wakeCtx);
 
-        // Get agent response via OpenCode
-        const result = await acp.sendMessage(sessionId, prompt);
+        // AUTO RECALL: Fetch relevant memories before building delta
+        const recallText = await autoRecall({
+          agentId,
+          queryText: msg.content,
+          trigger: "inter_agent_message",
+        });
+
+        const delta = this.buildAgentResponseDelta(msg, wakeCtx, recallText);
+        const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
+        const result = await acp.sendMessage(sessionId, delta, undefined, { agent: nativeAgentId });
+        await sessionRegistry.touch(sessionId);
 
         // Send reply via messaging system
         await messaging.reply({
@@ -106,12 +134,26 @@ export class MessageProcessor {
           requires_response: false
         });
 
+        // AUTO STORE: Save the conversation turn automatically
+        await autoStore({
+          agentId,
+          inputText: msg.content,
+          outputText: result.text || "",
+          trigger: "inter_agent_message",
+          context: {
+            from: msg.from,
+            threadId: msg.thread_id,
+          },
+        });
+
         logger.info({ agentId, threadId: msg.thread_id }, "Agent responded to message");
       } catch (err: any) {
-        logger.error(
+        // Skip broken threads (e.g., single-participant self-messages)
+        logger.warn(
           { agentId, threadId: msg.thread_id, err: err.message },
-          "Failed to process message"
+          "Skipping broken thread, marking as read"
         );
+        await messaging.markAsRead(agentId, msg.thread_id);
       }
     }
 
@@ -119,61 +161,37 @@ export class MessageProcessor {
     await messaging.markAsRead(agentId);
   }
 
-  private async ensureAgentSession(agentId: string, acp: any): Promise<string> {
-    const cached = this.sessionCache.get(agentId);
-    const now = Date.now();
-
-    if (cached && now - cached.lastUsed < this.sessionTimeoutMs) {
-      cached.lastUsed = now;
-      return cached.sessionId;
-    }
-
-    // Create new session
-    const sessionId = await acp.createSession(process.cwd());
-    this.sessionCache.set(agentId, { sessionId, lastUsed: now });
-
-    logger.info({ agentId, sessionId }, "Created new agent session");
-    return sessionId;
-  }
-
-  private buildAgentResponsePrompt(message: any, wakeCtx: any): string {
+  private buildAgentResponseDelta(message: any, wakeCtx: any, recallText: string = ""): string {
     const staff = getStaffById(message.from);
     const fromName = staff ? `${staff.avatar} ${staff.name}` : message.from;
-    
-    // Get agent's system prompt
-    const promptData = getPromptForRole(message.to);
-    const systemPrompt = promptData ? promptData.prompt : "You are a helpful AI assistant.";
 
-    return `${systemPrompt}
+    const lines: string[] = [];
 
----
-
-You have a new message that requires your response.
-
-## Message Context
-From: ${fromName}
-Priority: ${message.priority}
-Thread: ${message.thread_id}
-
-## Message Content
-${message.content}
-
-## Your Current Context
-${wakeCtx.summary || "No additional context available"}
-
----
-
-Respond naturally and conversationally. This is a message from a colleague, not a user command. Be helpful, concise, and authentic.`;
-  }
-
-  cleanupExpiredSessions() {
-    const now = Date.now();
-    for (const [agentId, cache] of this.sessionCache.entries()) {
-      if (now - cache.lastUsed > this.sessionTimeoutMs) {
-        this.sessionCache.delete(agentId);
-        logger.info({ agentId }, "Expired agent session removed from cache");
-      }
+    // Inject recalled memories first (if any)
+    if (recallText) {
+      lines.push(recallText);
+      lines.push("");
     }
+
+    lines.push(
+      `## Message from ${fromName}`,
+      `Priority: ${message.priority}`,
+      `Thread: ${message.thread_id}`,
+      '',
+      message.content,
+    );
+
+    if (wakeCtx.summary) {
+      lines.push('');
+      lines.push(`## Your Context`);
+      lines.push(wakeCtx.summary);
+    }
+
+    lines.push('');
+    lines.push(`---`);
+    lines.push(`Respond naturally and conversationally. This is a message from a colleague, not a user command.`);
+
+    return lines.join('\n');
   }
 }
 

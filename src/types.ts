@@ -1,5 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Server } from "http";
 import type { Memory } from "./memory/lancedb.js";
+import type { MemoryFacade } from "./memory/index.js";
 import type { Kanban } from "./kanban/sqlite.js";
 import type { HierarchicalMemory } from "./memory/hierarchical.js";
 import type { MessagingSystem } from "./organic/messaging.js";
@@ -11,9 +13,11 @@ export type ToolExecutor = {
 };
 
 export type StrategosRuntime = {
-  server: McpServer;
+  server?: McpServer;
+  httpServer?: Server;
   ctx: { 
     memory: Memory; 
+    memoryFacade?: MemoryFacade;
     kanban: Kanban;
     hierarchicalMemory?: HierarchicalMemory;
     messaging?: MessagingSystem;
@@ -21,4 +25,5 @@ export type StrategosRuntime = {
     hiring?: HiringSystem;
   };
   executor: ToolExecutor;
+  shutdown: () => Promise<void>;
 };

@@ -115,25 +115,25 @@ export function getSessionManager(): SessionManager {
   return sessionManager;
 }
 
-export async function validateAgentIdentity(agentId: string): Promise<{ valid: boolean; isStaff: boolean; isHired: boolean; reason?: string }> {
+export async function validateAgentIdentity(agentId: string): Promise<void> {
   // Check if agent exists in staff registry
   const staff = getStaffById(agentId);
   if (staff) {
-    return { valid: true, isStaff: true, isHired: false };
+    return;
   }
 
   // Check if agent is a hired auxiliary
   try {
-    const hiring = getHiringSystem();
+    const hiring = await getHiringSystem();
     const contract = await hiring.getContract(agentId);
     if (contract && contract.status === "active") {
-      return { valid: true, isStaff: false, isHired: true };
+      return;
     }
-  } catch (err: any) {
-    // Hiring system not initialized or error - continue
+  } catch {
+    // Hiring system not initialized or error — continue to throw
   }
 
-  return { valid: false, isStaff: false, isHired: false, reason: `Unknown agent: ${agentId}` };
+  throw new Error(`Unauthorized agent: ${agentId}`);
 }
 
 export async function buildAuthContext(session: AgentSession): Promise<AuthContext> {
@@ -143,7 +143,7 @@ export async function buildAuthContext(session: AgentSession): Promise<AuthConte
   if (!staff) {
     // Check if hired agent
     try {
-      const hiring = getHiringSystem();
+      const hiring = await getHiringSystem();
       const contract = await hiring.getContract(session.agentId);
       isHiredAgent = !!(contract && contract.status === "active");
     } catch {

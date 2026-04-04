@@ -2,7 +2,7 @@
 # Deploy script: build + auto-restart service
 set -e
 
-cd /home/ishanp/Documents/GitHub/strategos
+cd "$(dirname "$0")"
 
 echo "=== Building Strategos ==="
 npm run build

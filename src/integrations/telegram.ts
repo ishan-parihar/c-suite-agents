@@ -8,9 +8,287 @@ import { getMessagingSystem } from "../organic/messaging.js";
 import { AgentContextManager } from "../organic/context.js";
 import { getReportsAndSessions } from "../mcp/tools-reports.js";
 import { getOpenCodeClient } from "../acp/opencode-client.js";
-import { getPromptForRole } from "../staff/prompts.js";
+import { autoStore, autoRecall } from "../memory/auto.js";
+import { getMemoryFacade } from "../memory/index.js";
+import { getSessionRegistry } from "../scheduler/session-registry.js";
 
 type AgentRegistry = { agents: Map<string, { id: string; role: string; boardId: string }>; cards: Map<string, string> };
+
+const TELEGRAM_MAX_LENGTH = 4000;
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeHtmlAttr(text: string): string {
+  return escapeHtml(text).replace(/"/g, "&quot;");
+}
+
+/**
+ * Converts markdown to Telegram-compatible HTML.
+ * Follows openclaw's approach: markdown → HTML with <b>, <i>, <s>, <code>, <pre><code>, <a>, <blockquote>.
+ */
+function markdownToTelegramHtml(md: string): string {
+  let result = "";
+  const lines = md.split("\n");
+  let inCodeBlock = false;
+  let codeBlockContent: string[] = [];
+  let inBlockquote = false;
+  let blockquoteLines: string[] = [];
+
+  const flushBlockquote = () => {
+    if (blockquoteLines.length > 0) {
+      result += `<blockquote>${blockquoteLines.join("\n")}</blockquote>\n`;
+      blockquoteLines = [];
+    }
+    inBlockquote = false;
+  };
+
+  const formatInline = (text: string): string => {
+    let t = escapeHtml(text);
+    t = t.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
+    t = t.replace(/\*\*\*(.+?)\*\*\*/g, (_m, content) => `<b><i>${content}</i></b>`);
+    t = t.replace(/\*\*(.+?)\*\*/g, (_m, content) => `<b>${content}</b>`);
+    t = t.replace(/__(.+?)__/g, (_m, content) => `<b>${content}</b>`);
+    t = t.replace(/\*(.+?)\*/g, (_m, content) => `<i>${content}</i>`);
+    t = t.replace(/_(.+?)_/g, (_m, content) => `<i>${content}</i>`);
+    t = t.replace(/~~(.+?)~~/g, (_m, content) => `<s>${content}</s>`);
+    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => `<a href="${escapeHtmlAttr(url)}">${text}</a>`);
+    return t;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (inCodeBlock) {
+      if (line.startsWith("```")) {
+        inCodeBlock = false;
+        result += `<pre><code>${escapeHtml(codeBlockContent.join("\n"))}</code></pre>\n`;
+        codeBlockContent = [];
+      } else {
+        codeBlockContent.push(line);
+      }
+      continue;
+    }
+
+    if (line.startsWith("```")) {
+      flushBlockquote();
+      inCodeBlock = true;
+      codeBlockContent = [];
+      continue;
+    }
+
+    if (line.startsWith("> ")) {
+      inBlockquote = true;
+      blockquoteLines.push(formatInline(line.slice(2)));
+      continue;
+    } else if (inBlockquote) {
+      flushBlockquote();
+    }
+
+    if (line.startsWith("### ")) {
+      result += `<b>${formatInline(line.slice(4))}</b>\n`;
+    } else if (line.startsWith("## ")) {
+      result += `<b>${formatInline(line.slice(3))}</b>\n`;
+    } else if (line.startsWith("# ")) {
+      result += `<b>${formatInline(line.slice(2))}</b>\n`;
+    } else if (/^[-*] /.test(line)) {
+      result += `• ${formatInline(line.slice(2))}\n`;
+    } else if (/^\d+\. /.test(line)) {
+      result += `${formatInline(line)}\n`;
+    } else if (line.trim() === "") {
+      result += "\n";
+    } else {
+      result += `${formatInline(line)}\n`;
+    }
+  }
+
+  flushBlockquote();
+
+  if (inCodeBlock) {
+    result += `<pre><code>${escapeHtml(codeBlockContent.join("\n"))}</code></pre>\n`;
+  }
+
+  return result.trim();
+}
+
+const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
+
+interface HtmlTag {
+  name: string;
+  openTag: string;
+  closeTag: string;
+}
+
+/**
+ * Splits HTML into chunks that respect the Telegram message length limit.
+ * Maintains tag nesting so each chunk is valid HTML on its own.
+ * Based on openclaw's splitTelegramHtmlChunks approach.
+ */
+function splitTelegramHtmlChunks(html: string, limit: number): string[] {
+  if (!html) return [];
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (html.length <= normalizedLimit) return [html];
+
+  const chunks: string[] = [];
+  const openTags: HtmlTag[] = [];
+  let current = "";
+  let chunkHasPayload = false;
+
+  const resetCurrent = () => {
+    current = openTags.map((t) => t.openTag).join("");
+    chunkHasPayload = false;
+  };
+
+  const closeSuffix = (tags: HtmlTag[]): string =>
+    [...tags].reverse().map((t) => t.closeTag).join("");
+
+  const closeSuffixLength = (tags: HtmlTag[]): number =>
+    tags.reduce((sum, t) => sum + t.closeTag.length, 0);
+
+  const flushCurrent = () => {
+    if (!chunkHasPayload) return;
+    chunks.push(`${current}${closeSuffix(openTags)}`);
+    resetCurrent();
+  };
+
+  const appendText = (segment: string) => {
+    let remaining = segment;
+    while (remaining.length > 0) {
+      const available = normalizedLimit - current.length - closeSuffixLength(openTags);
+      if (available <= 0) {
+        if (!chunkHasPayload) {
+          throw new Error(`Telegram chunk limit exceeded by tag overhead (limit=${normalizedLimit})`);
+        }
+        flushCurrent();
+        continue;
+      }
+      if (remaining.length <= available) {
+        current += remaining;
+        chunkHasPayload = true;
+        break;
+      }
+      // Split at a safe boundary: prefer last space, avoid breaking in the middle of &entities;
+      let splitAt = available;
+      const lastSpace = remaining.lastIndexOf(" ", available);
+      const lastNewline = remaining.lastIndexOf("\n", available);
+      const safeSplit = Math.max(lastSpace, lastNewline);
+      if (safeSplit > available * 0.5) {
+        splitAt = safeSplit + 1;
+      }
+      // Don't break in the middle of HTML entities
+      const lastAmp = remaining.lastIndexOf("&", splitAt);
+      if (lastAmp >= 0 && lastAmp < splitAt) {
+        const semiIdx = remaining.indexOf(";", lastAmp);
+        if (semiIdx >= 0 && semiIdx < splitAt) {
+          // Entity is complete before split, safe
+        } else if (semiIdx >= splitAt) {
+          splitAt = lastAmp;
+        }
+      }
+      if (splitAt <= 0) splitAt = 1;
+      current += remaining.slice(0, splitAt);
+      chunkHasPayload = true;
+      remaining = remaining.slice(splitAt);
+      flushCurrent();
+    }
+  };
+
+  resetCurrent();
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    const tagStart = match.index;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+    appendText(html.slice(lastIndex, tagStart));
+
+    const isClosing = match[1] === "</";
+    const tagName = match[2].toLowerCase();
+    const isSelfClosing = !isClosing && match[0].trimEnd().endsWith("/>");
+
+    if (!isClosing) {
+      const nextCloseLength = isSelfClosing ? 0 : `</${tagName}>`.length;
+      if (
+        chunkHasPayload &&
+        current.length + match[0].length + closeSuffixLength(openTags) + nextCloseLength >
+          normalizedLimit
+      ) {
+        flushCurrent();
+      }
+    }
+
+    current += match[0];
+    if (!isSelfClosing) {
+      if (isClosing) {
+        for (let i = openTags.length - 1; i >= 0; i--) {
+          if (openTags[i].name === tagName) {
+            openTags.splice(i, 1);
+            break;
+          }
+        }
+      } else {
+        openTags.push({
+          name: tagName,
+          openTag: match[0],
+          closeTag: `</${tagName}>`,
+        });
+      }
+    }
+    lastIndex = tagEnd;
+  }
+
+  appendText(html.slice(lastIndex));
+  flushCurrent();
+  return chunks.length > 0 ? chunks : [html];
+}
+
+/**
+ * Sends HTML content to Telegram with smart chunking and parse fallback.
+ * Follows openclaw's pattern: try HTML, fall back to plain text on parse errors.
+ */
+async function sendTelegramHtmlChunks(
+  ctx: any,
+  html: string,
+  plainText: string,
+): Promise<void> {
+  const htmlChunks = splitTelegramHtmlChunks(html, TELEGRAM_MAX_LENGTH);
+  const sentMessageIds: number[] = [];
+
+  for (let i = 0; i < htmlChunks.length; i++) {
+    const isLastChunk = i === htmlChunks.length - 1;
+    const chunk = htmlChunks[i];
+    if (!chunk) continue;
+
+    try {
+      const result = await ctx.reply(chunk, { parse_mode: "HTML" });
+      if (result?.message_id) sentMessageIds.push(result.message_id);
+    } catch (err: any) {
+      // Check if it's a parse error — fall back to plain text for this chunk
+      if (/can't parse entities|parse entities|find end of the entity/i.test(err.message)) {
+        logger.warn({ chunkIndex: i }, "HTML parse error, falling back to plain text for chunk");
+        const plainChunks = splitTelegramHtmlChunks(plainText, TELEGRAM_MAX_LENGTH);
+        const fallback = plainChunks[i] || chunk;
+        const result = await ctx.reply(fallback);
+        if (result?.message_id) sentMessageIds.push(result.message_id);
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+// Maps internal agent IDs to native OpenCode agent file names
+const AGENT_ID_MAP: Record<string, string> = {
+  "ceo-strategic": "ceo-strategic",
+  "coo-productivity": "coo-productivity",
+  "cfo-financial": "cfo-financial",
+  "cmo-content": "cmo-content",
+  "cro-relational": "cro-relational",
+  "physician-health": "cpso-health",
+  "cpo-psychologist": "cpo-psychologist",
+  "cio-intelligence": "cio-intelligence",
+};
 
 export async function startTelegram(rt: StrategosRuntime) {
   if (!cfg.telegramToken || cfg.telegramToken === "your_bot_token_here") {
@@ -37,8 +315,6 @@ export async function startTelegram(rt: StrategosRuntime) {
     type ChatRoute = { participants: string[]; mode: "single"|"meeting"|"threaded"; lastActive: number; timeoutMs: number };
     const chatRoutes = new Map<string, ChatRoute>();
     const defaultTimeoutMs = parseInt(process.env.TG_ROUTE_TIMEOUT_MS || "1800000", 10); // 30 minutes
-    // OpenCode session cache per chat per agent
-    const ocSessions = new Map<string, Map<string, string>>(); // chatId -> (agentId -> ocSessionId)
 
     // Start OpenCode client
     const acp = getOpenCodeClient();
@@ -48,28 +324,14 @@ export async function startTelegram(rt: StrategosRuntime) {
     const getRoute = (chatId: string): ChatRoute => {
       const r = chatRoutes.get(chatId);
       if (r) return r;
-      const created = { participants: ["strategos"], mode: "single" as const, lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
+      const created = { participants: ["ceo-strategic"], mode: "single" as const, lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
       chatRoutes.set(chatId, created);
       return created;
     };
     const setRoute = (chatId: string, route: ChatRoute) => { chatRoutes.set(chatId, { ...route, lastActive: Date.now() }); };
-    
-    const ensureAcPSession = async (chatId: string, agentId: string): Promise<string> => {
-      // In-memory cache only (no persistence - forces fresh prompts on restart)
-      let m = ocSessions.get(chatId);
-      if (!m) { m = new Map(); ocSessions.set(chatId, m); }
-      const cached = m.get(agentId);
-      if (cached) return cached;
-      
-      // Create new OpenCode session
-      const acp = getOpenCodeClient();
-      const sessionId = await acp.createSession(process.cwd());
-      
-      m.set(agentId, sessionId);
-      
-      logger.info({ chatId, agentId, sessionId }, "Created new OpenCode session");
-      return sessionId;
-    };
+
+    // SessionRegistry for persistent session management
+    const sessionRegistry = getSessionRegistry();
 
     // /start command
     bot.command("start", async (ctx) => {
@@ -104,8 +366,8 @@ Just talk naturally to interact with the team!`;
       
       await ctx.reply(message);
       const chatId = ctx.chat.id.toString();
-      chatAgentMap.set(chatId, "strategos");
-      setRoute(chatId, { participants: ["strategos"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
+      chatAgentMap.set(chatId, "ceo-strategic");
+      setRoute(chatId, { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
     });
 
     // /agent - Summon any agent
@@ -156,7 +418,7 @@ Just talk naturally to interact with the team!`;
       }
       const chatId = ctx.chat.id.toString();
       if (args[0].toLowerCase() === "end") {
-        setRoute(chatId, { participants: ["strategos"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
+        setRoute(chatId, { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
         await ctx.reply(bold("🛑 Meeting ended. Back to Strategos."));
         return;
       }
@@ -236,7 +498,7 @@ Just talk naturally to interact with the team!`;
     bot.command("messages", async (ctx) => {
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
       const args = (ctx.message as any)?.text?.split(" ") || [];
-      const agentId = args[1] || "strategos";
+      const agentId = args[1] || "ceo-strategic";
       
       await ctx.sendChatAction("typing");
       try {
@@ -273,7 +535,7 @@ Just talk naturally to interact with the team!`;
       
       await ctx.sendChatAction("typing");
       try {
-        const result = await contextManager.recall({ agent_id: "strategos", query, top_k: 10 });
+        const result = await contextManager.recall({ agent_id: "ceo-strategic", query, top_k: 10 });
         
         if (result.results.length === 0) {
           await ctx.reply(fmt`${bold("🔍 No results for")} "${query}"`);
@@ -363,31 +625,15 @@ Just talk naturally! Examples:
       if (args[0].toLowerCase() === "reset" || args[0].toLowerCase() === "clear") {
         const agentId = args[1];
         if (!agentId) {
-          await ctx.reply("Usage: `/session reset [agent]` or `/session clear [agent]`\nExample: `/session reset cfo-financial`\n\n⚠️ This clears the ACP session but keeps LanceDB memory intact.");
+          await ctx.reply("Usage: `/session reset [agent]` or `/session clear [agent]`\nExample: `/session reset cfo-financial`\n\n⚠️ This clears the session but keeps LanceDB memory intact.");
           return;
         }
         
-        const rs = await getReportsAndSessions();
-        const sessionId = await rs.getOcSession(chatId, agentId);
+        const sessionRegistry = getSessionRegistry();
+        await sessionRegistry.invalidate(agentId, chatId);
         
-        if (!sessionId) {
-          await ctx.reply(`No session found for ${agentId}`);
-          return;
-        }
-        
-        // Remove from database (LanceDB embeddings remain untouched)
-        const db = (rs as any).db;
-        if (db) {
-          db.run("DELETE FROM oc_sessions WHERE chat_id = ? AND agent_id = ?", [chatId, agentId]);
-          await (rs as any).persist();
-        }
-        
-        // Remove from cache
-        const m = ocSessions.get(chatId);
-        if (m) m.delete(agentId);
-        
-        await ctx.reply(fmt`${bold("✅ Session cleared for")} **${agentId}**\n\nSession ID: \`${sessionId}\`\n\n⚠️ LanceDB memory embeddings are preserved. Only ACP conversation context was reset.`);
-        logger.info({ chatId, agentId, sessionId }, "Session reset");
+        await ctx.reply(fmt`${bold("✅ Session cleared for")} **${agentId}**\n\n⚠️ LanceDB memory embeddings are preserved. Only conversation context was reset.`);
+        logger.info({ chatId, agentId }, "Session reset via registry");
         return;
       }
       
@@ -408,7 +654,7 @@ Just talk naturally! Examples:
         // Determine route with timeout reset
         let route = getRoute(chatId);
         if (Date.now() - route.lastActive > route.timeoutMs) {
-          route = { participants: ["strategos"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
+          route = { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
           setRoute(chatId, route);
         }
 
@@ -422,7 +668,7 @@ Just talk naturally! Examples:
 
         try {
           // Fan-out to all participants concurrently
-          const replies = await Promise.all(route.participants.map(async (agentId) => {
+          const replies = await Promise.allSettled(route.participants.map(async (agentId) => {
             // Wake context per agent
             let wakeCtx = "";
             try {
@@ -433,65 +679,66 @@ Just talk naturally! Examples:
               wakeCtx = "[No context available]";
             }
 
-            // Proactive memory recall based on actual user message
-            let relevantMemory = "";
-            try {
-              const recall = await contextManager.recall({
-                agent_id: agentId,
-                query: text,
-                top_k: 5
-              });
-              if (recall && recall.results && recall.results.length > 0) {
-                relevantMemory = "\n### Relevant Memory\n" + recall.results.map((r: any) => 
-                  `• [${r.type}] ${r.summary} (relevance: ${(r.relevance * 100).toFixed(0)}%)`
-                ).join("\n");
-                logger.info({ agentId, memoryCount: recall.results.length }, "Proactive memory recall");
-              }
-            } catch (e) {
-              logger.warn({ err: e, agentId }, "Memory recall failed");
+            // Get persistent session via registry
+            const acpSessionId = await sessionRegistry.getOrCreate(agentId, { chatId });
+
+            // Verify session is healthy in OpenCode
+            if (!(await acp.verifySession(acpSessionId))) {
+              await sessionRegistry.invalidate(agentId, chatId);
+              const newSessionId = await sessionRegistry.getOrCreate(agentId, { chatId });
+              logger.info({ oldSession: acpSessionId, newSession: newSessionId, agentId }, "Session healed");
             }
 
-            // Ensure persistent OpenCode session per chat+agent
-            const acpSessionId = await ensureAcPSession(chatId, agentId);
-            
-            // Get agent's system prompt
-            const promptData = getPromptForRole(agentId);
-            const systemPrompt = promptData ? promptData.prompt : "You are a helpful AI assistant.";
-            
-            // Build prompt with system prompt, context, and user message
-            const prompt = `${systemPrompt}
+            // Build delta only — no system prompt (loaded natively by OpenCode agent)
+            const memoryFacade = await getMemoryFacade();
 
----
+            // AUTO RECALL: Fetch relevant memories before responding
+            const recallText = await autoRecall({
+              agentId,
+              queryText: text,
+              trigger: "user_message",
+            });
 
-[Current Session]
-Agent: ${agentId}
-Chat: ${chatId}
-Mode: ${route.mode}
+            const memoryInjection = await memoryFacade.injectForTask(agentId, text);
 
-[Context]
-${wakeCtx}
-${relevantMemory}
-[/Context]
+            const delta = [
+              recallText,
+              memoryInjection,
+              `---`,
+              `[User Message]`,
+              text,
+              `[/User Message]`,
+              ``,
+              `[Context]`,
+              wakeCtx,
+              `[/Context]`,
+            ].filter(Boolean).join('\n');
 
-[User Message]
-${text}
-[/User Message]
-
----
-
-Remember: Be conversational, not report-style. Keep it brief and helpful.`;
-
-            // Send message via OpenCode
+            // Send with native agent identity
+            const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
             let reply = "(no reply)";
             try {
-              logger.info({ agentId, sessionId: acpSessionId }, "Sending message to OpenCode...");
-              const result = await acp.sendMessage(acpSessionId, prompt, process.cwd());
+              logger.info({ agentId, nativeAgentId, sessionId: acpSessionId }, "Sending delta to OpenCode...");
+              const result = await acp.sendMessage(acpSessionId, delta, process.cwd(), { agent: nativeAgentId });
               logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "OpenCode response received");
               reply = result.text || "(empty response)";
             } catch (err: any) {
-              logger.error({ agentId, err: err.message, stack: err.stack }, "OpenCode message failed");
+              logger.error({ agentId, err: err.message }, "OpenCode message failed");
               reply = `(error contacting agent: ${err.message})`;
             }
+
+            // AUTO STORE: Save the conversation turn
+            await autoStore({
+              agentId,
+              inputText: text,
+              outputText: reply,
+              trigger: "user_message",
+              context: {
+                threadId: chatId,
+              },
+            });
+
+            await sessionRegistry.touch(acpSessionId);
 
             // Log session per agent
             try {
@@ -508,20 +755,34 @@ Remember: Be conversational, not report-style. Keep it brief and helpful.`;
           // Clear typing indicator
           clearInterval(typingInterval);
 
-          const combined = replies.join("\n\n");
-          logger.info({ textLength: combined.length }, "Sending reply to Telegram...");
+          const successful = replies.filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled");
+          const failed = replies.filter(r => r.status === "rejected");
+
+          if (failed.length > 0) {
+            logger.warn({ failed: failed.length, total: replies.length }, "Partial agent response failure");
+          }
+          if (successful.length === 0) {
+            await ctx.reply("❌ No agents could respond right now. Please try again later.");
+            return;
+          }
+
+          const combined = successful.map(r => r.value).join("\n\n");
+          logger.info({ textLength: combined.length, agentsOk: successful.length, agentsFailed: failed.length }, "Sending reply to Telegram...");
           
-          // Use Telegram Markdown v2 for formatting
-          await ctx.reply(combined, { parse_mode: "Markdown" });
+          // Convert markdown to HTML and send with smart chunking
+          const html = markdownToTelegramHtml(combined);
+          await sendTelegramHtmlChunks(ctx, html, combined);
           logger.info("Reply sent successfully");
         } catch (err: any) {
           clearInterval(typingInterval);
-          logger.error({ err: err.message, stack: err.stack }, "Failed to process message");
-          const errorMsg = `❌ *Error processing your message*\n\n\`${err.message}\`\n\nPlease try again or use /help for commands.`;
-          await ctx.reply(errorMsg, { parse_mode: "Markdown" });
+          logger.error({ err: err.message }, "Failed to process message");
+          const safeMsg = err.message?.length < 100 && !err.message?.includes("ECONN") && !err.message?.includes("ETIMEDOUT") && !err.message?.includes("ENOENT")
+            ? "A processing error occurred"
+            : "A processing error occurred";
+          await ctx.reply(`❌ ${safeMsg}\n\nPlease try again or use /help for commands.`);
         }
       } catch (err: any) {
-        logger.error({ err: err.message, stack: err.stack }, "Unexpected error in message handler");
+        logger.error({ err: err.message }, "Unexpected error in message handler");
         await ctx.reply(fmt`${bold("❌ Unexpected error")} - Please try again`);
       }
     });
@@ -552,16 +813,6 @@ Your AI organization is ready to work!`;
       logger.error({ err: err.message }, "Failed to send startup message");
     }
 
-    // Graceful shutdown
-    process.once("SIGINT", () => {
-      logger.info("SIGINT received, stopping bot...");
-      bot.stop("SIGINT");
-    });
-    process.once("SIGTERM", () => {
-      logger.info("SIGTERM received, stopping bot...");
-      bot.stop("SIGTERM");
-    });
-
     return bot;
   } catch (err: any) {
     logger.error({ err: err.message }, "Failed to start Telegram bot");
@@ -578,12 +829,25 @@ export async function sendTelegramMessage(text: string, priority: "info" | "warn
     return false;
   }
   try {
-    // Escape markdown if text contains raw formatting
-    const formattedText = text.includes("```") || text.includes("##") ? text : text;
-    await telegramBot.telegram.sendMessage(cfg.telegramChatId, formattedText, { 
-      parse_mode: "Markdown",
-      disable_notification: priority === "info"
-    });
+    const html = markdownToTelegramHtml(text);
+    const htmlChunks = splitTelegramHtmlChunks(html, TELEGRAM_MAX_LENGTH);
+    for (const chunk of htmlChunks) {
+      try {
+        await telegramBot.telegram.sendMessage(cfg.telegramChatId, chunk, { 
+          parse_mode: "HTML",
+          disable_notification: priority === "info"
+        });
+      } catch (htmlErr: any) {
+        // Fall back to plain text on parse error
+        if (/can't parse entities|parse entities|find end of the entity/i.test(htmlErr.message)) {
+          await telegramBot.telegram.sendMessage(cfg.telegramChatId, text, { 
+            disable_notification: priority === "info"
+          });
+        } else {
+          throw htmlErr;
+        }
+      }
+    }
     logger.info({ text: text.substring(0, 50), priority }, "Telegram notification sent");
     return true;
   } catch (err: any) {
