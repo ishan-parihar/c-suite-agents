@@ -34,14 +34,20 @@ export class MeetingScheduler {
         logger.error({ err: err.message }, "Meeting scheduler error");
       }
 
-      setTimeout(loop, this.intervalMs);
+      this.meetingTimer = setTimeout(loop, this.intervalMs);
     };
 
     loop();
   }
 
+  private meetingTimer: ReturnType<typeof setTimeout> | null = null;
+
   stop() {
     this.running = false;
+    if (this.meetingTimer) {
+      clearTimeout(this.meetingTimer);
+      this.meetingTimer = null;
+    }
     logger.info("Meeting scheduler stopped");
   }
 }

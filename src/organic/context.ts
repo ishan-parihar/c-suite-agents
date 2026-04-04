@@ -77,7 +77,7 @@ export class AgentContextManager {
     const staff = getStaffById(agent_id);
     const messaging = await getMessagingSystem();
     const meetings = getMeetingGovernance();
-    const hiring = getHiringSystem();
+    const hiring = await getHiringSystem();
 
     logger.info({ agent_id }, "Generating wake context");
 
@@ -198,6 +198,16 @@ export class AgentContextManager {
     lines.push("- `message.getThread(thread_id)` — Read full conversation");
     lines.push("");
 
+    // If there are unread messages, tell agent how to read them
+    if (urgent.unread_messages > 0) {
+      lines.push("### 📥 Read Your Unread Messages");
+      lines.push(`You have **${urgent.unread_messages}** unread messages. Use \`message.getUnread({ agent_id: "${context.agent_id}" })\` to read them all with full content.`);
+      if (context.agent_id === "ceo-strategic") {
+        lines.push("These are reports from other agents about their domain checks. Read them before responding to the user.");
+      }
+      lines.push("");
+    }
+
     return lines.join("\n");
   }
 
@@ -213,7 +223,7 @@ export class AgentContextManager {
   }): Promise<RecallResult> {
     const messaging = await getMessagingSystem();
     const meetings = getMeetingGovernance();
-    const hiring = getHiringSystem();
+    const hiring = await getHiringSystem();
 
     const results: RecallResult["results"] = [];
 

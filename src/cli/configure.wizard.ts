@@ -1,0 +1,107 @@
+import { writeFileSync, chmodSync } from "node:fs";
+import { CONFIGURE_SECTIONS, type WizardSection, promptSection } from "./configure.shared.js";
+import { SECTION_HANDLERS } from "./configure.sections.js";
+import { readConfigSnapshot, summarizeConfig } from "./config-snapshot.js";
+import { applyWizardMetadata } from "./onboard-helpers.js";
+import { StrategosConfigSchema } from "../config/schema.js";
+
+const RESET = "\x1b[0m";
+const BOLD = "\x1b[1m";
+const CYAN = "\x1b[36m";
+const GREEN = "\x1b[32m";
+const YELLOW = "\x1b[33m";
+const RED = "\x1b[31m";
+const DIM = "\x1b[2m";
+
+function heading(text: string): string {
+  return `${BOLD}${CYAN}${text}${RESET}`;
+}
+
+function success(text: string): string {
+  return `${GREEN}${text}${RESET}`;
+}
+
+function error(text: string): string {
+  return `${RED}${text}${RESET}`;
+}
+
+function persistConfig(config: Record<string, unknown>, configPath: string): boolean {
+  applyWizardMetadata(config);
+  const wizard = config.wizard as Record<string, unknown>;
+  wizard.lastRunCommand = "configure";
+  wizard.lastRunMode = "configure";
+
+  const result = StrategosConfigSchema.safeParse(config);
+  if (!result.success) {
+    const firstError = result.error.errors[0];
+    console.log(error(`Validation failed: ${firstError.path.join(".")} — ${firstError.message}`));
+    return false;
+  }
+
+  const json = JSON.stringify(config, null, 2);
+  writeFileSync(configPath, json, "utf-8");
+  chmodSync(configPath, 0o600);
+  return true;
+}
+
+export async function runConfigureWizard(options?: { section?: string }): Promise<boolean> {
+  const snapshot = readConfigSnapshot();
+
+  if (!snapshot.exists) {
+    console.error(error("No configuration found. Run 'strategos onboard' first."));
+    return false;
+  }
+
+  if (!snapshot.valid) {
+    console.error(error("Config file is corrupted. Run 'strategos reset' then 'strategos onboard'."));
+    if (snapshot.error) {
+      console.error(DIM + snapshot.error + RESET);
+    }
+    return false;
+  }
+
+  const configPath = snapshot.path;
+  const nextConfig = structuredClone(snapshot.config) as Record<string, unknown>;
+
+  console.log(`\n${heading("Existing configuration detected:")}\n`);
+  console.log(summarizeConfig(nextConfig));
+
+  if (options?.section) {
+    const handler = SECTION_HANDLERS[options.section as WizardSection];
+    if (!handler) {
+      console.error(error(`Unknown section: "${options.section}"`));
+      console.log(`Available sections: ${CONFIGURE_SECTIONS.map((s) => s.id).join(", ")}`);
+      return false;
+    }
+
+    console.log(`\n${heading(`Configuring: ${options.section}`)}\n`);
+    const result = await handler(nextConfig);
+    if (!persistConfig(result, configPath)) return false;
+    console.log(`\n${success("Config saved.")}`);
+    console.log(`\n${success("Configure complete. Run 'strategos doctor' to verify.")}`);
+    return true;
+  }
+
+  while (true) {
+    const selected = await promptSection(CONFIGURE_SECTIONS, nextConfig);
+    if (selected === "continue") break;
+
+    const handler = SECTION_HANDLERS[selected];
+    if (!handler) {
+      console.error(error(`No handler for section: ${selected}`));
+      continue;
+    }
+
+    console.log(`\n${heading(`Configuring: ${selected}`)}\n`);
+    const result = await handler(nextConfig);
+    Object.assign(nextConfig, result);
+    if (!persistConfig(nextConfig, configPath)) {
+      console.log(error("Config not saved — fix validation errors and retry."));
+      continue;
+    }
+    console.log(`\n${success("Config saved.")}`);
+  }
+
+  console.log(`\n${success("Configure complete. Run 'strategos doctor' to verify.")}`);
+  return true;
+}

@@ -4,7 +4,8 @@ import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
 import { getStaffById, getBoardMembers } from "../staff/core-staff.js";
 import initSqlJs from "sql.js";
-import { promises as fs } from "node:fs";
+import * as fs from "node:fs/promises";
+import { resolve } from "node:path";
 import { Ollama } from "ollama";
 import { cfg } from "../config.js";
 import { validateAgentIdentity } from "../auth/session.js";
@@ -55,9 +56,11 @@ export interface MessageSearchResult {
   snippet: string;
 }
 
-function escapeSql(str: string): string {
-  return str.replace(/'/g, "''");
+function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
+  try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 }
+
+const MAX_MESSAGE_LENGTH = 10000;
 
 export class MessagingSystem extends EventEmitter {
   private db: any;
@@ -80,6 +83,11 @@ export class MessagingSystem extends EventEmitter {
   }
 
   private async initializeDB() {
+    const resolved = resolve(this.dbPath);
+    if (!resolved.endsWith(".db") && !resolved.endsWith(".sqlite")) {
+      throw new Error(`Invalid database path: ${this.dbPath}`);
+    }
+    this.dbPath = resolved;
     const SQL = await initSqlJs({ locateFile: (f: string) => `node_modules/sql.js/dist/${f}` });
     
     try {
@@ -134,10 +142,15 @@ export class MessagingSystem extends EventEmitter {
     // Migration: Add vector column if it doesn't exist (legacy database compatibility)
     try {
       this.db.exec(`SELECT vector FROM messages LIMIT 0`);
-    } catch {
-      logger.info("Migrating: adding vector column to messages table");
-      this.db.run(`ALTER TABLE messages ADD COLUMN vector TEXT DEFAULT '[]'`);
-      await this.persist();
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      if (msg.includes("no such column") || msg.includes("unknown column")) {
+        logger.info("Migrating: adding vector column to messages table");
+        this.db.run(`ALTER TABLE messages ADD COLUMN vector TEXT DEFAULT '[]'`);
+        await this.persist();
+      } else {
+        throw err;
+      }
     }
 
     await this.persist();
@@ -147,7 +160,13 @@ export class MessagingSystem extends EventEmitter {
   private async persist() {
     if (!this.db) return;
     const data = this.db.export();
-    await fs.writeFile(this.dbPath, Buffer.from(data));
+    const tmpPath = `${this.dbPath}.tmp`;
+    await fs.writeFile(tmpPath, Buffer.from(data));
+    await fs.rename(tmpPath, this.dbPath);
+  }
+
+  async close(): Promise<void> {
+    await this.persist();
   }
 
   private async generateEmbedding(text: string): Promise<number[]> {
@@ -180,22 +199,25 @@ export class MessagingSystem extends EventEmitter {
     subject?: string;
     tags?: string[];
   }): Promise<MessageThread> {
+    if (!content || content.trim().length === 0) throw new Error("Message content cannot be empty");
+    if (content.length > MAX_MESSAGE_LENGTH) throw new Error(`Message content exceeds maximum length of ${MAX_MESSAGE_LENGTH} characters`);
+
     const thread_id = uuidv4();
     const message_id = uuidv4();
     const now = Date.now();
-
-    this.db.run(
-      "INSERT INTO threads (id, participants, subject, status, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-      [thread_id, JSON.stringify([from, to]), subject || content.slice(0, 50), "active", JSON.stringify(tags), now, now]
-    );
-
-    // Generate embedding for message
     const vector = await this.generateEmbedding(content);
-    
-    this.db.run(
-      "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-      [message_id, thread_id, from, to, content, priority, requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
-    );
+
+    const trx = this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO threads (id, participants, subject, status, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+        [thread_id, JSON.stringify([from, to]), subject || content.slice(0, 50), "active", JSON.stringify(tags), now, now]
+      );
+      this.db.run(
+        "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [message_id, thread_id, from, to, content, priority, requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
+      );
+    });
+    trx();
 
     await this.persist();
     logger.info({ from, to, priority, thread_id }, "Message sent");
@@ -220,22 +242,26 @@ export class MessagingSystem extends EventEmitter {
   }): Promise<MessageThread> {
     const thread = this.getThread(thread_id);
     if (!thread) throw new Error(`Thread ${thread_id} not found`);
+    if (!content || content.trim().length === 0) throw new Error("Message content cannot be empty");
+    if (content.length > MAX_MESSAGE_LENGTH) throw new Error(`Message content exceeds maximum length of ${MAX_MESSAGE_LENGTH} characters`);
 
     const message_id = uuidv4();
     const now = Date.now();
-    const otherParticipant = thread.participants.find(p => p !== from);
+    const otherParticipants = thread.participants.filter(p => p !== from);
+    const otherParticipant = otherParticipants[0];
     if (!otherParticipant) throw new Error("No other participant in thread");
 
-    // Generate embedding for reply
     const vector = await this.generateEmbedding(content);
 
-    this.db.run(
-      "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-      [message_id, thread_id, from, otherParticipant, content, "P3", requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
-    );
-
-    this.db.run(`UPDATE messages SET responded = 1 WHERE thread_id = ? AND from_agent = ? AND requires_response = 1`, [thread_id, otherParticipant]);
-    this.db.run("UPDATE threads SET updated_at = ? WHERE id = ?", [now, thread_id]);
+    const trx = this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [message_id, thread_id, from, otherParticipant, content, "P3", requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
+      );
+      this.db.run(`UPDATE messages SET responded = 1 WHERE thread_id = ? AND from_agent = ? AND requires_response = 1`, [thread_id, otherParticipant]);
+      this.db.run("UPDATE threads SET updated_at = ? WHERE id = ?", [now, thread_id]);
+    });
+    trx();
 
     await this.persist();
     logger.info({ thread_id, from }, "Reply sent");
@@ -246,26 +272,25 @@ export class MessagingSystem extends EventEmitter {
   }
 
   getThread(thread_id: string): MessageThread | null {
-    const safeThreadId = escapeSql(thread_id);
-    const threadRow = this.db.exec(`SELECT * FROM threads WHERE id = '${safeThreadId}'`)[0]?.values?.[0];
+    const threadRow = this.db.prepare(`SELECT * FROM threads WHERE id = ?`).get([thread_id]);
     if (!threadRow) return null;
+    const vals = threadRow.values;
 
     return {
-      id: threadRow[0],
-      participants: JSON.parse(threadRow[1]),
-      subject: threadRow[2],
-      status: threadRow[3],
-      tags: JSON.parse(threadRow[4] || "[]"),
-      summary: threadRow[5],
-      created_at: threadRow[6],
-      updated_at: threadRow[7]
+      id: vals[0],
+      participants: safeJsonParse(vals[1], []),
+      subject: vals[2],
+      status: vals[3],
+      tags: safeJsonParse(vals[4], []),
+      summary: vals[5],
+      created_at: vals[6],
+      updated_at: vals[7]
     };
   }
 
   async getThreadMessages(thread_id: string): Promise<Message[]> {
-    const safeThreadId = escapeSql(thread_id);
-    const messageRows = this.db.exec(`SELECT * FROM messages WHERE thread_id = '${safeThreadId}' ORDER BY created_at ASC`);
-    return messageRows[0]?.values.map((row: any[]) => ({
+    const messageRows = this.db.prepare(`SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC`).all([thread_id]);
+    return messageRows?.values.map((row: any[]) => ({
       id: row[0],
       thread_id: row[1],
       from: row[2],
@@ -276,35 +301,31 @@ export class MessagingSystem extends EventEmitter {
       responded: row[7] === 1,
       created_at: row[8],
       read: row[9] === 1,
-      tags: JSON.parse(row[10] || "[]")
+      tags: safeJsonParse(row[10], [])
     })) || [];
   }
 
   async getThreadsForAgent(agent_id: string, limit = 20): Promise<MessageThread[]> {
-    const safeAgentId = escapeSql(agent_id);
-    const threadRows = this.db.exec(`
+    const threadRows = this.db.prepare(`
       SELECT DISTINCT t.* FROM threads t
       JOIN messages m ON t.id = m.thread_id
-      WHERE m.from_agent = '${safeAgentId}' OR m.to_agent = '${safeAgentId}'
+      WHERE m.from_agent = ? OR m.to_agent = ?
       ORDER BY t.updated_at DESC
-      LIMIT ${limit}
-    `);
-    return threadRows[0]?.values.map((row: any[]) => this.getThread(row[0])!) || [];
+      LIMIT ?
+    `).all([agent_id, agent_id, limit]);
+    return threadRows?.values.map((row: any[]) => this.getThread(row[0])!) || [];
   }
 
   async getUnreadCount(agent_id: string): Promise<number> {
-    const safeAgentId = escapeSql(agent_id);
-    const result = this.db.exec(`SELECT COUNT(*) FROM messages WHERE to_agent = '${safeAgentId}' AND read = 0`);
-    return result[0]?.values?.[0]?.[0] as number || 0;
+    const result = this.db.prepare(`SELECT COUNT(*) FROM messages WHERE to_agent = ? AND read = 0`).get([agent_id]);
+    return result?.values?.[0] as number || 0;
   }
 
   async markAsRead(agent_id: string, thread_id?: string): Promise<void> {
-    const safeAgentId = escapeSql(agent_id);
     if (thread_id) {
-      const safeThreadId = escapeSql(thread_id);
-      this.db.run(`UPDATE messages SET read = 1 WHERE to_agent = '${safeAgentId}' AND thread_id = '${safeThreadId}'`);
+      this.db.run(`UPDATE messages SET read = 1 WHERE to_agent = ? AND thread_id = ?`, [agent_id, thread_id]);
     } else {
-      this.db.run(`UPDATE messages SET read = 1 WHERE to_agent = '${safeAgentId}'`);
+      this.db.run(`UPDATE messages SET read = 1 WHERE to_agent = ?`, [agent_id]);
     }
     await this.persist();
   }
@@ -328,20 +349,20 @@ export class MessagingSystem extends EventEmitter {
     date_from?: number;
     date_to?: number;
   }): Promise<MessageSearchResult[]> {
-    const safeAgentId = escapeSql(agent_id);
-    let whereClauses: string[] = [`(from_agent = '${safeAgentId}' OR to_agent = '${safeAgentId}')`];
-    if (from_agent) whereClauses.push(`from_agent = '${escapeSql(from_agent)}'`);
-    if (to_agent) whereClauses.push(`to_agent = '${escapeSql(to_agent)}'`);
-    if (priority) whereClauses.push(`priority = '${escapeSql(priority)}'`);
-    if (date_from) whereClauses.push(`created_at >= ${date_from}`);
-    if (date_to) whereClauses.push(`created_at <= ${date_to}`);
+    const params: (string | number)[] = [agent_id, agent_id];
+    let whereClauses: string[] = [`(from_agent = ? OR to_agent = ?)`];
+    if (from_agent) { whereClauses.push(`from_agent = ?`); params.push(from_agent); }
+    if (to_agent) { whereClauses.push(`to_agent = ?`); params.push(to_agent); }
+    if (priority) { whereClauses.push(`priority = ?`); params.push(priority); }
+    if (date_from) { whereClauses.push(`created_at >= ?`); params.push(date_from); }
+    if (date_to) { whereClauses.push(`created_at <= ?`); params.push(date_to); }
 
-    const candidateRows = this.db.exec(`SELECT * FROM messages WHERE ${whereClauses.join(" AND ")} ORDER BY created_at DESC LIMIT 100`);
-    const candidates: Message[] = candidateRows[0]?.values.map((row: any[]) => ({
+    const candidateRows = this.db.prepare(`SELECT * FROM messages WHERE ${whereClauses.join(" AND ")} ORDER BY created_at DESC LIMIT 100`).all(params);
+    const candidates: Message[] = candidateRows?.values.map((row: any[]) => ({
       id: row[0], thread_id: row[1], from: row[2], to: row[3], content: row[4],
       priority: row[5], requires_response: row[6] === 1, responded: row[7] === 1,
-      created_at: row[8], read: row[9] === 1, tags: JSON.parse(row[10] || "[]"),
-      vector: row[11] ? JSON.parse(row[11]) : []
+      created_at: row[8], read: row[9] === 1, tags: safeJsonParse(row[10], []),
+      vector: safeJsonParse(row[11], [])
     })) || [];
 
     // Generate query embedding
@@ -399,18 +420,30 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async escalate({ thread_id, from, to, reason }: { thread_id: string; from: string; to: string; reason: string }): Promise<Escalation> {
+    const thread = this.getThread(thread_id);
+    if (!thread) throw new Error(`Thread ${thread_id} not found`);
+    if (from === to) throw new Error("Cannot escalate to yourself");
+    if (!getStaffById(to)) throw new Error(`Target agent ${to} does not exist`);
+
+    // Check existing escalation count (max 3)
+    const existingEscalations = this.db.prepare(`SELECT COUNT(*) FROM escalations WHERE thread_id = ?`).get([thread_id]);
+    const escalationCount = (existingEscalations?.values?.[0] as number) || 0;
+    if (escalationCount >= 3) throw new Error(`Thread ${thread_id} has reached maximum escalation limit (3)`);
+
     const escalation_id = uuidv4();
     const now = Date.now();
-    this.db.run("INSERT INTO escalations (id, thread_id, from_agent, to_agent, reason, created_at, status) VALUES (?,?,?,?,?,?,?)", [escalation_id, thread_id, from, to, reason, now, "pending"]);
-    this.db.run("UPDATE threads SET status = 'escalated' WHERE id = ?", [thread_id]);
+    const trx = this.db.transaction(() => {
+      this.db.run("INSERT INTO escalations (id, thread_id, from_agent, to_agent, reason, created_at, status) VALUES (?,?,?,?,?,?,?)", [escalation_id, thread_id, from, to, reason, now, "pending"]);
+      this.db.run("UPDATE threads SET status = 'escalated' WHERE id = ?", [thread_id]);
+    });
+    trx();
     await this.persist();
     return { id: escalation_id, thread_id, from, to, reason, created_at: now, status: "pending" };
   }
 
   async getEscalationsForAgent(agent_id: string): Promise<Escalation[]> {
-    const safeAgentId = escapeSql(agent_id);
-    const rows = this.db.exec(`SELECT * FROM escalations WHERE to_agent = '${safeAgentId}' ORDER BY created_at DESC`);
-    return rows[0]?.values.map((row: any[]) => ({ id: row[0], thread_id: row[1], from: row[2], to: row[3], reason: row[4], created_at: row[5], status: row[6] })) || [];
+    const rows = this.db.prepare(`SELECT * FROM escalations WHERE to_agent = ? ORDER BY created_at DESC`).all([agent_id]);
+    return rows?.values.map((row: any[]) => ({ id: row[0], thread_id: row[1], from: row[2], to: row[3], reason: row[4], created_at: row[5], status: row[6] })) || [];
   }
 
   async resolveEscalation(escalation_id: string, status: "resolved" | "dismissed"): Promise<void> {
@@ -419,18 +452,26 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async getActiveContext(agent_id: string, hours = 24): Promise<{ unread_count: number; active_threads: MessageThread[]; pending_responses: Message[]; recent_escalations: Escalation[] }> {
-    const safeAgentId = escapeSql(agent_id);
     const cutoff = Date.now() - (hours * 60 * 60 * 1000);
     const unread_count = await this.getUnreadCount(agent_id);
     const active_threads = (await this.getThreadsForAgent(agent_id, 10)).filter(t => t.updated_at > cutoff && t.status === "active");
     
-    const pendingRows = this.db.exec(`SELECT * FROM messages WHERE to_agent = '${safeAgentId}' AND requires_response = 1 AND responded = 0 AND created_at > ${cutoff}`);
-    const pending_responses: Message[] = pendingRows[0]?.values.map((row: any[]) => ({
+    const pendingRows = this.db.prepare(`SELECT * FROM messages WHERE to_agent = ? AND requires_response = 1 AND responded = 0 AND created_at > ?`).all([agent_id, cutoff]);
+    const pending_responses: Message[] = pendingRows?.values.map((row: any[]) => ({
       id: row[0], thread_id: row[1], from: row[2], to: row[3], content: row[4], priority: row[5],
-      requires_response: true, responded: false, created_at: row[8], read: row[9] === 1, tags: JSON.parse(row[10] || "[]")
+      requires_response: true, responded: false, created_at: row[8], read: row[9] === 1, tags: safeJsonParse(row[10], [])
     })) || [];
 
     return { unread_count, active_threads, pending_responses, recent_escalations: await this.getEscalationsForAgent(agent_id) };
+  }
+
+  async getUnreadMessages(agent_id: string, limit = 50): Promise<Message[]> {
+    const rows = this.db.prepare(`SELECT * FROM messages WHERE to_agent = ? AND read = 0 ORDER BY created_at DESC LIMIT ?`).all([agent_id, limit]);
+    return rows?.values.map((row: any[]) => ({
+      id: row[0], thread_id: row[1], from: row[2], to: row[3], content: row[4], priority: row[5],
+      requires_response: row[6] === 1, responded: row[7] === 1, created_at: row[8], read: row[9] === 1,
+      tags: safeJsonParse(row[10], [])
+    })) || [];
   }
 }
 

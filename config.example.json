@@ -1,0 +1,70 @@
+{
+  "$schema": "https://raw.githubusercontent.com/your-org/strategos/main/src/config/schema.json",
+
+  "llm": {
+    "provider": "ollama",
+    "baseUrl": "http://localhost:11434/v1",
+    "apiKey": "",
+    "model": "llama3.2:3b",
+    "maxTokens": 4096,
+    "temperature": 0.3,
+    "timeoutMs": 180000,
+    "contextTokens": 32768
+  },
+
+  "context": {
+    "maxMessages": 50,
+    "maxContextTokens": 32000,
+    "compaction": {
+      "auto": true,
+      "prune": true,
+      "reserved": 20000,
+      "keepRecent": 6,
+      "maxHistoryShare": 0.5,
+      "timeoutSeconds": 900
+    },
+    "pruning": {
+      "protectTokens": 40000,
+      "minimumFree": 20000,
+      "protectedTools": ["memory.consolidate"]
+    }
+  },
+
+  "agents": {
+    "defaultAutonomy": 3,
+    "maxConcurrent": 5,
+    "maxToolRounds": 10,
+    "heartbeatInterval": "5m",
+    "directToUser": true
+  },
+
+  "paths": {
+    "lancedb": "/var/lib/strategos/lancedb",
+    "kanbanDb": "/var/lib/strategos/kanban/kanban.db",
+    "messagesDb": "/var/lib/strategos/messages/messages.db",
+    "agentOffices": "/etc/strategos/agents",
+    "logFile": "/var/log/strategos/strategos.log"
+  },
+
+  "telegram": {
+    "botToken": "your-bot-token-from-botfather",
+    "chatId": "your-chat-id-from-userinfobot"
+  },
+
+  "mcp": {
+    "lifeos": {
+      "type": "local",
+      "command": ["node", "/opt/strategos/build/lifeos-mcp-server.js"],
+      "env": {
+        "NOTION_API_KEY": "your-notion-api-key"
+      },
+      "enabled": true
+    }
+  },
+
+  "logging": {
+    "level": "info",
+    "file": "/var/log/strategos/strategos.log",
+    "maxFileBytes": 10485760
+  }
+}

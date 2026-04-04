@@ -1,33 +1,57 @@
-// Agent Executor - Main autonomous execution loop for proactive agent behavior
+// Agent Executor — Native runtime version
+// Uses NativeAgentRuntime instead of OpenCode HTTP client
+// Agents respond via direct LLM calls with tool calling support
 
 import { logger } from "../logger.js";
 import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
-import { getOpenCodeClient } from "../acp/opencode-client.js";
 import { AgentContextManager } from "../organic/context.js";
 import { Kanban } from "../kanban/sqlite.js";
 import { Memory } from "../memory/lancedb.js";
 import { InactivityTracker } from "./inactivity-tracker.js";
-import { getPromptForRole } from "../staff/prompts.js";
+import { sendTelegramMessage } from "../integrations/telegram.js";
+import { getMemoryFacade } from "../memory/index.js";
+import { getSessionRegistry } from "./session-registry.js";
+import { SystemEventQueue, buildSystemEventPrompt, currentTimeLine } from "./system-events.js";
+import { autoStore } from "../memory/auto.js";
+import {
+  NativeAgentRuntime,
+  getNativeRuntime,
+  initNativeRuntime,
+} from "../runtime/native-agent-runtime.js";
+import type { ToolExecutor } from "../runtime/tool-bridge.js";
+
+const AGENT_ID_MAP: Record<string, string> = {
+  "ceo-strategic": "ceo-strategic",
+  "coo-productivity": "coo-productivity",
+  "cfo-financial": "cfo-financial",
+  "cmo-content": "cmo-content",
+  "cro-relational": "cro-relational",
+  "physician-health": "physician-health",
+  "cpo-psychologist": "cpo-psychologist",
+  "cio-intelligence": "cio-intelligence",
+};
 
 export interface AgentExecutorConfig {
   checkIntervalMs: number;
-  proactiveCheckIntervalMs: number;
+  proactiveWorkIntervalMs: number;
   userInactivityThresholdMs: number;
 }
 
 const DEFAULT_CONFIG: AgentExecutorConfig = {
-  checkIntervalMs: 30000, // 30 seconds - check for messages
-  proactiveCheckIntervalMs: 5 * 60 * 1000, // 5 minutes - proactive checks during inactivity
-  userInactivityThresholdMs: 60 * 60 * 1000 // 1 hour - consider user inactive after this
+  checkIntervalMs: 30000,
+  proactiveWorkIntervalMs: 30 * 60 * 1000,
+  userInactivityThresholdMs: 60 * 60 * 1000,
 };
 
 export class AgentExecutor {
   private running = false;
   private config: AgentExecutorConfig;
   private inactivityTracker: InactivityTracker;
-  private sessionCache: Map<string, { sessionId: string; lastUsed: number }> = new Map();
-  private sessionTimeoutMs: number = 30 * 60 * 1000;
+  private runtime: NativeAgentRuntime;
+  private toolExecutor: ToolExecutor | null = null;
+  private sessionsInitialized = new Set<string>();
+  private sessionMap = new Map<string, string>();
 
   constructor(
     private kanban: Kanban,
@@ -36,237 +60,398 @@ export class AgentExecutor {
   ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.inactivityTracker = new InactivityTracker(this.config.userInactivityThresholdMs);
+    this.runtime = getNativeRuntime();
+  }
+
+  /**
+   * Set the tool executor (bridge to MCP tools).
+   * Must be called before start().
+   */
+  setToolExecutor(executor: ToolExecutor, toolNames: string[]) {
+    this.toolExecutor = executor;
+    this.runtime.setToolExecutor(executor, toolNames);
+    logger.info({ toolCount: toolNames.length }, "AgentExecutor tool executor configured");
   }
 
   async start() {
-    if (this.running) {
-      logger.warn("Agent executor already running");
-      return;
-    }
-
+    if (this.running) return;
     this.running = true;
-    logger.info("Agent executor started");
+    logger.info("Agent executor started (native runtime)");
 
-    // Start inactivity tracker
+    // Wire session persistence
+    const registry = getSessionRegistry();
+    this.runtime.wireSessionPersistence(registry);
+
     await this.inactivityTracker.start();
-
-    // Main execution loop
-    this.runExecutionLoop();
-
-    // Proactive check loop (slower)
-    this.runProactiveLoop();
+    this.runMessageLoop();
+    this.runProactiveWorkLoop();
   }
+
+  private messageTimer: ReturnType<typeof setTimeout> | null = null;
+  private proactiveTimer: ReturnType<typeof setTimeout> | null = null;
 
   stop() {
     this.running = false;
+    if (this.messageTimer) { clearTimeout(this.messageTimer); this.messageTimer = null; }
+    if (this.proactiveTimer) { clearTimeout(this.proactiveTimer); this.proactiveTimer = null; }
     this.inactivityTracker.stop();
     logger.info("Agent executor stopped");
   }
 
-  private async runExecutionLoop() {
+  private runMessageLoop() {
     const loop = async () => {
       if (!this.running) return;
-
       try {
-        await this.checkAndExecuteAgents();
+        await this.processPendingMessages();
       } catch (err: any) {
-        logger.error({ err: err.message }, "Agent execution loop error");
+        logger.error({ err: err.message }, "Message loop error");
       }
-
-      setTimeout(loop, this.config.checkIntervalMs);
+      this.messageTimer = setTimeout(loop, this.config.checkIntervalMs);
     };
-
     loop();
   }
 
-  private async runProactiveLoop() {
+  private runProactiveWorkLoop() {
     const loop = async () => {
       if (!this.running) return;
-
       try {
-        const isUserInactive = this.inactivityTracker.isUserInactive();
-        
-        if (isUserInactive) {
-          logger.info("User inactive - triggering proactive agent checks");
-          await this.triggerProactiveChecks();
+        await this.runProactiveDomainWork();
+      } catch (err: any) {
+        logger.error({ err: err.message }, "Proactive work loop error");
+      }
+      this.proactiveTimer = setTimeout(loop, this.config.proactiveWorkIntervalMs);
+    };
+    loop();
+  }
+
+  private async processPendingMessages() {
+    const messaging = await getMessagingSystem();
+    const contextManager = new AgentContextManager(this.kanban, this.memory);
+    const sessionRegistry = getSessionRegistry();
+
+    for (const agentId of getCoreStaffIds()) {
+      try {
+        const context = await messaging.getActiveContext(agentId);
+        if (context.pending_responses.length === 0 && context.unread_count === 0) continue;
+
+        const validResponses = context.pending_responses.filter((msg: any) => msg.from !== agentId);
+        if (validResponses.length === 0 && context.unread_count === 0) continue;
+
+        // Get or create session
+        const sessionId = await sessionRegistry.getOrCreate(agentId, {});
+
+        // Initialize session if needed
+        if (!this.sessionsInitialized.has(sessionId)) {
+          const runtimeSessionId = this.runtime.createSession(agentId, {
+            mode: "message",
+          });
+          this.sessionMap.set(sessionId, runtimeSessionId);
+          this.sessionsInitialized.add(sessionId);
         }
-      } catch (err: any) {
-        logger.error({ err: err.message }, "Proactive check loop error");
-      }
 
-      setTimeout(loop, this.config.proactiveCheckIntervalMs);
-    };
-
-    loop();
-  }
-
-  private async checkAndExecuteAgents() {
-    const messaging = await getMessagingSystem();
-    const acp = getOpenCodeClient();
-    const contextManager = new AgentContextManager(this.kanban, this.memory);
-
-    for (const agentId of getCoreStaffIds()) {
-      try {
-        await this.executeAgent(agentId, messaging, acp, contextManager);
-      } catch (err: any) {
-        logger.error({ agentId, err: err.message }, "Failed to execute agent");
-      }
-    }
-  }
-
-  private async executeAgent(
-    agentId: string,
-    messaging: any,
-    acp: any,
-    contextManager: AgentContextManager
-  ) {
-    const context = await messaging.getActiveContext(agentId);
-
-    // Check if agent needs to act
-    const hasPendingResponses = context.pending_responses.length > 0;
-    const hasUnreadMessages = context.unread_count > 0;
-    const hasActiveThreads = context.active_threads.length > 0;
-
-    if (!hasPendingResponses && !hasUnreadMessages) {
-      return; // Nothing to do
-    }
-
-    logger.info(
-      {
-        agentId,
-        pending: context.pending_responses.length,
-        unread: context.unread_count,
-        activeThreads: context.active_threads.length
-      },
-      "Executing agent"
-    );
-
-    // Ensure OpenCode session
-    const sessionId = await this.ensureAgentSession(agentId, acp);
-
-    // Build comprehensive context
-    const wakeCtx = await contextManager.getWakeContext(agentId);
-
-    // Build prompt
-    const prompt = this.buildExecutionPrompt(agentId, context, wakeCtx);
-
-    // Get agent response
-    const result = await acp.sendMessage(sessionId, prompt);
-
-    // Process any agent actions (calls, handoffs, etc.)
-    await this.processAgentActions(agentId, result.text, messaging);
-
-    logger.info({ agentId }, "Agent execution complete");
-  }
-
-  private async triggerProactiveChecks() {
-    const messaging = await getMessagingSystem();
-    const acp = getOpenCodeClient();
-    const contextManager = new AgentContextManager(this.kanban, this.memory);
-
-    for (const agentId of getCoreStaffIds()) {
-      try {
-        const staff = getStaffById(agentId);
-        if (!staff || staff.autonomyLevel < 3) continue; // Only autonomous agents
-
-        const sessionId = await this.ensureAgentSession(agentId, acp);
         const wakeCtx = await contextManager.getWakeContext(agentId);
+        const pendingText = validResponses.map((msg: any) => msg.content).join(" ");
 
-        const prompt = this.buildProactivePrompt(agentId, wakeCtx);
-        const result = await acp.sendMessage(sessionId, prompt);
+        // Memory injection
+        const memoryInjection = await this.getMemoryInjection(agentId, pendingText);
 
-        // If agent has something to report, send as message to user
-        if (result.text && result.text.trim().length > 0) {
-          logger.info({ agentId }, "Proactive check generated output");
-          // Could send to user via notify.telegram or store as insight
+        const wakeSummary = contextManager.formatWakeContext(wakeCtx);
+
+        const messages = validResponses.map((msg: any) => {
+          const fromStaff = getStaffById(msg.from);
+          const fromName = fromStaff ? `${fromStaff.avatar} ${fromStaff.name}` : msg.from;
+          return `<agent_message from="${msg.from}" to="${agentId}">\nFrom: ${fromName} [${msg.priority}]: ${msg.content.substring(0, 200)}\n</agent_message>`;
+        });
+
+        const taskPrompt = [
+          currentTimeLine(),
+          memoryInjection ? `<memory_context>\n${memoryInjection}\n</memory_context>` : "",
+          "## Messages to Respond To",
+          ...messages,
+          "",
+          wakeSummary ? `<wake_context>\n${wakeSummary}\n</wake_context>` : "",
+          "---",
+          "Respond naturally. Be conversational, not report-style. Keep it brief.",
+        ].filter(Boolean).join("\n");
+
+        const runtimeSessionId = this.sessionMap.get(sessionId) || sessionId;
+        const result = await this.runtime.sendMessage(runtimeSessionId, taskPrompt, agentId);
+        await sessionRegistry.touch(sessionId);
+
+        if (result.text) {
+          // Auto-store
+          await autoStore({
+            agentId,
+            inputText: pendingText.slice(0, 500),
+            outputText: result.text,
+            trigger: "inter_agent_message",
+            context: {
+              from: validResponses.map((m: any) => m.from).join(","),
+            },
+          });
+
+          // Reply to threads
+          for (const msg of validResponses) {
+            try {
+              await messaging.reply({
+                thread_id: msg.thread_id,
+                from: agentId,
+                content: result.text,
+                requires_response: false,
+              });
+            } catch (err: any) {
+              logger.warn({ agentId, threadId: msg.thread_id, err: err.message }, "Skipping broken thread");
+              await messaging.markAsRead(agentId, msg.thread_id);
+            }
+          }
+          await messaging.markAsRead(agentId);
+          logger.info({ agentId, replied: validResponses.length }, "Agent responded to messages");
         }
       } catch (err: any) {
-        logger.error({ agentId, err: err.message }, "Proactive check failed");
+        logger.error({ agentId, err: err.message }, "Failed to process messages");
       }
     }
   }
 
-  private async ensureAgentSession(agentId: string, acp: any): Promise<string> {
-    const cached = this.sessionCache.get(agentId);
-    const now = Date.now();
+  private async runProactiveDomainWork() {
+    const messaging = await getMessagingSystem();
 
-    if (cached && now - cached.lastUsed < this.sessionTimeoutMs) {
-      cached.lastUsed = now;
-      return cached.sessionId;
+    logger.info("Proactive domain heartbeat — checking all agents (native runtime)");
+
+    const stats = SystemEventQueue.stats();
+    if (stats.total > 0) {
+      logger.info(stats, "heartbeat:system_events.pending");
     }
 
-    const sessionId = await acp.createSession(process.cwd());
-    this.sessionCache.set(agentId, { sessionId, lastUsed: now });
+    // Run non-CEO agents first, then CEO last
+    const allAgents = getCoreStaffIds();
+    const nonCeoAgents = allAgents.filter(id => id !== "ceo-strategic");
+    const ceoAgent = allAgents.find(id => id === "ceo-strategic");
 
-    return sessionId;
+    // Phase 1: Non-CEO agents
+    for (const agentId of nonCeoAgents) {
+      if (!this.running) return;
+      await this.runAgentHeartbeat(agentId, messaging);
+    }
+
+    // Phase 2: CEO
+    if (ceoAgent && this.running) {
+      await this.runAgentHeartbeat(ceoAgent, messaging);
+    }
   }
 
-  private buildExecutionPrompt(agentId: string, context: any, wakeCtx: any): string {
-    const promptData = getPromptForRole(agentId);
-    const systemPrompt = promptData ? promptData.prompt : "You are a helpful AI assistant.";
-    
-    const lines: string[] = [systemPrompt, ""];
-    lines.push(`---`);
-    lines.push(``);
-    lines.push(`You're working on your responsibilities as ${agentId}.`);
-    lines.push("");
-
-    if (context.pending_responses.length > 0) {
-      lines.push(`Messages Requiring Response (${context.pending_responses.length}):`);
-      for (const msg of context.pending_responses) {
-        lines.push(`- From: ${msg.from}, Priority: ${msg.priority}: ${msg.content.substring(0, 100)}...`);
-      }
-      lines.push("");
-    }
-
-    if (context.active_threads.length > 0) {
-      lines.push(`Active Conversations (${context.active_threads.length}):`);
-      for (const thread of context.active_threads.slice(0, 3)) {
-        lines.push(`- ${thread.subject} (updated: ${new Date(thread.updated_at).toLocaleString()})`);
-      }
-      lines.push("");
-    }
-
-    if (wakeCtx.summary) {
-      lines.push(`Recent Context:`);
-      lines.push(wakeCtx.summary);
-      lines.push("");
-    }
-
-    lines.push(`---`);
-    lines.push(`Respond to any pending messages. Be conversational and helpful.`);
-
-    return lines.join("\n");
-  }
-
-  private buildProactivePrompt(agentId: string, wakeCtx: any): string {
+  private async runAgentHeartbeat(agentId: string, messaging: any): Promise<void> {
     const staff = getStaffById(agentId);
-    const promptData = getPromptForRole(agentId);
-    const systemPrompt = promptData ? promptData.prompt : "You are a helpful AI assistant.";
+    if (!staff || staff.autonomyLevel < 2) return;
 
-    return `${systemPrompt}
+    try {
+      const board = await this.kanban.getBoard(agentId);
+      const boardSummary = board ? this.summarizeBoard(board) : "No Kanban board yet.";
+      const inbox = await messaging.getActiveContext(agentId);
 
----
+      const sessionRegistry = getSessionRegistry();
+      const sessionId = await sessionRegistry.getOrCreate(agentId, {});
 
-You're ${agentId} (${staff?.title}). The user hasn't been active for a while.
+      // Initialize session if needed
+      if (!this.sessionsInitialized.has(sessionId)) {
+        const runtimeSessionId = this.runtime.createSession(agentId, {
+          mode: "heartbeat",
+        });
+        this.sessionMap.set(sessionId, runtimeSessionId);
+        this.sessionsInitialized.add(sessionId);
+      }
 
-Your Responsibilities:
-${staff?.systemPrompt || "Manage your domain proactively."}
+      // Memory injection
+      const memoryInjection = await this.getMemoryInjection(agentId, `domain check ${staff.title}`);
 
-Current Context:
-${wakeCtx.summary || "No recent activity"}
+      // Pending system events
+      const pendingEvents = SystemEventQueue.peekLatest(agentId);
 
----
+      // Build heartbeat task prompt
+      const isCeo = agentId === "ceo-strategic";
+      const lines: string[] = [];
+      lines.push(currentTimeLine());
+      lines.push("");
+      if (memoryInjection) {
+        lines.push(`<memory_context>\n${memoryInjection}\n</memory_context>`);
+        lines.push("");
+      }
 
-Review your domain for anything needing attention. If you notice something important, prepare a brief, friendly nudge. If everything is fine, you don't need to send anything.
+      const eventPrompt = buildSystemEventPrompt(pendingEvents);
+      if (eventPrompt) {
+        lines.push(`<user_message>\n${eventPrompt}\n</user_message>`);
+        lines.push("");
+      }
 
-Be conversational, not report-style. Keep it brief.`;
+      lines.push(`## Domain Check — ${staff.name}`);
+      lines.push("");
+      lines.push(`### Kanban`);
+      lines.push(boardSummary);
+      lines.push("");
+
+      const inboxStatus = inbox.pending_responses.length > 0
+        ? `You have ${inbox.pending_responses.length} pending response(s) and ${inbox.unread_count} unread message(s).`
+        : `Inbox: ${inbox.unread_count} unread, 0 pending responses.`;
+      lines.push(`### Inbox`);
+      lines.push(inboxStatus);
+
+      if (isCeo && inbox.unread_count > 0) {
+        lines.push("");
+        lines.push("⚠️ READ AGENT REPORTS FIRST before doing anything else.");
+        lines.push("1. Use `agent.inbox({ agent_id: \"ceo-strategic\" })` to see all unread messages");
+        lines.push("2. For each report, use `message.getThread` or `message.getThreads` to read the full content");
+        lines.push("3. Synthesize: what's blocked, what's overdue, what needs attention");
+        lines.push("4. If any agent reported something critical, escalate to user via notify.telegram");
+        lines.push("5. Store your synthesis in memory");
+      }
+
+      lines.push("");
+      lines.push("## What to do:");
+      lines.push(`1. ${isCeo ? "READ YOUR INBOX for agent reports first, then" : "Query your databases for anything needing attention"}`);
+      lines.push("2. Check your Kanban for blocked or stale cards");
+      lines.push("3. If something needs action, take it (update cards, send messages to other agents)");
+      lines.push("4. Store important findings in your memory");
+      lines.push("5. If nothing needs attention, reply HEARTBEAT_OK");
+
+      if (!isCeo) {
+        lines.push("");
+        lines.push("### IMPORTANT — Anti-Passivity Rules");
+        lines.push("- Each heartbeat is a FRESH check. The state may have changed since last time.");
+        lines.push("- Do NOT say 'same as before', 'nothing changed', or 'this is repetitive.'");
+        lines.push("- Actually run the tool calls — query databases, check inbox, review Kanban.");
+        lines.push("- If you find something actionable, report it with SPECIFIC data (numbers, dates, names).");
+        lines.push("- If genuinely nothing needs attention after checking, reply: HEARTBEAT_OK");
+      }
+
+      const taskPrompt = lines.join("\n");
+
+      // Execute via native runtime
+      const runtimeSessionId = this.sessionMap.get(sessionId) || sessionId;
+      const result = await this.runtime.sendHeartbeat(runtimeSessionId, taskPrompt, agentId, memoryInjection);
+      await sessionRegistry.touch(sessionId);
+
+      // Handle silent ack
+      if (result.isSilentAck) {
+        SystemEventQueue.clear(agentId);
+        const { shouldSkip } = SystemEventQueue.recordAck(agentId);
+        if (shouldSkip) {
+          logger.info({ agentId }, "heartbeat:sleep_mode_entered (too many passive cycles)");
+        } else {
+          logger.debug({ agentId }, "heartbeat:silent_ack (HEARTBEAT_OK)");
+        }
+        return;
+      }
+
+      // Substantive finding — reset ack counter
+      SystemEventQueue.resetAck(agentId);
+
+      // Auto-store if substantive
+      if (result.hasSubstantiveFinding) {
+        const cleanText = stripHeartbeatToken(result.text);
+        await autoStore({
+          agentId,
+          inputText: `Domain check: ${staff.title}`,
+          outputText: cleanText,
+          trigger: "heartbeat",
+          context: { domain: staff.title },
+        });
+      }
+
+      const cleanText = stripHeartbeatToken(result.text);
+      if (cleanText && cleanText.trim().length > 10) {
+        const hasUrgentFinding = this.shouldEscalateToUser(cleanText);
+
+        // CEO: may proactively notify user via Telegram
+        if (isCeo && hasUrgentFinding) {
+          await sendTelegramMessage(`${staff.avatar} **${staff.name}** (${staff.title}):\n\n${cleanText.slice(0, 4000)}`);
+          logger.info({ agentId, textLength: cleanText.length }, "CEO proactive finding sent to user via Telegram");
+        }
+
+        // Non-CEO: report findings to CEO
+        if (!isCeo && this.shouldReportToCeo(cleanText)) {
+          await messaging.send({
+            from: agentId,
+            to: "ceo-strategic",
+            content: `[Internal Report] ${cleanText}`,
+            priority: "P3",
+            requires_response: false,
+            subject: `${staff.name} — domain update`,
+            tags: ["proactive-report", "internal"],
+          });
+          logger.info({ agentId }, "Agent reported findings internally to CEO");
+        }
+
+        // NEW: Non-CEO agents with substantive findings ALSO send directly to user via Telegram
+        // This makes agents more autonomous — they don't just report to CEO
+        if (!isCeo && result.hasSubstantiveFinding && cleanText.trim().length > 50) {
+          await sendTelegramMessage(`${staff.avatar} **${staff.name}** (${staff.title}):\n\n${cleanText.slice(0, 4000)}`);
+          logger.info({ agentId, textLength: cleanText.length }, "Non-CEO agent sent finding directly to user via Telegram");
+        }
+
+        // Store proactive work as memory
+        if (result.hasSubstantiveFinding) {
+          try {
+            const mf = await getMemoryFacade();
+            await mf.upsert({
+              agent_id: agentId,
+              scope: "personal",
+              kind: "episodic",
+              type: "log",
+              content: cleanText.slice(0, 500),
+              importance: 0.6,
+              tags: ["proactive-work", "domain-check"],
+              source: "proactive",
+            });
+          } catch {
+            await this.memory.upsertEvent({
+              agent_id: agentId,
+              type: "log",
+              content: cleanText.slice(0, 500),
+              importance: 0.6,
+              tags: ["proactive-work", "domain-check"],
+            });
+          }
+        }
+
+        SystemEventQueue.clear(agentId);
+      }
+    } catch (err: any) {
+      logger.error({ agentId, err: err.message }, "Proactive domain work failed");
+    }
   }
 
-  private async processAgentActions(agentId: string, responseText: string, messaging: any) {
-    // Parse response for agent actions (agent.call, agent.handoff, etc.)
-    // This is a simplified version - full implementation would parse tool calls
-    logger.debug({ agentId, responseLength: responseText.length }, "Processing agent actions");
+  private summarizeBoard(board: any): string {
+    const items: string[] = [];
+    for (const col of board.columns) {
+      if (col.cards.length > 0) {
+        items.push(`${col.name}: ${col.cards.length} cards`);
+        col.cards.slice(0, 2).forEach((card: any) => items.push(`  - ${card.title}`));
+      }
+    }
+    return items.length > 0 ? items.join('\n') : "Empty board.";
+  }
+
+  private async getMemoryInjection(agentId: string, queryText: string): Promise<string> {
+    try {
+      const mf = await getMemoryFacade();
+      return await mf.injectForTask(agentId, queryText);
+    } catch {
+      return "";
+    }
+  }
+
+  private shouldEscalateToUser(text: string): boolean {
+    const lower = text.toLowerCase();
+    const urgentSignals = ["critical risk", "system down", "emergency", "security breach", "data loss"];
+    return urgentSignals.some(signal => lower.includes(signal));
+  }
+
+  private shouldReportToCeo(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    if (text.trim().length < 20) return false;
+    const allClearOnly = /^all\s*clear[\s.!]*$/i.test(lower) || /^nothing\s+(new|to\s+report|here)/i.test(lower);
+    if (allClearOnly) return false;
+    return true;
   }
 
   recordUserActivity() {
@@ -276,6 +461,11 @@ Be conversational, not report-style. Keep it brief.`;
   isUserInactive(): boolean {
     return this.inactivityTracker.isUserInactive();
   }
+}
+
+// Helper
+function stripHeartbeatToken(text: string): string {
+  return text.replace(/heartbeat_ok/gi, "").replace(/HEARTBEAT_OK/g, "").trim();
 }
 
 let agentExecutor: AgentExecutor | null = null;
@@ -290,4 +480,10 @@ export async function startAgentExecutor(kanban: Kanban, memory: Memory, config?
 
 export function getAgentExecutor(): AgentExecutor | null {
   return agentExecutor;
+}
+
+export function setExecutorTools(executor: any, toolNames: string[]) {
+  if (agentExecutor) {
+    agentExecutor.setToolExecutor(executor, toolNames);
+  }
 }

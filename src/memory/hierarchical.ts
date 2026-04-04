@@ -217,10 +217,18 @@ export class HierarchicalMemory {
     project_ids?: string[];
     top_k?: number;
   }): Promise<{ scope: MemoryScope; entries: any[] }[]> {
-    const [personal, company] = await Promise.all([
+    const [personalResult, companyResult] = await Promise.allSettled([
       this.searchPersonal(agentId, query, options.top_k),
       this.searchCompany(query, options.top_k)
     ]);
+    const personal = personalResult.status === "fulfilled" ? personalResult.value : [];
+    const company = companyResult.status === "fulfilled" ? companyResult.value : [];
+    if (personalResult.status === "rejected" || companyResult.status === "rejected") {
+      logger.warn({
+        personalOk: personalResult.status === "fulfilled",
+        companyOk: companyResult.status === "fulfilled",
+      }, "searchAll: partial scope failure");
+    }
     
     const projectMemories: any[] = [];
     if (options.project_ids) {

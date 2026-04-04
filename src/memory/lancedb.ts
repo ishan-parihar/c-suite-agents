@@ -37,7 +37,7 @@ export class Memory {
           id: uuidv4(),
           ts: new Date().toISOString(),
           type: "log",
-          agent_id: "strategos",
+          agent_id: "ceo-strategic",
           content: "init",
           importance: 0,
           tags: ["init"],
@@ -49,11 +49,13 @@ export class Memory {
   }
 
   async ensureAgent(agentId: string) {
-    const validation = await validateAgentIdentity(agentId);
-    if (!validation.valid) {
-      throw new Error(`Invalid agent ID: ${agentId}. ${validation.reason}`);
+    try {
+      await validateAgentIdentity(agentId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Invalid agent ID: ${agentId}. ${msg}`);
     }
-    logger.debug({ agentId, isStaff: validation.isStaff, isHired: validation.isHired }, "Agent validated");
+    logger.debug({ agentId }, "Agent validated");
   }
 
   async upsertEvent(e: MemoryEvent): Promise<string> {
@@ -72,12 +74,14 @@ export class Memory {
     const model = cfg.ollamaEmbedModel;
     const emb = await ollama.embed({ model, input: query });
     const vector = emb.embeddings[0] as number[];
-    const safeAgentId = agentId.replace(/'/g, "''");
     const rows = await this.events!
       .search(vector)
-      .where(`agent_id = '${safeAgentId}'`)
       .limit(topK)
       .toArray();
-    return rows;
+    return rows.filter((r: any) => r.agent_id === agentId);
+  }
+
+  close() {
+    this.events = null as unknown as Table;
   }
 }
