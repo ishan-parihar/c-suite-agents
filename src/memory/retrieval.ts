@@ -88,15 +88,26 @@ export class MemoryRetriever {
     const result: Record<string, any> = {};
 
     for (const scope of scopes) {
-      const total = await this.store.count(scope);
-      const all = await this.store.getAll(scope);
-      const perAgent: Record<string, number> = {};
-      for (const m of all) {
-        perAgent[m.agent_id] = (perAgent[m.agent_id] || 0) + 1;
-      }
+      const perAgent = await this.perAgentCounts(scope);
+      const total = Object.values(perAgent).reduce((sum, n) => sum + n, 0);
       result[scope] = { total, perAgent };
     }
 
     return result as any;
+  }
+
+  private async perAgentCounts(scope: MemoryScope): Promise<Record<string, number>> {
+    const all = await this.store.getAll(scope);
+    const counts: Record<string, number> = {};
+    for (const m of all) {
+      counts[m.agent_id] = (counts[m.agent_id] || 0) + 1;
+    }
+    return counts;
+  }
+
+  async agentStats(scope: MemoryScope): Promise<{ total: number; perAgent: Record<string, number> }> {
+    const perAgent = await this.perAgentCounts(scope);
+    const total = Object.values(perAgent).reduce((sum, n) => sum + n, 0);
+    return { total, perAgent };
   }
 }

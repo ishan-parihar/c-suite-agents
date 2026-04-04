@@ -105,7 +105,14 @@ async function main() {
     }
     logger.info({ serverCount: mcpConnections.length }, "MCP servers connected");
 
-    // Build unified tool executor (native + MCP)
+    // ── PER-AGENT TOOL SCOPING ──
+    const toolScoping = (config.agents as any)?.toolScoping || {};
+    const mcpServerTools: Record<string, McpServerConnection> = {};
+    for (const conn of mcpConnections) {
+      mcpServerTools[conn.serverName] = conn;
+    }
+
+    // Build per-agent tool lists: all native tools + scoped MCP tools
     const nativeToolNames = [
       // Memory
       "memory.search", "memory.recall", "memory.upsert", "memory.forget", "memory.consolidate", "memory.stats",
@@ -136,14 +143,58 @@ async function main() {
       "image.analyze", "image.generate", "tts.synthesize",
     ];
 
+    // Build scoped tool sets per agent
+    const agentToolScopes: Record<string, string[]> = {};
+    const allMcpToolNames = new Set<string>();
+
+    for (const conn of mcpConnections) {
+      for (const tool of conn.tools) {
+        allMcpToolNames.add(tool.name);
+      }
+    }
+
+    // Default: all agents get all tools (backward compat)
+    const allToolNames = [...nativeToolNames, ...Array.from(allMcpToolNames)];
     const bridge = createBridge(toolImpls, mcpConnections, nativeToolNames, mcpToolMap);
-    const allToolNames = bridge.definitions.map(d => d.name);
 
     nativeRuntime.setToolExecutor(bridge.executor, allToolNames);
     logger.info(
-      { nativeCount: nativeToolNames.length, mcpCount: allToolNames.length - nativeToolNames.length, totalCount: allToolNames.length },
+      { nativeCount: nativeToolNames.length, mcpCount: allMcpToolNames.size, totalCount: allToolNames.length },
       "Tool executor wired (native + MCP bridge)",
     );
+
+    // Configure per-agent tool scoping
+    const coreStaffIds = getCoreStaffIds();
+    for (const agentId of coreStaffIds) {
+      const scope = toolScoping[agentId];
+      if (scope && Array.isArray(scope.mcpServers)) {
+        const scopedTools = [...nativeToolNames];
+        for (const serverName of scope.mcpServers) {
+          const serverConn = mcpServerTools[serverName];
+          if (serverConn) {
+            for (const tool of serverConn.tools) {
+              scopedTools.push(tool.name);
+            }
+            logger.info({ agentId, server: serverName, toolCount: serverConn.tools.length }, "MCP server scoped to agent");
+          } else {
+            logger.warn({ agentId, server: serverName }, "Scoped MCP server not connected — skipping");
+          }
+        }
+        agentToolScopes[agentId] = scopedTools;
+        nativeRuntime.setAgentToolScope(agentId, scopedTools);
+        logger.info(
+          { agentId, toolCount: scopedTools.length, mcpTools: scopedTools.length - nativeToolNames.length },
+          "Agent tool scope configured",
+        );
+      }
+    }
+
+    // Log summary
+    if (Object.keys(agentToolScopes).length > 0) {
+      for (const [agentId, tools] of Object.entries(agentToolScopes)) {
+        logger.info({ agentId, total: tools.length, mcp: tools.length - nativeToolNames.length }, "Scoped tool count (vs global)");
+      }
+    }
 
     // Start services
     await startHeartbeat(rt);

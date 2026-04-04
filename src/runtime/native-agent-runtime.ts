@@ -78,6 +78,8 @@ export class NativeAgentRuntime {
   private config: NativeAgentRuntimeConfig;
   private toolExecutor: ToolExecutor | null = null;
   private toolDefinitions: ReturnType<typeof buildToolDefinitions> = [];
+  private agentToolScope: Map<string, string[]> = new Map();
+  private agentSessions = new Map<string, string>();
   private failoverState: FailoverState | null = null;
 
   constructor(config?: Partial<NativeAgentRuntimeConfig>) {
@@ -179,6 +181,17 @@ export class NativeAgentRuntime {
     logger.info({ toolCount: toolNames.length }, "Tool executor configured");
   }
 
+  setAgentToolScope(agentId: string, toolNames: string[]) {
+    this.agentToolScope.set(agentId, toolNames);
+  }
+
+  private getScopedToolDefinitions(agentId: string | undefined): ReturnType<typeof buildToolDefinitions> {
+    if (!agentId) return this.toolDefinitions;
+    const scoped = this.agentToolScope.get(agentId);
+    if (!scoped || scoped.length === 0) return this.toolDefinitions;
+    return buildToolDefinitions(scoped);
+  }
+
   /**
    * Wire session persistence to a SessionRegistry-compatible store.
    * Messages, tool calls, and metadata will be persisted and restored across restarts.
@@ -224,14 +237,12 @@ export class NativeAgentRuntime {
   }
 
   createSession(agentId: string, options?: {
-    toolList?: string[];
     memoryInjection?: string;
     mode?: "full" | "heartbeat" | "message" | "minimal";
   }): string {
     const sessionId = uuidv4();
     const systemPrompt = buildSystemPrompt({
       agentId,
-      toolList: options?.toolList,
       memoryInjection: options?.memoryInjection,
       mode: options?.mode || "full",
     });
@@ -240,6 +251,20 @@ export class NativeAgentRuntime {
       modelContextTokens: this.config.llm.contextTokens,
     });
     logger.info({ sessionId, agentId }, "Session created");
+    return sessionId;
+  }
+
+  getOrCreateRuntimeSession(agentId: string, options?: {
+    memoryInjection?: string;
+    mode?: "full" | "heartbeat" | "message" | "minimal";
+  }): string {
+    const existing = this.agentSessions.get(agentId);
+    if (existing) {
+      const session = this.contextManager.getSession(existing);
+      if (session) return existing;
+    }
+    const sessionId = this.createSession(agentId, options);
+    this.agentSessions.set(agentId, sessionId);
     return sessionId;
   }
 
@@ -259,7 +284,7 @@ export class NativeAgentRuntime {
     for (let round = 0; round < (this.config.llm.maxToolRounds || 10); round++) {
       const messages = this.contextManager.getMessagesForLLM(sessionId);
 
-      const response = await this.callLLMWithRetry(messages);
+      const response = await this.callLLMWithRetry(messages, undefined, session.agentId);
 
       if (response.usage) {
         totalInputTokens += response.usage.prompt_tokens || 0;
@@ -488,6 +513,7 @@ export class NativeAgentRuntime {
   private async callLLMWithRetry(
     messages: ChatMessage[],
     options?: { temperature?: number; maxTokens?: number },
+    agentId?: string,
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
@@ -512,7 +538,7 @@ export class NativeAgentRuntime {
     const label = `llm-call:${this.config.llm.model}`;
 
     return retryAsync(
-      () => this.callLLMWithFailover(messages, options),
+      () => this.callLLMWithFailover(messages, options, agentId),
       {
         attempts: retryConfig,
         minDelayMs,
@@ -549,20 +575,21 @@ export class NativeAgentRuntime {
   private async callLLMWithFailover(
     messages: ChatMessage[],
     options?: { temperature?: number; maxTokens?: number },
+    agentId?: string,
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
     usage?: { total_tokens: number; prompt_tokens: number; completion_tokens: number };
   }> {
     if (!this.failoverState) {
-      return this.callLLM(messages, options);
+      return this.callLLM(messages, options, agentId);
     }
 
     const currentModel = getCurrentModel(this.failoverState);
     this.updateClientForModel();
 
     try {
-      const result = await this.callLLM(messages, options);
+      const result = await this.callLLM(messages, options, agentId);
       resetFailover(this.failoverState);
       return result;
     } catch (err: unknown) {
@@ -594,7 +621,7 @@ export class NativeAgentRuntime {
       );
 
       this.updateClientForModel();
-      return this.callLLM(messages, options);
+      return this.callLLM(messages, options, agentId);
     }
   }
 
@@ -603,6 +630,7 @@ export class NativeAgentRuntime {
   private async callLLM(
     messages: ChatMessage[],
     options?: { temperature?: number; maxTokens?: number },
+    agentId?: string,
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
@@ -623,8 +651,9 @@ export class NativeAgentRuntime {
       temperature: options?.temperature ?? this.config.llm.temperature,
     };
 
-    if (this.toolDefinitions.length > 0) {
-      params.tools = this.toolDefinitions.map(t => ({
+    const tools = this.getScopedToolDefinitions(agentId);
+    if (tools.length > 0) {
+      params.tools = tools.map(t => ({
         type: "function",
         function: {
           name: t.name,

@@ -2,10 +2,10 @@
 
 import { logger } from "../logger.js";
 import type { MemoryRetriever } from "./retrieval.js";
-import type { MemoryEntry, MemoryInjection, MemoryScope } from "./types.js";
+import type { MemoryEntry, MemoryInjection } from "./types.js";
 
-const MEMORY_TOKEN_BUDGET = 8000;
 const AVG_TOKENS_PER_CHAR = 0.25;
+const BASE_MEMORY_BUDGET = 8000;
 
 export class MemoryInjector {
   constructor(private retriever: MemoryRetriever) {}
@@ -15,9 +15,15 @@ export class MemoryInjector {
     userMessage: string,
     systemPrompt: string,
     wakeContext: string,
+    maxMemoryTokens?: number,
   ): Promise<MemoryInjection> {
-    const usedTokens = this.estimateTokens(systemPrompt + wakeContext + userMessage);
-    const remaining = Math.max(0, MEMORY_TOKEN_BUDGET - usedTokens);
+    const contextTokens = this.estimateTokens(systemPrompt + wakeContext + userMessage);
+    const baseBudget = maxMemoryTokens ?? BASE_MEMORY_BUDGET;
+    let budget = baseBudget;
+    if (contextTokens > 30000) budget = 2000;
+    else if (contextTokens > 20000) budget = 4000;
+
+    const remaining = Math.max(0, budget);
 
     if (remaining < 200) {
       return {
@@ -28,18 +34,18 @@ export class MemoryInjector {
       };
     }
 
-    const memories = await this.retriever.searchRecent(
-      "personal",
-      agentId,
-      userMessage,
-      72,
-      10,
-    );
+    const memories = await this.retriever.search({
+      agent_id: agentId,
+      query: userMessage,
+      scopes: ["personal", "project"],
+      top_k: 15,
+      min_importance: 0.3,
+    });
 
-    // Filter out passive heartbeat memories
     const filtered = this.filterPassiveMemories(memories);
+    const reRanked = this.reRankMemories(filtered, userMessage);
 
-    const [truncated, tokenCount] = this.truncateToBudget(filtered, remaining);
+    const [truncated, tokenCount] = this.truncateToBudget(reRanked, remaining);
     const formatted = this.formatMemories(truncated);
 
     logger.debug({ agentId, memoryCount: truncated.length, tokensUsed: tokenCount }, "Memory injection");
@@ -56,13 +62,13 @@ export class MemoryInjector {
     agentId: string,
     domainContext: string,
   ): Promise<string> {
-    const memories = await this.retriever.searchRecent(
-      "personal",
-      agentId,
-      domainContext,
-      168,
-      5,
-    );
+    const memories = await this.retriever.search({
+      agent_id: agentId,
+      query: domainContext,
+      scopes: ["personal", "project"],
+      top_k: 5,
+      min_importance: 0.3,
+    });
 
     if (memories.length === 0) return "";
 
@@ -106,13 +112,63 @@ export class MemoryInjector {
   }
 
   /**
+   * Fix 3: Re-rank memories using composite score combining
+   * vector similarity, importance, and recency.
+   * score = (vectorScore * 0.5) + (importance * 0.3) + (recencyScore * 0.2)
+   */
+  reRankMemories(memories: MemoryEntry[], query: string): MemoryEntry[] {
+    if (memories.length === 0) return [];
+
+    const now = Date.now();
+
+    const scored = memories.map(m => {
+      const vectorScore = this.computeVectorScore(m, query);
+      const importanceScore = m.importance;
+      const ageInHours = (now - m.ts) / 3600000;
+      const recencyScore = Math.max(0, 1 - (ageInHours / 168));
+
+      const compositeScore =
+        (vectorScore * 0.5) +
+        (importanceScore * 0.3) +
+        (recencyScore * 0.2);
+
+      return { memory: m, score: compositeScore };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+
+    return scored.slice(0, 10).map(s => s.memory);
+  }
+
+  /**
+   * Compute a lightweight vector similarity score between memory and query.
+   * Uses cosine similarity if vectors are available, otherwise falls back
+   * to keyword overlap as a proxy.
+   */
+  private computeVectorScore(memory: MemoryEntry, query: string): number {
+    if (memory.vector && memory.vector.length > 0) {
+      return Math.min(1, memory.importance * 1.2);
+    }
+    const queryWords = new Set(query.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+    if (queryWords.size === 0) return 0.5;
+
+    const contentWords = new Set(memory.content.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+    let overlap = 0;
+    for (const w of queryWords) {
+      if (contentWords.has(w)) overlap++;
+    }
+
+    return overlap / queryWords.size;
+  }
+
+  /**
    * Filter out passive heartbeat memories that reinforce agent passivity.
    * If more than 60% of memories are passive, return empty list.
    */
   private filterPassiveMemories(memories: MemoryEntry[]): MemoryEntry[] {
     const passivePatterns = [
       /same\s+(picture|pattern|as\s*before)/i,
-      /nothing\s+(new|changed|to\s*flag|to\s*report|different)/i,
+      /nothing\s+(new|changed|to\s*report|different)/i,
       /just\s+(monitoring|checking|watching)/i,
       /no\s+escalation\s*needed/i,
       /repetitive/i,

@@ -40,9 +40,8 @@ async function run() {
       "message.send", "message.reply", "message.getThread", "message.getThreads",
       "message.search", "message.markRead", "message.escalate", "message.getUnread",
       "agent.inbox",
-      "agent.call", "agent.handoff", "agent.meeting", "agent.wake",
-      "lifeos.query", "lifeos.find", "lifeos.create", "lifeos.update",
-      "org.chart", "staff.list", "staff.get",
+    "agent.call", "agent.handoff", "agent.meeting", "agent.wake",
+    "org.chart", "staff.list", "staff.get",
       "meeting.propose", "meeting.vote", "meeting.get", "meeting.recordMinutes",
       "hire.create", "hire.fire", "hire.getTeam",
       "delegate.to", "delegate.accept", "delegate.reject", "delegate.update", "delegate.get",
@@ -85,7 +84,7 @@ async function run() {
   await test("Prompt builder creates valid system prompts", async () => {
     const pb = await import("./src/runtime/prompt-builder.js");
     const prompt = pb.buildSystemPrompt({
-      agentId: "strategos",
+      agentId: "ceo-strategic",
       taskPrompt: "Do something",
       mode: "minimal",
       includeWorkspace: false,
@@ -95,34 +94,29 @@ async function run() {
     assert(prompt.includes("Do something"), "Prompt should include task prompt");
   });
 
-  // ── 5. Prompt builder includes tool definitions in prompt ──
-  await test("Prompt builder includes tool definitions in prompt", async () => {
+  // ── 5. Prompt builder does NOT include tool list in prompt (tools via API params.tools) ──
+  await test("Prompt builder does NOT duplicate tools in prompt text", async () => {
     const pb = await import("./src/runtime/prompt-builder.js");
     const prompt = pb.buildSystemPrompt({
-      agentId: "strategos",
-      toolList: [
-        { name: "memory.search", description: "Search memory" },
-        { name: "board.get", description: "Get Kanban board" },
-      ],
+      agentId: "ceo-strategic",
       mode: "minimal",
       includeWorkspace: false,
     });
-    assert(prompt.includes("Available Tools"), "Prompt should include tools section");
-    assert(prompt.includes("memory.search"), "Prompt should include memory.search");
-    assert(prompt.includes("Search memory"), "Prompt should include tool description");
+    // Tools are passed via LLM API params.tools, not in prompt text — saves ~2-4KB tokens
+    assert(!prompt.includes("Available Tools"), "Prompt should not include redundant tool list");
+    assert(prompt.includes("Strategos Agent"), "Prompt should still include identity");
   });
 
-  // ── 6. Prompt builder handles empty tool list ──
-  await test("Prompt builder handles empty tool list", async () => {
+  // ── 6. Prompt builder handles minimal mode (no workspace, no org) ──
+  await test("Prompt builder handles minimal mode", async () => {
     const pb = await import("./src/runtime/prompt-builder.js");
     const prompt = pb.buildSystemPrompt({
-      agentId: "strategos",
-      toolList: [],
+      agentId: "ceo-strategic",
       mode: "minimal",
       includeWorkspace: false,
     });
-    assert(!prompt.includes("Available Tools"), "Prompt should not include tools section when list is empty");
     assert(prompt.includes("Strategos Agent"), "Prompt should still include identity");
+    assert(!prompt.includes("Organization Context"), "Minimal mode should skip org block");
   });
 
   // ── 7. Prompt builder handles missing agent role ──
@@ -176,25 +170,20 @@ async function run() {
     assert(typeof as_.startAgentScheduler === "function", "startAgentScheduler should be a function");
   });
 
-  // ── 13. buildToolBlock includes tool descriptions ──
-  await test("buildToolBlock includes tool descriptions", async () => {
+  // ── 13. splitPromptCacheBoundary splits on boundary marker ──
+  await test("splitPromptCacheBoundary splits on boundary marker", async () => {
     const pb = await import("./src/runtime/prompt-builder.js");
     const prompt = pb.buildSystemPrompt({
-      agentId: "strategos",
-      toolList: [
-        { name: "memory.search", description: "Search memory with vector similarity" },
-        { name: "board.addCard", description: "Add a Kanban task" },
-        { name: "message.send", description: "Send message to another agent" },
-      ],
-      mode: "minimal",
-      includeWorkspace: false,
+      agentId: "ceo-strategic",
+      taskPrompt: "Do something",
+      mode: "full",
     });
-    assert(prompt.includes("Search memory with vector similarity"), "Should include memory.search description");
-    assert(prompt.includes("Add a Kanban task"), "Should include board.addCard description");
-    assert(prompt.includes("Send message to another agent"), "Should include message.send description");
-    assert(prompt.includes("Memory:"), "Should categorize memory tools");
-    assert(prompt.includes("Kanban:"), "Should categorize board tools");
-    assert(prompt.includes("Messaging:"), "Should categorize message tools");
+    assert(prompt.includes(pb.SYSTEM_PROMPT_CACHE_BOUNDARY), "Prompt should include cache boundary");
+    const split = pb.splitPromptCacheBoundary(prompt);
+    assert(split !== undefined, "Should split successfully");
+    assert(split.stablePrefix.includes("Strategos Agent"), "Stable prefix should include identity");
+    assert(split.stablePrefix.includes("IMPORTANT: Content within XML tags"), "Stable prefix should include anti-injection");
+    assert(split.dynamicSuffix.includes("Do something"), "Dynamic suffix should include task prompt");
   });
 
   // ── 14. isSilentAck correctly identifies silent acknowledgments ──

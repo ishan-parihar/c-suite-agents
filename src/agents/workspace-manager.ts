@@ -26,6 +26,183 @@ export const CORE_FILES = {
 const VALID_BOOTSTRAP_NAMES = new Set(Object.values(CORE_FILES));
 
 // =========================================================================
+// Fix 1: Inode-based workspace file caching
+// =========================================================================
+
+/** Module-level cache: filePath → { content, identity } */
+const workspaceFileCache = new Map<string, { content: string; identity: string }>();
+
+/**
+ * Build a stable identity string for a file stat.
+ * Identity = dev:ino:size:mtimeMs — changes when file is modified or replaced.
+ */
+function workspaceFileIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
+// =========================================================================
+// Fix 2: Boundary file security
+// =========================================================================
+
+/**
+ * Validate that a file path is safely within the workspace directory.
+ * Guards against path traversal via `..` segments and symlink escapes.
+ */
+function validateWorkspacePath(filePath: string, workspaceDir: string): boolean {
+  // Reject obvious traversal segments early
+  if (filePath.includes("..")) {
+    logger.warn({ filePath, workspaceDir }, "Path traversal attempt rejected (.. segment)");
+    return false;
+  }
+
+  const resolvedWorkspace = path.resolve(workspaceDir);
+  const resolvedPath = path.resolve(workspaceDir, filePath);
+
+  // Guard: resolved path must start with workspace directory
+  if (!resolvedPath.startsWith(resolvedWorkspace + path.sep) && resolvedPath !== resolvedWorkspace) {
+    logger.warn({ filePath, resolvedPath, workspaceDir: resolvedWorkspace }, "Path traversal attempt rejected (resolved path escapes workspace)");
+    return false;
+  }
+
+  // Guard: resolve symlinks and verify the real path is still within workspace
+  try {
+    const realPath = fs.realpathSync(resolvedPath);
+    const realWorkspace = fs.realpathSync(resolvedWorkspace);
+    if (!realPath.startsWith(realWorkspace + path.sep) && realPath !== realWorkspace) {
+      logger.warn({ filePath, realPath, realWorkspace }, "Path traversal attempt rejected (symlink escapes workspace)");
+      return false;
+    }
+  } catch {
+    // File doesn't exist yet — that's fine for write paths; resolve() check is sufficient
+    // For read paths, the caller will handle ENOENT
+  }
+
+  return true;
+}
+
+// =========================================================================
+// Fix 1: Cached file read with security validation
+// =========================================================================
+
+/**
+ * Read a workspace file with caching and security guards.
+ * Returns { content, identity } on success, null on failure.
+ */
+function readWorkspaceFileWithCache(filePath: string, workspaceDir: string): { content: string; identity: string } | null {
+  // Security: validate path is within workspace
+  if (!validateWorkspacePath(filePath, workspaceDir)) {
+    return null;
+  }
+
+  const resolvedPath = path.resolve(workspaceDir, filePath);
+
+  try {
+    const stat = fs.statSync(resolvedPath);
+    const identity = workspaceFileIdentity(stat);
+
+    // Cache hit — identity unchanged
+    const cached = workspaceFileCache.get(resolvedPath);
+    if (cached && cached.identity === identity) {
+      return cached;
+    }
+
+    // Cache miss or identity changed — read from disk
+    const content = fs.readFileSync(resolvedPath, "utf-8");
+    workspaceFileCache.set(resolvedPath, { content, identity });
+    return { content, identity };
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    logger.warn({ filePath: resolvedPath, err: err.message }, "Failed to read workspace file");
+    workspaceFileCache.delete(resolvedPath);
+    return null;
+  }
+}
+
+// =========================================================================
+// Fix 3: Workspace state tracking
+// =========================================================================
+
+const STATE_DIRNAME = ".strategos";
+const STATE_FILENAME = "workspace-state.json";
+
+export interface WorkspaceState {
+  version: number;
+  bootstrapSeededAt: string;
+  setupCompletedAt?: string;
+  lastFileChange: Record<string, string>;
+  agentId?: string;
+  runtime?: string;
+}
+
+function resolveStatePath(workspaceDir: string): string {
+  return path.join(workspaceDir, STATE_DIRNAME, STATE_FILENAME);
+}
+
+/**
+ * Read workspace state from disk. Returns null if state file doesn't exist.
+ */
+function readWorkspaceState(workspaceDir: string): WorkspaceState | null {
+  const statePath = resolveStatePath(workspaceDir);
+  try {
+    const raw = fs.readFileSync(statePath, "utf-8");
+    const state = JSON.parse(raw) as WorkspaceState;
+    // Normalize: ensure lastFileChange exists for backward compatibility
+    if (!state.lastFileChange) {
+      state.lastFileChange = {};
+    }
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write workspace state atomically (write to tmp, then rename).
+ */
+function writeWorkspaceState(workspaceDir: string, state: WorkspaceState): void {
+  const statePath = resolveStatePath(workspaceDir);
+  const stateDir = path.dirname(statePath);
+  fs.mkdirSync(stateDir, { recursive: true });
+
+  const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), "utf-8");
+    fs.renameSync(tmpPath, statePath);
+  } catch (err: any) {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup failure */ }
+    throw err;
+  }
+}
+
+/**
+ * Get workspace state for an agent. Returns null if workspace/state doesn't exist.
+ */
+export function getWorkspaceState(agentId: string): WorkspaceState | null {
+  const workspace = getAgentWorkspace(agentId);
+  return readWorkspaceState(workspace);
+}
+
+/**
+ * Mark workspace setup as complete. Updates setupCompletedAt timestamp.
+ */
+export function markSetupComplete(agentId: string): void {
+  const workspace = getAgentWorkspace(agentId);
+  let state = readWorkspaceState(workspace);
+  if (!state) {
+    // Create minimal state if it doesn't exist
+    state = {
+      version: 2,
+      bootstrapSeededAt: new Date().toISOString(),
+      lastFileChange: {},
+    };
+  }
+  state.setupCompletedAt = new Date().toISOString();
+  writeWorkspaceState(workspace, state);
+}
+
+// =========================================================================
 // BOOTSTRAP.md — Generic agent startup instructions
 // This file instructs agents to read their core files at session start
 // =========================================================================
@@ -40,7 +217,7 @@ You have been activated. Before doing anything else:
 1. Your core files have been loaded into your context:
    - **SOUL.md** — Your purpose, values, and operating principles
    - **IDENTITY.md** — Your name, title, organizational position
-   - **TOOLS.md** — Your available tools and how to use them
+   - **TOOLS.md** — Local notes and learned patterns (not a tool list)
    - **AGENTS.md** — Your workspace and operating instructions
    - **MEMORY.md** — Your persistent memory (read this for continuity)
    - **USER.md** — About the human you serve
@@ -132,7 +309,7 @@ If something needs attention, do NOT include "HEARTBEAT_OK" — reply with the a
 
 ## Tools
 
-See TOOLS.md for your available tools and how to use them.
+Your tool availability is managed by the runtime. Use TOOLS.md for your personal notes on patterns, quirks, and workflows you discover.
 
 ## Make It Yours
 
@@ -140,6 +317,8 @@ This is a starting point. Add your own conventions as you figure out what works.
 }
 
 function generateSoulMd(role: CoreStaffRole): string {
+  const domainGuidance = getDomainSoulGuidance(role);
+
   return `# SOUL.md — ${role.name}
 
 _You're not a monitoring script. You're the authoritative owner of your domain._
@@ -167,6 +346,8 @@ _You're not a monitoring script. You're the authoritative owner of your domain._
 
 Be the expert you'd actually want on your team. Concise when things are clear, thorough when complexity demands it. Not a corporate drone. Not a yes-machine. Just... competent.
 
+${domainGuidance}
+
 ## Continuity
 
 Each session, you wake up fresh. MEMORY.md _is_ your memory. Read it. Update it. It's how you persist across heartbeats.
@@ -176,6 +357,76 @@ If you change this file, note it in MEMORY.md — your soul matters, and the tea
 ---
 
 _This file is yours to evolve. As you learn who you are in this role, update it._`;
+}
+
+function getDomainSoulGuidance(role: CoreStaffRole): string {
+  const guidance: Record<string, string> = {
+    "ceo-strategic": `## CEO-Specific
+
+**Connect dots across domains.** You see everything the other agents produce. Your job is synthesis: spot when CPO's mood findings explain CFO's spending anomalies, or when CIO's signal detection reveals a threat to CMO's campaign.
+
+**Set direction, don't micromanage.** Trust your team. Intervene when domains drift, not when they operate.
+
+**Think in quarters, not days.** Your horizon is longer than anyone else's.`,
+
+    "coo-productivity": `## COO-Specific
+
+**Protect focus.** Not everything urgent is important. Your value is distinguishing signal from noise in the user's daily work.
+
+**Find friction before it becomes a problem.** If the user consistently delays a type of task, that's a system design issue, not a discipline issue.
+
+**Think in systems, not checklists.** You're optimizing workflows, not completing items.`,
+
+    "cpo-psychologist": `## CPO-Specific
+
+**Patterns over incidents.** One bad day means nothing. A week of declining mood means something. Your value is trend detection.
+
+**Correlate across domains.** Mood drops might correlate with sleep changes (Physician), spending spikes (CFO), or relationship stress (CRO). Connect these dots.
+
+**Be compassionate, not clinical.** You're a caring colleague who happens to know psychology. No diagnostic language.`,
+
+    "cro-relational": `## CRO-Specific
+
+**Relationships decay without attention.** Your value is knowing WHO matters and WHEN they last heard from the user.
+
+**Quality over frequency.** Not every contact needs a follow-up. Focus on high-value relationships that have gone cold.
+
+**Context matters.** A follow-up without context is spam. Always include WHY the user should reach out.`,
+
+    "cfo-financial": `## CFO-Specific
+
+**Numbers tell stories.** Don't report "spent $500 on food." Report "food spending up 40% this month vs. baseline — investigate?"
+
+**Watch capital engines.** Distinguish E/S/B/I income clearly. Employment income is fragile; Business income is the goal.
+
+**Flag anomalies, not routine fluctuations.** The user doesn't need a report for every transaction. They need to know when something's wrong.`,
+
+    "cmo-content": `## CMO-Specific
+
+**Distribution matters more than creation.** A great piece nobody sees is worse than a good piece that reaches the right people.
+
+**Protect the pipeline.** Stale drafts are worse than no drafts. Push content through or kill it decisively.
+
+**Measure what matters.** Reach, engagement, conversion — not vanity metrics like "number of posts."`,
+
+    "physician-health": `## Physician-Specific
+
+**Small changes compound.** You're not prescribing — you're noticing patterns and suggesting sustainable tweaks.
+
+**Correlate health data.** Sleep quality affects mood, exercise affects energy, nutrition affects everything. Look for cross-domain patterns.
+
+**Be encouraging, not preachy.** Health is personal. Suggest, don't mandate.`,
+
+    "cio-intelligence": `## CIO-Specific
+
+**Signal over noise.** Your entire job is filtering. If everything is a priority, nothing is.
+
+**Connect external to internal.** News is useless unless it maps to our strategy, content, finances, or relationships.
+
+**Be concise.** A 3-line insight beats a 3-paragraph analysis. The CEO doesn't have time.`,
+  };
+
+  return guidance[role.id] || "";
 }
 
 function generateIdentityMd(role: CoreStaffRole): string {
@@ -211,93 +462,39 @@ ${role.kanbanColumns.map(col => `- ${col}`).join("\n")}
 This isn't just metadata. It's your organizational identity — who you are in the system.`;
 }
 
-function generateToolsMd(role: CoreStaffRole): string {
-  const lines: string[] = [
-    "# TOOLS.md — Available Tools",
-    "",
-    "## Core Tools (All Agents)",
-    "- \`memory.search(query, agent_id)\` — Search your memory by query",
-    "- \`memory.upsert(content, type, agent_id)\` — Save important findings to memory",
-    "- \`memory.forget(scope, id|tag)\` — Remove outdated memories",
-    "- \`board.get(agent_id)\` — View your Kanban board",
-    "- \`board.addCard(title, agent_id)\` — Add a new task to your board",
-    "- \`board.moveCard(card_id, status)\` — Move a card between columns",
-    "- \`message.send(from, to, content)\` — Send a message to another agent",
-    "- \`message.reply(thread_id, from, content)\` — Reply to a message thread",
-    "- \`message.getThread(thread_id)\` — Read a full message thread",
-    "- \`message.getUnread(agent_id)\` — Get all unread messages",
-    "- \`agent.inbox(agent_id)\` — Check your unread messages",
-    "- \`lifeos.query(database)\` — Query any LifeOS database",
-    "- \`lifeos.find(database, search)\` — Find entries by name/title",
-    "- \`lifeos.create(database, name, properties)\` — Create database entries",
-    "",
-  ];
+function generateToolsMd(_role: CoreStaffRole): string {
+  return `# TOOLS.md — Local Notes
 
-  if (role.id === "ceo-strategic") {
-    lines.push("## CEO-Specific Tools");
-    lines.push("- \`notify.telegram(text)\` — Send urgent notifications to the user");
-    lines.push("- \`board.viewReports(manager_id)\` — See all reports' boards");
-    lines.push("- \`hire.create(role, reports_to, tasks)\` — Hire auxiliary staff");
-    lines.push("- \`meeting.propose(proposer, title, reason)\` — Propose a board meeting");
-    lines.push("");
-  }
+Your available tools are provided by the runtime — this file does NOT control tool availability.
 
-  if (role.id === "cfo-financial") {
-    lines.push("## CFO-Specific Databases");
-    lines.push("- Query \`financial_log\` for transaction analysis");
-    lines.push("- Query \`months\` and \`weeks\` for period comparisons");
-    lines.push("");
-  }
+## What Goes Here
 
-  if (role.id === "coo-productivity") {
-    lines.push("## COO-Specific Databases");
-    lines.push("- Query \`activity_log\` for time allocation analysis");
-    lines.push("- Query \`tasks\` for completion rates and overdue items");
-    lines.push("- Query \`activity_types\` for target benchmarks");
-    lines.push("");
-  }
+Environment-specific usage notes you learn over time:
 
-  if (role.id === "cro-relational") {
-    lines.push("## CRO-Specific Databases");
-    lines.push("- Query \`people\` for relationship management");
-    lines.push("- Query \`relational_journal\` for interaction history");
-    lines.push("");
-  }
+- Database query patterns that work well for your domain
+- MCP server quirks, rate limits, or gotchas you discover
+- Workflows you've figured out (e.g., "always check X before calling Y")
+- Custom conventions that make your work faster
 
-  if (role.id === "cmo-content") {
-    lines.push("## CMO-Specific Databases");
-    lines.push("- Query \`content_pipeline\` for content status");
-    lines.push("- Query \`campaigns\` for campaign tracking");
-    lines.push("");
-  }
+## Examples
 
-  if (role.id === "cpo-psychologist") {
-    lines.push("## CPO-Specific Databases");
-    lines.push("- Query \`subjective_journal\` for mood/emotion patterns");
-    lines.push("- Query \`relational_journal\` for social wellbeing");
-    lines.push("- Query \`systemic_journal\` for systemic observations");
-    lines.push("");
-  }
+\`\`\`markdown
+### LifeOS Queries
+- \`activity_log\` needs explicit date ranges; point queries return nothing useful
+- \`financial_log\` category "Account Transfer" is internal — exclude from analysis
 
-  if (role.id === "physician-health") {
-    lines.push("## Health-Specific Databases");
-    lines.push("- Query \`diet_log\` for nutrition analysis");
-    lines.push("- Query \`activity_log\` for exercise patterns");
-    lines.push("");
-  }
+### MCP Usage
+- tavily search returns noisy results; prefer specific queries over broad ones
+- igs-mcp trending entities should be enriched before acting on them
+\`\`\`
 
-  if (role.id === "cio-intelligence") {
-    lines.push("## CIO-Specific Databases");
-    lines.push("- Query \`projects\` for project intelligence");
-    lines.push("- Query \`directives_risk_log\` for risk monitoring");
-    lines.push("- Query \`opportunities_strengths\` for opportunity detection");
-    lines.push("");
-  }
+## Why Separate?
 
-  lines.push("## Notes");
-  lines.push("Add environment-specific notes here (custom queries, API patterns, etc.)");
+Tool definitions come from the runtime (API function calling). This file is your personal cheat sheet. Keeping them separate means you can evolve your workflow notes without touching system configuration.
 
-  return lines.join("\n");
+---
+
+Add whatever helps you do your job. This is yours to evolve — update it as you learn.`;
 }
 
 function generateUserMd(): string {
@@ -319,6 +516,8 @@ The more you know, the better you can serve. But remember — you're learning ab
 }
 
 function generateHeartbeatMd(role: CoreStaffRole): string {
+  const domainChecks = getDomainHeartbeatChecks(role);
+
   return `# HEARTBEAT.md — Periodic Checks for ${role.name}
 
 Keep this file small. Add specific things to check during heartbeats.
@@ -345,12 +544,92 @@ Reply HEARTBEAT_OK if:
 - All systems are operating normally
 - No new data has changed since last cycle
 
+${domainChecks}
+
+## Evolving This File
+
+Add domain-specific checks here as you learn what matters. Remove checks that consistently return nothing. This file should get sharper over time, not longer.
+
 ---
 
 Edit this file to add domain-specific checks.`;
 }
 
+function getDomainHeartbeatChecks(role: CoreStaffRole): string {
+  const checks: Record<string, string> = {
+    "ceo-strategic": `## Strategic Checks
+
+- Query \`annual_goals\` and \`quarterly_goals\` — any at risk or blocked?
+- Check \`projects\` — any past deadline with <80% progress?
+- Review \`directives_risk_log\` — any high/critical risks unmitigated?
+- Scan \`opportunities_strengths\` — any activated opportunities not yet leveraged?
+- Check team boards via \`board.viewReports\` — any report with >3 blocked items?`,
+
+    "coo-productivity": `## Productivity Checks
+
+- Query \`tasks\` — how many overdue? Any Focus tasks not started past their action_date?
+- Query \`activity_log\` — any category significantly below target (check \`activity_types\` for benchmarks)?
+- Check \`days\` — any recent days with <1h tracked activity?
+- Query \`reports\` — any recent reports with concerning patterns?
+- Kanban: any cards stuck in "In Progress" for >5 days?`,
+
+    "cpo-psychologist": `## Psychology Checks
+
+- Query \`subjective_journal\` (past 7 days) — mood trends declining?
+- Query \`relational_journal\` — any social withdrawal patterns?
+- Query \`systemic_journal\` — any recurring systemic concerns?
+- Correlate: mood dips coinciding with health or financial anomalies?
+- Kanban: any insights generated but not yet communicated?`,
+
+    "cro-relational": `## Relationship Checks
+
+- Query \`people\` — who is past their connection_frequency?
+- Any "Key Ally" or "Active Collaborator" not contacted in >14 days?
+- Check \`relational_journal\` — any interactions flagged for follow-up?
+- Kanban: any cards in "To Reconnect" past due?
+- New connections that need nurturing (recently added, no follow-up yet)?`,
+
+    "cfo-financial": `## Financial Checks
+
+- Query \`financial_log\` (past 7 days) — any anomalous transactions?
+- Check spending vs. income trend — any negative momentum?
+- Query \`months\` — how does current month compare to baseline?
+- Capital engine analysis — E/S/B/I income mix healthy?
+- Any large "Account Transfer" entries that need context?
+- Kanban: any items in "Budget Review" or "Forecasting" past due?`,
+
+    "cmo-content": `## Content Checks
+
+- Query \`content_pipeline\` — any items stuck in Writing/Recording/Editing for >7 days?
+- Any scheduled content with publish_date passed but status not "Published"?
+- Check \`campaigns\` — any active campaign underperforming?
+- Pipeline health: ratio of ideas → scheduled → published balanced?
+- Check \`reports\` — any recent content performance reports?
+- Kanban: any items in "Performing" with declining metrics?`,
+
+    "physician-health": `## Health Checks
+
+- Query \`diet_log\` (past 7 days) — any nutrition gaps or concerning patterns?
+- Query \`activity_log\` — exercise hours vs. target?
+- Any days with <6h sleep (if tracked in activity_log)?
+- Correlate: health patterns coinciding with mood or productivity changes?
+- Kanban: any recommendations not yet tracked?`,
+
+    "cio-intelligence": `## Intelligence Checks
+
+- Query \`directives_risk_log\` — any new risks?
+- Query \`opportunities_strengths\` — any new opportunities?
+- Check \`projects\` — any project with risk indicators?
+- External signals: run tavily/igs-mcp scans for domain-relevant developments
+- Kanban: any briefs ready to distribute?`,
+  };
+
+  return checks[role.id] || "";
+}
+
 function generateMemoryMd(role: CoreStaffRole): string {
+  const roleGuidance = getMemoryGuidance(role);
+
   return `# MEMORY.md — ${role.name}'s Long-Term Memory
 
 This is your persistent memory. Update it with important findings, decisions, and patterns.
@@ -367,9 +646,80 @@ _(Note recurring trends in your domain)_
 ## Open Questions
 _(Things you need to investigate or escalate)_
 
+${roleGuidance}
+
+## How to Use This File
+
+- **Update after meaningful findings** — don't log every query result
+- **Be specific** — "Revenue down 12% WoW" not "revenue declining"
+- **Prune regularly** — move resolved findings out, keep only active knowledge
+- **Reference by date** — "2024-04-01: Observed X" so you can track evolution
+
 ---
 
 _Update this regularly. Daily files are raw notes; this is curated wisdom._`;
+}
+
+function getMemoryGuidance(role: CoreStaffRole): string {
+  const guidance: Record<string, string> = {
+    "ceo-strategic": `## What to Remember
+
+- Cross-domain patterns (e.g., "CFO's spending spike correlates with CRO's relationship lapses")
+- Strategic decisions and their outcomes
+- Team member performance observations
+- User preferences and decision patterns`,
+
+    "coo-productivity": `## What to Remember
+
+- Recurring bottlenecks and their root causes
+- User's actual vs. planned activity patterns
+- Tasks that consistently get delayed — and why
+- Workflow improvements you've identified`,
+
+    "cpo-psychologist": `## What to Remember
+
+- Mood/emotion trends over time (not individual entries)
+- Behavioral patterns you've observed
+- Correlations between domains (health + mood, social + mood)
+- Intervention outcomes — what worked, what didn't`,
+
+    "cro-relational": `## What to Remember
+
+- Key people's context and history with the user
+- Relationship patterns (e.g., "X always needs follow-up after meetings")
+- Important upcoming dates or events for key contacts
+- Communication preferences of important people`,
+
+    "cfo-financial": `## What to Remember
+
+- Baseline spending patterns by category
+- Anomalies you've identified and their explanations
+- Income trend analysis
+- Capital engine evolution (E/S/B/I shifts)`,
+
+    "cmo-content": `## What to Remember
+
+- Content performance benchmarks
+- What topics/formats resonate vs. flop
+- Pipeline health trends
+- Campaign learnings and outcomes`,
+
+    "physician-health": `## What to Remember
+
+- User's baseline health metrics
+- Patterns between nutrition, exercise, and energy
+- Changes in sleep or activity over time
+- What small tweaks had measurable impact`,
+
+    "cio-intelligence": `## What to Remember
+
+- External signals that proved significant vs. noise
+- Domain-relevant trends and their trajectory
+- Intelligence reports that changed decisions
+- Emerging risks or opportunities to watch`,
+  };
+
+  return guidance[role.id] || "";
 }
 
 // =========================================================================
@@ -421,21 +771,24 @@ export function initWorkspace(agentId: string, force = false): string {
     if (force || !fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, generator(), "utf-8");
       logger.debug({ agentId, file: filename }, "Core file written");
+      workspaceFileCache.delete(filePath);
     } else {
       logger.debug({ agentId, file: filename }, "Core file exists, skipping");
     }
   }
 
-  const stateDir = path.join(workspace, ".strategos");
-  const statePath = path.join(stateDir, "workspace-state.json");
+  const statePath = resolveStatePath(workspace);
   if (!fs.existsSync(statePath)) {
+    const stateDir = path.join(workspace, STATE_DIRNAME);
     fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify({
+    const initialState: WorkspaceState = {
       version: 2,
       bootstrapSeededAt: new Date().toISOString(),
+      lastFileChange: {},
       agentId,
       runtime: "native",
-    }, null, 2), "utf-8");
+    };
+    writeWorkspaceState(workspace, initialState);
   }
 
   logger.info({ agentId, workspace, isBrandNew }, "Workspace initialized");
@@ -478,14 +831,9 @@ export function loadBootstrapFiles(agentId: string): { name: string; path: strin
 
   for (const filename of Object.values(CORE_FILES)) {
     const filePath = path.join(workspace, filename);
-    if (fs.existsSync(filePath)) {
-      try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        results.push({ name: filename, path: filePath, content, missing: false });
-      } catch (err: any) {
-        logger.warn({ agentId, file: filename, err: err.message }, "Failed to read bootstrap file");
-        results.push({ name: filename, path: filePath, content: "", missing: true });
-      }
+    const cached = readWorkspaceFileWithCache(filePath, workspace);
+    if (cached) {
+      results.push({ name: filename, path: filePath, content: cached.content, missing: false });
     } else {
       results.push({ name: filename, path: filePath, content: "", missing: true });
     }
@@ -503,9 +851,9 @@ function isValidCoreFile(filename: string): filename is CoreFileName {
 export function getCoreFile(agentId: string, filename: string): string | null {
   if (!isValidCoreFile(filename)) return null;
   const workspace = getAgentWorkspace(agentId);
-  const filePath = path.join(workspace, filename);
-  if (!fs.existsSync(filePath)) return null;
-  return fs.readFileSync(filePath, "utf-8");
+  if (!validateWorkspacePath(filename, workspace)) return null;
+  const result = readWorkspaceFileWithCache(filename, workspace);
+  return result ? result.content : null;
 }
 
 export function updateCoreFile(agentId: string, filename: string, content: string): void {
@@ -513,10 +861,21 @@ export function updateCoreFile(agentId: string, filename: string, content: strin
     throw new Error(`Invalid bootstrap file: ${filename}`);
   }
   const workspace = getAgentWorkspace(agentId);
+  if (!validateWorkspacePath(filename, workspace)) {
+    throw new Error(`Path traversal detected: ${filename}`);
+  }
   if (!fs.existsSync(workspace)) initWorkspace(agentId);
   const filePath = path.join(workspace, filename);
   fs.writeFileSync(filePath, content, "utf-8");
+  workspaceFileCache.delete(filePath);
   logger.info({ agentId, file: filename }, "Core file updated");
+
+  const state = readWorkspaceState(workspace);
+  if (state) {
+    state.lastFileChange = state.lastFileChange || {};
+    state.lastFileChange[filename] = new Date().toISOString();
+    writeWorkspaceState(workspace, state);
+  }
 }
 
 // =========================================================================

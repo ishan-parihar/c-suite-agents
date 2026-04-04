@@ -121,6 +121,9 @@ export const StrategosConfigSchema = z.object({
     maxToolRounds: z.number().int().positive().default(10),
     heartbeatInterval: z.string().optional(),
     directToUser: z.boolean().default(true),
+    toolScoping: z.record(z.string(), z.object({
+      mcpServers: z.array(z.string()),
+    }).strict()).optional(),
   }).strict().optional(),
 
   // ── File paths ───────────────────────────────────────────────────────
