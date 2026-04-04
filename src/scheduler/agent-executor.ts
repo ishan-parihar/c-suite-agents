@@ -416,7 +416,9 @@ export class AgentExecutor {
         SystemEventQueue.clear(agentId);
       }
     } catch (err: any) {
-      logger.error({ agentId, err: err.message }, "Proactive domain work failed");
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : '';
+      logger.error({ agentId, err: errMsg, stack }, "Proactive domain work failed");
     }
   }
 

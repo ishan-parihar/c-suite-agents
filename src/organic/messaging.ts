@@ -174,6 +174,14 @@ export class MessagingSystem extends EventEmitter {
     return results;
   }
 
+  private queryOneRow(sql: string, params?: unknown[]): any {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const result = stmt.step() ? stmt.get() : null;
+    stmt.free();
+    return result;
+  }
+
   async close(): Promise<void> {
     await this.persist();
   }
@@ -281,7 +289,7 @@ export class MessagingSystem extends EventEmitter {
   }
 
   getThread(thread_id: string): MessageThread | null {
-    const threadRow = this.db.prepare(`SELECT * FROM threads WHERE id = ?`).get([thread_id]);
+    const threadRow = this.queryOneRow(`SELECT * FROM threads WHERE id = ?`, [thread_id]);
     if (!threadRow) return null;
     const vals = threadRow.values;
 
@@ -326,7 +334,7 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async getUnreadCount(agent_id: string): Promise<number> {
-    const result = this.db.prepare(`SELECT COUNT(*) FROM messages WHERE to_agent = ? AND read = 0`).get([agent_id]);
+    const result = this.queryOneRow(`SELECT COUNT(*) FROM messages WHERE to_agent = ? AND read = 0`, [agent_id]);
     return result?.values?.[0] as number || 0;
   }
 
@@ -435,7 +443,7 @@ export class MessagingSystem extends EventEmitter {
     if (!getStaffById(to)) throw new Error(`Target agent ${to} does not exist`);
 
     // Check existing escalation count (max 3)
-    const existingEscalations = this.db.prepare(`SELECT COUNT(*) FROM escalations WHERE thread_id = ?`).get([thread_id]);
+    const existingEscalations = this.queryOneRow(`SELECT COUNT(*) FROM escalations WHERE thread_id = ?`, [thread_id]);
     const escalationCount = (existingEscalations?.values?.[0] as number) || 0;
     if (escalationCount >= 3) throw new Error(`Thread ${thread_id} has reached maximum escalation limit (3)`);
 
