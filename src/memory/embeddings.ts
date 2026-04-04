@@ -63,8 +63,8 @@ export class EmbeddingService {
 
   constructor(config?: EmbeddingConfigInput) {
     this.provider = config?.provider || "ollama";
-    this.model = config?.model || "nomic-embed-text";
-    this.fallbackModel = config?.fallbackModel || "nomic-embed-text";
+    this.model = config?.model || "qwen3-embedding:0.6b";
+    this.fallbackModel = config?.fallbackModel || "qwen3-embedding:0.6b";
     this.baseUrl = config?.baseUrl;
     this.apiKey = config?.apiKey;
     this.dimensions = config?.dimensions || 1024;

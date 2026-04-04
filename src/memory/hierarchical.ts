@@ -4,10 +4,9 @@
 // 3. Company Memory — All agents can access
 
 import { connect, type Table } from "@lancedb/lancedb";
-import ollama from "ollama";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
-import { cfg } from "../config.js";
+import { getEmbeddingService } from "./embeddings.js";
 
 export type MemoryScope = "personal" | "project" | "company";
 
@@ -43,9 +42,8 @@ export class HierarchicalMemory {
   }
 
   private async getEmbedding(text: string): Promise<number[]> {
-    const model = cfg.ollamaEmbedModel;
-    const emb = await ollama.embed({ model, input: text });
-    return emb.embeddings[0] as number[];
+    const embedder = getEmbeddingService();
+    return embedder.embed(text);
   }
 
   private async initCompanyMemory() {

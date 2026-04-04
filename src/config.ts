@@ -27,8 +27,10 @@ export const cfg = new Proxy({} as typeof legacyCfg, {
         return c.telegram?.botToken ?? "";
       case "telegramChatId":
         return c.telegram?.chatId ?? "";
-      case "ollamaEmbedModel":
-        return "embeddinggemma"; // Still hardcoded — no config section yet
+      case "ollamaEmbedModel": {
+        const embed = c.embedding;
+        return embed?.model ?? "qwen3-embedding:0.6b";
+      }
       case "lancedbDir":
         return c.paths?.lancedb ?? ".lancedb";
       case "kanbanDb":
@@ -42,7 +44,7 @@ export const cfg = new Proxy({} as typeof legacyCfg, {
 const legacyCfg = {
   telegramToken: "",
   telegramChatId: "",
-  ollamaEmbedModel: "embeddinggemma",
+  ollamaEmbedModel: "qwen3-0.6",
   lancedbDir: ".lancedb",
   kanbanDb: "kanban.db",
 };

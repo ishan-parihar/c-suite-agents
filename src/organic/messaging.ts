@@ -6,8 +6,7 @@ import { getStaffById, getBoardMembers } from "../staff/core-staff.js";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
-import { Ollama } from "ollama";
-import { cfg } from "../config.js";
+import { getEmbeddingService } from "../memory/embeddings.js";
 import { validateAgentIdentity } from "../auth/session.js";
 import { EventEmitter } from "node:events";
 
@@ -64,15 +63,11 @@ const MAX_MESSAGE_LENGTH = 10000;
 
 export class MessagingSystem extends EventEmitter {
   private db: any;
-  private ollama: Ollama;
-  private embedModel: string;
   private dbPath: string;
 
   private constructor(dbPath: string) {
     super();
     this.dbPath = dbPath;
-    this.ollama = new Ollama({ host: process.env.OLLAMA_HOST || "http://localhost:11434" });
-    this.embedModel = cfg.ollamaEmbedModel;
     this.db = null;
   }
 
@@ -188,11 +183,8 @@ export class MessagingSystem extends EventEmitter {
 
   private async generateEmbedding(text: string): Promise<number[]> {
     try {
-      const result = await this.ollama.embeddings({
-        model: this.embedModel,
-        prompt: text
-      });
-      return result.embedding || [];
+      const embedder = getEmbeddingService();
+      return embedder.embed(text);
     } catch (err: any) {
       logger.error({ err: err.message }, "Failed to generate embedding");
       return [];

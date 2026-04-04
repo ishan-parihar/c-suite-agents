@@ -101,6 +101,22 @@ function buildEnvDefaults(): Record<string, unknown> {
     });
   }
 
+  // Embedding provider config
+  const embedProvider = envOr("EMBEDDING_PROVIDER", "") as string;
+  const embedModel = envOr("EMBEDDING_MODEL", "") as string;
+  const embedBaseUrl = envOr("EMBEDDING_BASE_URL", "") as string;
+  const embedApiKey = envOr("EMBEDDING_API_KEY", "") as string;
+  const embedDimensions = envNumber("EMBEDDING_DIMENSIONS", 0);
+  if (embedProvider || embedModel || embedBaseUrl) {
+    result.embedding = stripUndefined({
+      provider: ["ollama", "openai", "qwen-proxy"].includes(embedProvider) ? embedProvider : undefined,
+      model: embedModel || undefined,
+      baseUrl: embedBaseUrl || undefined,
+      apiKey: embedApiKey || undefined,
+      dimensions: embedDimensions > 0 ? embedDimensions : undefined,
+    });
+  }
+
   return result;
 }
 

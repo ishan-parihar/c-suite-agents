@@ -36,11 +36,9 @@ export class MemoryFacade {
     this.injector = new MemoryInjector(this.retriever);
   }
 
-  static async init(dir: string, embedModel?: string): Promise<MemoryFacade> {
+  static async init(dir: string, _embedModel?: string): Promise<MemoryFacade> {
     const store = await MemoryStore.init(dir);
-    const embedder = embedModel
-      ? new EmbeddingService({ provider: "ollama", model: embedModel, dimensions: 1024 })
-      : new EmbeddingService();
+    const embedder = getEmbeddingService();
     return new MemoryFacade(store, embedder);
   }
 
