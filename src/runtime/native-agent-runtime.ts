@@ -19,6 +19,7 @@ import {
   type ModelEntry,
 } from "./model-fallback.js";
 import { loadConfig } from "../config/loader.js";
+import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent } from "./provider.js";
 
 // SessionRegistry-compatible interface for persistence wiring
 export interface SessionPersistence {
@@ -74,6 +75,8 @@ export interface AgentExecutionResult {
 
 export class NativeAgentRuntime {
   private client!: OpenAI;
+  private provider: OpenAICompatibleProvider | null = null;
+  private promptCacheTracker: PromptCacheTracker | null = null;
   private contextManager: ContextManager;
   private config: NativeAgentRuntimeConfig;
   private toolExecutor: ToolExecutor | null = null;
@@ -92,6 +95,7 @@ export class NativeAgentRuntime {
 
     this.failoverState = this.buildFailoverChain();
     this.updateClientForModel();
+    this.initProvider();
     this.contextManager.setSummarizeFn(this.compactionSummarizeFn.bind(this));
 
     if (this.config.persistCallbacks) {
@@ -173,6 +177,21 @@ export class NativeAgentRuntime {
       apiKey,
       baseURL: baseUrl,
     });
+  }
+
+  private initProvider(): void {
+    const currentModel = this.failoverState ? getCurrentModel(this.failoverState) : null;
+    const baseUrl = currentModel?.baseUrl ?? this.config.llm.baseUrl;
+    const apiKey = currentModel?.apiKey ?? this.config.llm.apiKey;
+
+    if (baseUrl && apiKey) {
+      this.provider = new OpenAICompatibleProvider(baseUrl, apiKey);
+    }
+
+    const contextTokens = this.config.llm.contextTokens ?? this.config.maxContextTokens;
+    if (contextTokens && contextTokens > 0) {
+      this.promptCacheTracker = new PromptCacheTracker();
+    }
   }
 
   setToolExecutor(executor: ToolExecutor, toolNames: string[]) {
@@ -700,6 +719,15 @@ export class NativeAgentRuntime {
         }));
       }
 
+      const usageRaw = response.usage as unknown as Record<string, unknown> | undefined;
+      if (usageRaw && this.promptCacheTracker) {
+        const cacheRead = usageRaw["cache_read_input_tokens"] as number | undefined;
+        if (cacheRead !== undefined) {
+          const fingerprint = createPromptFingerprint(llmMessages);
+          this.promptCacheTracker.record(fingerprint, cacheRead);
+        }
+      }
+
       return { content, toolCalls, usage: response.usage || undefined };
     } catch (err: unknown) {
       clearTimeout(timeoutId);
@@ -707,6 +735,68 @@ export class NativeAgentRuntime {
         throw new Error(`LLM call timed out after ${timeoutMs}ms`);
       }
       throw err;
+    }
+  }
+
+  // ── Prompt Cache Stats ─────────────────────────────────────────────
+
+  getPromptCacheStats(): { enabled: boolean; totalFingerprints: number } {
+    if (!this.promptCacheTracker) {
+      return { enabled: false, totalFingerprints: 0 };
+    }
+    return { enabled: true, ...this.promptCacheTracker.getStats() };
+  }
+
+  // ── Streaming Support ──────────────────────────────────────────────
+
+  async *streamMessage(sessionId: string, message: string, agentId?: string): AsyncIterable<StreamEvent> {
+    const session = this.contextManager.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    if (!this.provider) {
+      throw new Error("Streaming not available — provider not initialized");
+    }
+
+    this.contextManager.addUserMessage(sessionId, message);
+    const messages = this.contextManager.getMessagesForLLM(sessionId);
+
+    const currentModel = this.failoverState ? getCurrentModel(this.failoverState) : null;
+    const model = currentModel?.model ?? this.config.llm.model;
+
+    const llmMessages = messages.map(m => ({ role: m.role, content: m.content }));
+    const fingerprint = createPromptFingerprint(llmMessages);
+
+    const tools = this.getScopedToolDefinitions(agentId);
+    const toolDefs = tools.length > 0
+      ? tools.map(t => ({
+          type: "function",
+          function: { name: t.name, description: t.description, parameters: t.parameters },
+        }))
+      : undefined;
+
+    let timeoutMs = this.config.llm.timeoutMs ?? 120000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      for await (const event of this.provider.stream({
+        model,
+        messages: llmMessages,
+        tools: toolDefs,
+        temperature: this.config.llm.temperature,
+        maxTokens: this.config.llm.maxTokens,
+        abortSignal: controller.signal,
+      })) {
+        if (event.type === "usage" && this.promptCacheTracker) {
+          const cacheRead = (event.usage as Record<string, unknown>)?.["cache_read_input_tokens"] as number | undefined;
+          if (cacheRead !== undefined) {
+            this.promptCacheTracker.record(fingerprint, cacheRead);
+          }
+        }
+        yield event;
+      }
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 }

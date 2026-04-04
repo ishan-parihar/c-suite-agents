@@ -1,5 +1,8 @@
 // Prompt Builder — System prompt composition from workspace files, tools, memory, and context
 // Inspired by OpenClaw's buildAgentSystemPrompt() but adapted for Strategos
+//
+// Instruction file content (CLAUDE.md, .cursorrules, etc.) is discovered by
+// the caller and injected via the instructionFiles option.
 
 import { loadBootstrapFiles, buildWorkspaceContext, CORE_FILES } from "../agents/workspace-manager.js";
 import { getStaffById } from "../staff/core-staff.js";
@@ -34,6 +37,8 @@ export interface PromptBuildOptions {
   memoryInjection?: string;
   includeWorkspace?: boolean;
   mode?: "full" | "heartbeat" | "message" | "minimal";
+  /** Pre-formatted instruction file content from discoverInstructionFiles + formatInstructionFiles */
+  instructionFiles?: string;
 }
 
 /**
@@ -101,6 +106,7 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
     memoryInjection,
     includeWorkspace = true,
     mode = "full",
+    instructionFiles,
   } = options;
 
   const staff = getStaffById(agentId);
@@ -146,6 +152,11 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
   // ── 5. TASK / DELTA (what to do right now) ──
   if (taskPrompt) {
     parts.push(`<user_message>\n${taskPrompt}\n</user_message>`);
+  }
+
+  // ── 6. INSTRUCTION FILES (project-scoped context injected by caller) ──
+  if (instructionFiles) {
+    parts.push(instructionFiles);
   }
 
   return parts.join("\n\n");
