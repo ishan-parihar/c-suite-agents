@@ -133,6 +133,14 @@ export class ReportsAndSessions {
     return results;
   }
 
+  private queryOne(sql: string, params?: unknown[]): Record<string, unknown> | undefined {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const result = stmt.step() ? (stmt.getAsObject() as Record<string, unknown>) : undefined;
+    stmt.free();
+    return result;
+  }
+
   async close(): Promise<void> {
     await this.persist();
   }
@@ -171,15 +179,15 @@ export class ReportsAndSessions {
   }
 
   async getSession(session_id: string): Promise<Session | null> {
-    const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get([session_id]);
+    const row = this.queryOne("SELECT * FROM sessions WHERE id = ?", [session_id]);
     if (!row) return null;
-    return { id: row.id, agent_id: row.agent_id, chat_id: row.chat_id, started_at: row.started_at, last_active: row.last_active, status: row.status };
+    return { id: row.id as string, agent_id: row.agent_id as string, chat_id: row.chat_id as string, started_at: row.started_at as number, last_active: row.last_active as number, status: row.status as Session["status"] };
   }
 
   async getActiveSession(agent_id: string, chat_id: string): Promise<Session | null> {
-    const row = this.db.prepare("SELECT * FROM sessions WHERE agent_id = ? AND chat_id = ? AND status = 'active' ORDER BY last_active DESC LIMIT 1").get([agent_id, chat_id]);
+    const row = this.queryOne("SELECT * FROM sessions WHERE agent_id = ? AND chat_id = ? AND status = 'active' ORDER BY last_active DESC LIMIT 1", [agent_id, chat_id]);
     if (!row) return null;
-    return { id: row.id, agent_id: row.agent_id, chat_id: row.chat_id, started_at: row.started_at, last_active: row.last_active, status: row.status };
+    return { id: row.id as string, agent_id: row.agent_id as string, chat_id: row.chat_id as string, started_at: row.started_at as number, last_active: row.last_active as number, status: row.status as Session["status"] };
   }
 
   async updateSessionLastActive(session_id: string): Promise<void> {
@@ -222,14 +230,14 @@ export class ReportsAndSessions {
   }
 
   async getToolResult(id: string): Promise<string | null> {
-    const row = this.db.prepare("SELECT result FROM tool_correlations WHERE id = ?").get([id]);
-    return row ? row.result : null;
+    const row = this.queryOne("SELECT result FROM tool_correlations WHERE id = ?", [id]);
+    return row ? (row.result as string) : null;
   }
 
   // OpenCode session persistence
   async getOcSession(chat_id: string, agent_id: string): Promise<string | null> {
-    const row = this.db.prepare("SELECT oc_session_id FROM oc_sessions WHERE chat_id = ? AND agent_id = ?").get([chat_id, agent_id]);
-    return row ? row.oc_session_id : null;
+    const row = this.queryOne("SELECT oc_session_id FROM oc_sessions WHERE chat_id = ? AND agent_id = ?", [chat_id, agent_id]);
+    return row ? (row.oc_session_id as string) : null;
   }
   async upsertOcSession(chat_id: string, agent_id: string, oc_session_id: string): Promise<void> {
     const id = `${chat_id}:${agent_id}`;

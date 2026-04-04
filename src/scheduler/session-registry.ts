@@ -59,7 +59,15 @@ export class SessionRegistry {
     this.initSchema();
   }
 
+  private migrateColumns(): void {
+    for (const col of ["workspace_path TEXT", "compaction_count INTEGER DEFAULT 0", "previous_summary TEXT", "has_real_conversation INTEGER DEFAULT 0"]) {
+      try { this.db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { }
+    }
+  }
+
   private initSchema(): void {
+    this.migrateColumns();
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         agent_id TEXT NOT NULL,

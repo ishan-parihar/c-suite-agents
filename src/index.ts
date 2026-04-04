@@ -3,7 +3,7 @@ import { startStrategos, toolImpls } from "./mcp/server.js";
 import { startHeartbeat, stopHeartbeat } from "./scheduler/heartbeat.js";
 import { startTelegram } from "./integrations/telegram.js";
 import { startMessageProcessor } from "./scheduler/message-processor.js";
-import { startAgentExecutor, setExecutorTools } from "./scheduler/agent-executor.js";
+import { startAgentExecutor } from "./scheduler/agent-executor.js";
 import { startMeetingScheduler } from "./scheduler/meeting-scheduler.js";
 import { startAgentScheduler, getAgentScheduler } from "./scheduler/agent-scheduler.js";
 import { getMemoryFacade } from "./memory/index.js";
@@ -139,8 +139,7 @@ async function main() {
     const bridge = createBridge(toolImpls, mcpConnections, nativeToolNames, mcpToolMap);
     const allToolNames = bridge.definitions.map(d => d.name);
 
-    // Connect bridge executor to native runtime
-    setExecutorTools(bridge.executor, allToolNames);
+    nativeRuntime.setToolExecutor(bridge.executor, allToolNames);
     logger.info(
       { nativeCount: nativeToolNames.length, mcpCount: allToolNames.length - nativeToolNames.length, totalCount: allToolNames.length },
       "Tool executor wired (native + MCP bridge)",
