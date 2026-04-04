@@ -20,6 +20,11 @@ import {
   initNativeRuntime,
 } from "../runtime/native-agent-runtime.js";
 import type { ToolExecutor } from "../runtime/tool-bridge.js";
+import { RecoveryRegistry, attemptRecovery, FailureScenario, type RecoveryEvent } from "../runtime/recovery.js";
+import { PolicyEngine, LaneContext, getPrebuiltPolicies } from "../runtime/policy.js";
+import { discoverInstructionFiles, formatInstructionFiles } from "../runtime/instruction-files.js";
+import { getHookRegistry, HookType } from "../runtime/hooks.js";
+import { searchTools } from "../runtime/tool-search.js";
 
 const AGENT_ID_MAP: Record<string, string> = {
   "ceo-strategic": "ceo-strategic",
@@ -52,6 +57,10 @@ export class AgentExecutor {
   private toolExecutor: ToolExecutor | null = null;
   private sessionsInitialized = new Set<string>();
   private sessionMap = new Map<string, string>();
+  private recovery: RecoveryRegistry;
+  private policyEngine: PolicyEngine;
+  private consecutiveFailures = new Map<string, number>();
+  private instructionFilesCache = new Map<string, string>();
 
   constructor(
     private kanban: Kanban,
@@ -61,6 +70,16 @@ export class AgentExecutor {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.inactivityTracker = new InactivityTracker(this.config.userInactivityThresholdMs);
     this.runtime = getNativeRuntime();
+    this.recovery = RecoveryRegistry.getInstance();
+    this.recovery.registerDefaultRecipes({
+      onAlert: (evt) => this.handleRecoveryAlert(evt),
+      onAbort: (agentId) => this.handleRecoveryAbort(agentId),
+    });
+    this.policyEngine = new PolicyEngine();
+    for (const policy of getPrebuiltPolicies()) {
+      this.policyEngine.register(policy);
+    }
+    this.setupDefaultHooks();
   }
 
   /**
@@ -264,6 +283,12 @@ export class AgentExecutor {
       // Memory injection
       const memoryInjection = await this.getMemoryInjection(agentId, `domain check ${staff.title}`);
 
+      // Instruction file injection (discovered once per agent, cached)
+      const instructionFiles = await this.discoverAndCacheInstructionFiles(agentId);
+
+      // Evaluate policy engine for this agent's operational state
+      await this.evaluatePolicies(agentId);
+
       // Pending system events
       const pendingEvents = SystemEventQueue.peekLatest(agentId);
 
@@ -272,6 +297,10 @@ export class AgentExecutor {
       const lines: string[] = [];
       lines.push(currentTimeLine());
       lines.push("");
+      if (instructionFiles) {
+        lines.push(instructionFiles);
+        lines.push("");
+      }
       if (memoryInjection) {
         lines.push(`<memory_context>\n${memoryInjection}\n</memory_context>`);
         lines.push("");
@@ -463,6 +492,138 @@ export class AgentExecutor {
   isUserInactive(): boolean {
     return this.inactivityTracker.isUserInactive();
   }
+
+  // ── Recovery Integration ───────────────────────────────────────────
+
+  private handleRecoveryAlert(evt: RecoveryEvent): void {
+    logger.warn({ scenario: evt.scenario, agentId: evt.agentId, message: evt.message },
+      "recovery:escalation_alert");
+    // Attempt to notify user via Telegram for critical escalations
+    if (evt.escalation_triggered) {
+      sendTelegramMessage(
+        `⚠️ **System Alert**: ${evt.scenario}\nAgent: ${evt.agentId}\n${evt.message || "No additional details."}`
+      ).catch(() => {});
+    }
+  }
+
+  private handleRecoveryAbort(agentId: string): void {
+    logger.error({ agentId }, "recovery:agent_aborted");
+    sendTelegramMessage(
+      `🛑 **Agent Aborted**: ${agentId} has been stopped after recovery exhaustion.`
+    ).catch(() => {});
+  }
+
+  // ── Policy Engine Integration ──────────────────────────────────────
+
+  private async evaluatePolicies(agentId: string): Promise<void> {
+    try {
+      const board = await this.kanban.getBoard(agentId);
+      const messaging = await getMessagingSystem();
+      const inbox = await messaging.getActiveContext(agentId);
+      const session = this.runtime.getContextManager().getSession(
+        this.sessionMap.get(agentId) || ""
+      );
+
+      const ctx: LaneContext = {
+        agentId,
+        agentStatus: "active",
+        cardCount: board ? board.columns.reduce((sum: number, col: any) => sum + col.cards.length, 0) : 0,
+        oldestCardHours: 0, // Would need card-level tracking
+        memoryCount: 0, // Would need memory query
+        unreadMessages: inbox?.unread_count || 0,
+        consecutiveFailures: this.consecutiveFailures.get(agentId) || 0,
+        sessionTokenCount: session?.totalTokens || 0,
+      };
+
+      const actions = this.policyEngine.evaluate(ctx);
+      for (const action of actions) {
+        switch (action.type) {
+          case "escalate":
+            logger.warn({ agentId, reason: (action as any).reason }, "policy:escalation");
+            break;
+          case "notify":
+            logger.info({ agentId, channel: (action as any).channel }, "policy:notification");
+            break;
+          case "compact":
+            const sessionId = this.sessionMap.get(agentId);
+            if (sessionId) {
+              this.runtime.compactSession(sessionId);
+              logger.info({ agentId }, "policy:session_compacted");
+            }
+            break;
+          case "abort":
+            logger.error({ agentId }, "policy:agent_abort");
+            break;
+        }
+      }
+    } catch {
+      // Policy evaluation is non-critical — log and continue
+    }
+  }
+
+  // ── Instruction File Discovery ─────────────────────────────────────
+
+  private async discoverAndCacheInstructionFiles(agentId: string): Promise<string> {
+    const cached = this.instructionFilesCache.get(agentId);
+    if (cached !== undefined) return cached;
+
+    try {
+      const files = await discoverInstructionFiles(process.cwd());
+      const formatted = formatInstructionFiles(files);
+      this.instructionFilesCache.set(agentId, formatted);
+      return formatted;
+    } catch {
+      this.instructionFilesCache.set(agentId, "");
+      return "";
+    }
+  }
+
+  // ── Hook System Setup ──────────────────────────────────────────────
+
+  private setupDefaultHooks(): void {
+    const hooks = getHookRegistry();
+
+    // Pre-hook: log all tool calls for audit trail
+    hooks.register("pre_tool_use", "audit-log", async (ctx) => {
+      logger.info({ agentId: ctx.agentId, tool: ctx.toolName }, "hook:pre_tool_use");
+      return {};
+    });
+
+    // Post-hook: capture tool result metrics
+    hooks.register("post_tool_use", "result-metrics", async (ctx) => {
+      const outputLength = ctx.output?.length || 0;
+      logger.debug({ tool: ctx.toolName, outputLength }, "hook:post_tool_use:metrics");
+      return {};
+    });
+
+    // Failure hook: log and attempt auto-recovery for tool failures
+    hooks.register("post_tool_use_failure", "auto-recovery", async (ctx) => {
+      logger.warn({ tool: ctx.toolName, agentId: ctx.agentId }, "hook:tool_failure_recovery");
+
+      if (ctx.toolName.includes("memory")) {
+        const event = await attemptRecovery(FailureScenario.MemoryStoreFailure, {
+          agentId: ctx.agentId || "",
+          error: new Error(ctx.output || "Unknown memory error"),
+        });
+        if (event.success) return { feedback: "Memory store recovered automatically." };
+      }
+
+      if (ctx.toolName.includes("message") || ctx.toolName.includes("agent")) {
+        const event = await attemptRecovery(FailureScenario.MessageDeliveryFailure, {
+          agentId: ctx.agentId || "",
+          error: new Error(ctx.output || "Unknown message delivery error"),
+        });
+        if (event.success) return { feedback: "Message delivery recovered automatically." };
+      }
+
+      return { feedback: `Tool ${ctx.toolName} failed. Review logs for details.` };
+    });
+  }
+
+  // ── Utility ────────────────────────────────────────────────────────
+
+  getRecoveryRegistry(): RecoveryRegistry { return this.recovery; }
+  getPolicyEngine(): PolicyEngine { return this.policyEngine; }
 }
 
 // Helper

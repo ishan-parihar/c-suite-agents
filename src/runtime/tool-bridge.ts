@@ -4,10 +4,13 @@
 import { z } from "zod";
 import { logger } from "../logger.js";
 
+export type PermissionTier = "read" | "write" | "danger";
+
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: Record<string, unknown>; // JSON Schema
+  permissionTier?: PermissionTier;
 }
 
 export interface ToolResult {
@@ -38,6 +41,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "query"],
       },
+      permissionTier: "read",
     },
     "memory.recall": {
       name: "memory.recall",
@@ -51,6 +55,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "query"],
       },
+      permissionTier: "read",
     },
     "memory.upsert": {
       name: "memory.upsert",
@@ -68,6 +73,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "type", "content"],
       },
+      permissionTier: "write",
     },
     "memory.forget": {
       name: "memory.forget",
@@ -82,6 +88,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["scope"],
       },
+      permissionTier: "write",
     },
     "memory.consolidate": {
       name: "memory.consolidate",
@@ -95,11 +102,13 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "scope", "tag"],
       },
+      permissionTier: "write",
     },
     "memory.stats": {
       name: "memory.stats",
       description: "Show memory statistics — total entries per scope, per-agent breakdown.",
       parameters: { type: "object", properties: {} },
+      permissionTier: "read",
     },
 
     // Kanban tools
@@ -113,6 +122,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id"],
       },
+      permissionTier: "read",
     },
     "board.addCard": {
       name: "board.addCard",
@@ -129,6 +139,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "title"],
       },
+      permissionTier: "write",
     },
     "board.moveCard": {
       name: "board.moveCard",
@@ -141,6 +152,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["card_id", "status"],
       },
+      permissionTier: "write",
     },
     "board.viewReports": {
       name: "board.viewReports",
@@ -152,6 +164,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["manager_id"],
       },
+      permissionTier: "read",
     },
     "board.reassign": {
       name: "board.reassign",
@@ -166,6 +179,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["card_id", "from_agent_id", "to_agent_id", "manager_id"],
       },
+      permissionTier: "write",
     },
     "board.escalate": {
       name: "board.escalate",
@@ -179,6 +193,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["card_id", "to_manager_id", "reason"],
       },
+      permissionTier: "write",
     },
 
     // Messaging tools
@@ -198,6 +213,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["from", "to", "content"],
       },
+      permissionTier: "write",
     },
     "message.reply": {
       name: "message.reply",
@@ -213,6 +229,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["thread_id", "from", "content"],
       },
+      permissionTier: "write",
     },
     "message.getThread": {
       name: "message.getThread",
@@ -224,6 +241,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["thread_id"],
       },
+      permissionTier: "read",
     },
     "message.getThreads": {
       name: "message.getThreads",
@@ -236,6 +254,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id"],
       },
+      permissionTier: "read",
     },
     "message.search": {
       name: "message.search",
@@ -251,6 +270,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "query"],
       },
+      permissionTier: "read",
     },
     "message.markRead": {
       name: "message.markRead",
@@ -263,6 +283,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id"],
       },
+      permissionTier: "read",
     },
     "message.escalate": {
       name: "message.escalate",
@@ -277,6 +298,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["thread_id", "from", "to", "reason"],
       },
+      permissionTier: "write",
     },
     "message.getUnread": {
       name: "message.getUnread",
@@ -289,6 +311,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id"],
       },
+      permissionTier: "read",
     },
     "agent.inbox": {
       name: "agent.inbox",
@@ -301,6 +324,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id"],
       },
+      permissionTier: "read",
     },
 
     // Agent management
@@ -318,6 +342,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["name"],
       },
+      permissionTier: "write",
     },
     "agent.spawn": {
       name: "agent.spawn",
@@ -332,11 +357,13 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "task"],
       },
+      permissionTier: "write",
     },
     "agent.list": {
       name: "agent.list",
       description: "List all active agents",
       parameters: { type: "object", properties: {} },
+      permissionTier: "read",
     },
 
     // Agent communication
@@ -354,6 +381,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["from_agent", "to_agent", "message"],
       },
+      permissionTier: "write",
     },
     "agent.handoff": {
       name: "agent.handoff",
@@ -368,6 +396,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["from_agent", "to_agent", "context"],
       },
+      permissionTier: "write",
     },
     "agent.meeting": {
       name: "agent.meeting",
@@ -382,6 +411,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["from_agent", "participants", "topic"],
       },
+      permissionTier: "write",
     },
     "agent.wake": {
       name: "agent.wake",
@@ -393,6 +423,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id"],
       },
+      permissionTier: "read",
     },
 
     // Organization tools
@@ -400,11 +431,13 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       name: "org.chart",
       description: "Show organization chart",
       parameters: { type: "object", properties: {} },
+      permissionTier: "read",
     },
     "staff.list": {
       name: "staff.list",
       description: "List core staff",
       parameters: { type: "object", properties: {} },
+      permissionTier: "read",
     },
     "staff.get": {
       name: "staff.get",
@@ -416,6 +449,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["id"],
       },
+      permissionTier: "read",
     },
 
     // Meeting governance
@@ -432,6 +466,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["proposer", "title", "reason"],
       },
+      permissionTier: "write",
     },
     "meeting.vote": {
       name: "meeting.vote",
@@ -445,6 +480,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["meeting_id", "voter", "vote"],
       },
+      permissionTier: "write",
     },
     "meeting.get": {
       name: "meeting.get",
@@ -456,6 +492,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["meeting_id"],
       },
+      permissionTier: "read",
     },
     "meeting.recordMinutes": {
       name: "meeting.recordMinutes",
@@ -482,6 +519,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["meeting_id", "decisions", "action_items", "attendees", "recorded_by"],
       },
+      permissionTier: "write",
     },
 
     // Hiring & delegation
@@ -498,6 +536,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["role", "reports_to", "tasks"],
       },
+      permissionTier: "write",
     },
     "hire.fire": {
       name: "hire.fire",
@@ -510,6 +549,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "reason"],
       },
+      permissionTier: "write",
     },
     "hire.getTeam": {
       name: "hire.getTeam",
@@ -521,6 +561,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["manager_id"],
       },
+      permissionTier: "read",
     },
     "delegate.to": {
       name: "delegate.to",
@@ -537,6 +578,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["from", "to", "task", "description"],
       },
+      permissionTier: "write",
     },
     "delegate.accept": {
       name: "delegate.accept",
@@ -548,6 +590,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["delegation_id"],
       },
+      permissionTier: "write",
     },
     "delegate.reject": {
       name: "delegate.reject",
@@ -560,6 +603,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["delegation_id", "reason"],
       },
+      permissionTier: "write",
     },
     "delegate.update": {
       name: "delegate.update",
@@ -572,6 +616,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["delegation_id", "status"],
       },
+      permissionTier: "write",
     },
     "delegate.get": {
       name: "delegate.get",
@@ -583,6 +628,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["delegation_id"],
       },
+      permissionTier: "read",
     },
 
     // Reports
@@ -611,6 +657,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id", "period", "summary"],
       },
+      permissionTier: "write",
     },
     "reports.getLatest": {
       name: "reports.getLatest",
@@ -623,6 +670,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["agent_id"],
       },
+      permissionTier: "read",
     },
 
     // Notifications (CEO only)
@@ -637,6 +685,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["text"],
       },
+      permissionTier: "write",
     },
 
     // Heartbeat
@@ -644,6 +693,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       name: "heartbeat.runNow",
       description: "Trigger audit",
       parameters: { type: "object", properties: {} },
+      permissionTier: "read",
     },
 
     // Task
@@ -657,6 +707,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         },
         required: ["card_id"],
       },
+      permissionTier: "read",
     },
   };
 
@@ -664,6 +715,32 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
   return toolNames
     .map(name => allTools[name])
     .filter(Boolean) as ToolDefinition[];
+}
+
+/**
+ * Get all tool definitions without filtering.
+ * Used by tool-search for discovery.
+ */
+export function getAllToolDefinitions(): ToolDefinition[] {
+  return buildToolDefinitions([
+    "memory.search", "memory.recall", "memory.upsert", "memory.forget",
+    "memory.consolidate", "memory.stats",
+    "board.get", "board.addCard", "board.moveCard", "board.viewReports",
+    "board.reassign", "board.escalate",
+    "message.send", "message.reply", "message.getThread", "message.getThreads",
+    "message.search", "message.markRead", "message.escalate", "message.getUnread",
+    "agent.inbox",
+    "agent.create", "agent.spawn", "agent.list",
+    "agent.call", "agent.handoff", "agent.meeting", "agent.wake",
+    "org.chart", "staff.list", "staff.get",
+    "meeting.propose", "meeting.vote", "meeting.get", "meeting.recordMinutes",
+    "hire.create", "hire.fire", "hire.getTeam",
+    "delegate.to", "delegate.accept", "delegate.reject", "delegate.update", "delegate.get",
+    "reports.save", "reports.getLatest",
+    "notify.telegram",
+    "heartbeat.runNow",
+    "task.get",
+  ]);
 }
 
 /**

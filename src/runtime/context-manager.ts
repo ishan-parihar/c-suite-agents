@@ -63,6 +63,12 @@ export interface ToolCall {
   compacted?: boolean;
 }
 
+export interface ForkInfo {
+  parentSessionId: string;
+  branchName?: string;
+  forkedAt: number;
+}
+
 export interface AgentSession {
   agentId: string;
   sessionId: string;
@@ -74,8 +80,9 @@ export interface AgentSession {
   createdAt: number;
   lastUsed: number;
   compactionCount: number;
-  previousSummary?: string; // carried forward for progressive summarization
-  hasRealConversation: boolean; // tracks if session has substantive content
+  previousSummary?: string;
+  hasRealConversation: boolean;
+  fork?: ForkInfo;
 }
 
 export interface ContextManagerConfig {
@@ -680,6 +687,50 @@ export class ContextManager {
   deleteSession(sessionId: string): void {
     this.sessions.delete(sessionId);
     logger.info({ sessionId }, "Session deleted");
+  }
+
+  forkSession(sessionId: string, branchName?: string): string {
+    const parent = this.sessions.get(sessionId);
+    if (!parent) throw new Error(`Session not found: ${sessionId}`);
+
+    const newSessionId = crypto.randomUUID();
+    const forkedAt = Date.now();
+
+    const forkedMessages: ChatMessage[] = parent.messages.map((m) => ({ ...m }));
+    const forkedToolCalls: ToolCall[] = parent.toolCalls.map((tc) => ({ ...tc }));
+
+    const session: AgentSession = {
+      agentId: parent.agentId,
+      sessionId: newSessionId,
+      messages: forkedMessages,
+      toolCalls: forkedToolCalls,
+      systemPrompt: parent.systemPrompt,
+      systemPromptTokens: parent.systemPromptTokens,
+      totalTokens: parent.totalTokens,
+      createdAt: forkedAt,
+      lastUsed: forkedAt,
+      compactionCount: parent.compactionCount,
+      previousSummary: parent.previousSummary,
+      hasRealConversation: parent.hasRealConversation,
+      fork: {
+        parentSessionId: sessionId,
+        branchName,
+        forkedAt,
+      },
+    };
+
+    this.sessions.set(newSessionId, session);
+    logger.info(
+      { newSessionId, parentSessionId: sessionId, branchName, messages: forkedMessages.length },
+      "Session forked",
+    );
+    this.evictOldestIfNecessary(newSessionId);
+    return newSessionId;
+  }
+
+  getSessionFork(sessionId: string): ForkInfo | undefined {
+    const session = this.sessions.get(sessionId);
+    return session?.fork;
   }
 
   // ── LRU Eviction ─────────────────────────────────────────────────
