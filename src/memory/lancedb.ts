@@ -1,9 +1,8 @@
 import { connect, type Table } from "@lancedb/lancedb";
-import ollama from "ollama";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
-import { cfg } from "../config.js";
 import { validateAgentIdentity } from "../auth/session.js";
+import { getEmbeddingService } from "./embeddings.js";
 
 export type MemoryEvent = {
   id?: string;
@@ -28,10 +27,8 @@ export class Memory {
     try {
       events = await db.openTable("events");
     } catch {
-      // If the events table does not exist, initialize it with a seed record
-      const model = cfg.ollamaEmbedModel;
-      const emb = await ollama.embed({ model, input: "init" });
-      const vector = emb.embeddings[0] as number[];
+      const embedder = getEmbeddingService();
+      const vector = await embedder.embed("init");
       events = await db.createTable("events", [
         {
           id: uuidv4(),
@@ -61,9 +58,8 @@ export class Memory {
   async upsertEvent(e: MemoryEvent): Promise<string> {
     const id = e.id || uuidv4();
     const ts = e.ts || new Date().toISOString();
-    const model = cfg.ollamaEmbedModel;
-    const emb = await ollama.embed({ model, input: e.content });
-    const vector = emb.embeddings[0] as number[];
+    const embedder = getEmbeddingService();
+    const vector = await embedder.embed(e.content);
     await this.events!.add([{ ...e, id, ts, vector }]);
     logger.debug({ id }, "memory.upsert");
     return id;
@@ -71,9 +67,8 @@ export class Memory {
 
   async search(agentId: string, query: string, topK = 5, _filter?: Record<string, any>) {
     await this.ensureAgent(agentId);
-    const model = cfg.ollamaEmbedModel;
-    const emb = await ollama.embed({ model, input: query });
-    const vector = emb.embeddings[0] as number[];
+    const embedder = getEmbeddingService();
+    const vector = await embedder.embed(query);
     const rows = await this.events!
       .search(vector)
       .limit(topK)
