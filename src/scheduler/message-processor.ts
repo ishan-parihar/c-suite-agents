@@ -3,7 +3,7 @@
 import { logger } from "../logger.js";
 import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
-import { getOpenCodeClient } from "../acp/opencode-client.js";
+import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
 import { AgentContextManager } from "../organic/context.js";
 import { Kanban } from "../kanban/sqlite.js";
 import { Memory } from "../memory/lancedb.js";
@@ -65,7 +65,6 @@ export class MessageProcessor {
     if (!this.running) return;
 
     const messaging = await getMessagingSystem();
-    const acp = getOpenCodeClient();
     const contextManager = new AgentContextManager(this.kanban, this.memory);
 
     for (const agentId of getCoreStaffIds()) {
@@ -102,12 +101,7 @@ export class MessageProcessor {
 
     const sessionRegistry = getSessionRegistry();
     let sessionId = await sessionRegistry.getOrCreate(agentId, {});
-    const acp = getOpenCodeClient();
-
-    if (!(await acp.verifySession(sessionId))) {
-      await sessionRegistry.invalidate(agentId);
-      sessionId = await sessionRegistry.getOrCreate(agentId, {});
-    }
+    const runtime = getNativeRuntime();
 
     // Process each valid pending response
     for (const msg of validResponses) {
@@ -123,7 +117,7 @@ export class MessageProcessor {
 
         const delta = this.buildAgentResponseDelta(msg, wakeCtx, recallText);
         const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
-        const result = await acp.sendMessage(sessionId, delta, undefined, { agent: nativeAgentId });
+        const result = await runtime.sendMessage(sessionId, delta, nativeAgentId);
         await sessionRegistry.touch(sessionId);
 
         // Send reply via messaging system

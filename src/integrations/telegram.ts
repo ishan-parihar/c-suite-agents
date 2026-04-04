@@ -6,8 +6,7 @@ import type { StrategosRuntime } from "../types.js";
 import { getOrgChart, getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { AgentContextManager } from "../organic/context.js";
-import { getReportsAndSessions } from "../mcp/tools-reports.js";
-import { getOpenCodeClient } from "../acp/opencode-client.js";
+import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
 import { autoStore, autoRecall } from "../memory/auto.js";
 import { getMemoryFacade } from "../memory/index.js";
 import { getSessionRegistry } from "../scheduler/session-registry.js";
@@ -278,7 +277,7 @@ async function sendTelegramHtmlChunks(
   }
 }
 
-// Maps internal agent IDs to native OpenCode agent file names
+// Maps internal agent IDs to native runtime agent identifiers
 const AGENT_ID_MAP: Record<string, string> = {
   "ceo-strategic": "ceo-strategic",
   "coo-productivity": "coo-productivity",
@@ -305,7 +304,6 @@ export async function startTelegram(rt: StrategosRuntime) {
     const bot = new Telegraf(cfg.telegramToken);
     const registry: AgentRegistry = { agents: new Map(), cards: new Map() };
     const contextManager = new AgentContextManager(rt.ctx.kanban, rt.ctx.memory);
-    const rs = await getReportsAndSessions();
     
     logger.info({ chatId: cfg.telegramChatId }, "Telegram starting...");
 
@@ -315,11 +313,6 @@ export async function startTelegram(rt: StrategosRuntime) {
     type ChatRoute = { participants: string[]; mode: "single"|"meeting"|"threaded"; lastActive: number; timeoutMs: number };
     const chatRoutes = new Map<string, ChatRoute>();
     const defaultTimeoutMs = parseInt(process.env.TG_ROUTE_TIMEOUT_MS || "1800000", 10); // 30 minutes
-
-    // Start OpenCode client
-    const acp = getOpenCodeClient();
-    await acp.start(process.cwd());
-    logger.info("OpenCode client started");
 
     const getRoute = (chatId: string): ChatRoute => {
       const r = chatRoutes.get(chatId);
@@ -587,15 +580,15 @@ Just talk naturally! Examples:
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
       await ctx.sendChatAction("typing");
       try {
-        const acp = getOpenCodeClient();
-        const connected = acp.isConnected();
-        await ctx.reply(fmt`${bold("✅ Strategos System Status")}\n\n• MCP Server: Running\n• Core Staff: 7 agents\n• Memory: Active\n• Telegram: Online\n• OpenCode Client: ${connected ? "Connected" : "Disconnected"}`);
+        const runtime = getNativeRuntime();
+        const sessions = runtime.listSessions();
+        await ctx.reply(fmt`${bold("✅ Strategos System Status")}\n\n• MCP Server: Running\n• Core Staff: 7 agents\n• Memory: Active\n• Telegram: Online\n• Native Runtime: Healthy (${sessions.length} session(s) active)`);
       } catch (err: any) {
         await ctx.reply(fmt`${bold("❌ Error:")} ${err.message}`);
       }
     });
 
-    // /session command - manage ACP sessions
+    // /session command - manage sessions
     bot.command("session", async (ctx) => {
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
       const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
@@ -603,21 +596,15 @@ Just talk naturally! Examples:
       
       if (args.length === 0) {
         // Show current sessions
-        const rs = await getReportsAndSessions();
-        const allSessions: any[] = [];
-        for (const agentId of getCoreStaffIds()) {
-          const sessionId = await rs.getOcSession(chatId, agentId);
-          if (sessionId) {
-            allSessions.push({ agent: agentId, session: sessionId });
-          }
-        }
+        const sessions = await sessionRegistry.list();
+        const chatSessions = sessions.filter(s => s.chat_id === chatId);
         
-        if (allSessions.length === 0) {
+        if (chatSessions.length === 0) {
           await ctx.reply("📭 No active sessions. Send a message to create one.");
           return;
         }
         
-        const lines = allSessions.map(s => `• **${s.agent}**: \`${s.session}\``);
+        const lines = chatSessions.map(s => `• **${s.agent_id}**: \`${s.session_id}\` (${s.message_count} msgs)`);
         await ctx.reply(fmt`${bold("📊 Active Sessions:")}\n\n${join(lines, "\n")}`);
         return;
       }
@@ -629,7 +616,6 @@ Just talk naturally! Examples:
           return;
         }
         
-        const sessionRegistry = getSessionRegistry();
         await sessionRegistry.invalidate(agentId, chatId);
         
         await ctx.reply(fmt`${bold("✅ Session cleared for")} **${agentId}**\n\n⚠️ LanceDB memory embeddings are preserved. Only conversation context was reset.`);
@@ -640,7 +626,7 @@ Just talk naturally! Examples:
       await ctx.reply("Usage: `/session` — List sessions\n`/session reset [agent]` — Clear session (memory preserved)");
     });
 
-    // Natural language messages - route to OpenCode ACP via stdio
+    // Natural language messages - route to native runtime
     bot.on("message", async (ctx) => {
       const chatId = ctx.chat.id.toString();
       const text = (ctx.message as any)?.text;
@@ -658,8 +644,7 @@ Just talk naturally! Examples:
           setRoute(chatId, route);
         }
 
-        const rs = await getReportsAndSessions();
-        const acp = getOpenCodeClient();
+        const runtime = getNativeRuntime();
 
         // Keep typing indicator active during processing
         const typingInterval = setInterval(() => {
@@ -680,16 +665,9 @@ Just talk naturally! Examples:
             }
 
             // Get persistent session via registry
-            const acpSessionId = await sessionRegistry.getOrCreate(agentId, { chatId });
+            let acpSessionId = await sessionRegistry.getOrCreate(agentId, { chatId });
 
-            // Verify session is healthy in OpenCode
-            if (!(await acp.verifySession(acpSessionId))) {
-              await sessionRegistry.invalidate(agentId, chatId);
-              const newSessionId = await sessionRegistry.getOrCreate(agentId, { chatId });
-              logger.info({ oldSession: acpSessionId, newSession: newSessionId, agentId }, "Session healed");
-            }
-
-            // Build delta only — no system prompt (loaded natively by OpenCode agent)
+            // Build delta
             const memoryFacade = await getMemoryFacade();
 
             // AUTO RECALL: Fetch relevant memories before responding
@@ -718,12 +696,12 @@ Just talk naturally! Examples:
             const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
             let reply = "(no reply)";
             try {
-              logger.info({ agentId, nativeAgentId, sessionId: acpSessionId }, "Sending delta to OpenCode...");
-              const result = await acp.sendMessage(acpSessionId, delta, process.cwd(), { agent: nativeAgentId });
-              logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "OpenCode response received");
+              logger.info({ agentId, nativeAgentId, sessionId: acpSessionId }, "Sending delta to native runtime...");
+              const result = await runtime.sendMessage(acpSessionId, delta, nativeAgentId);
+              logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
               reply = result.text || "(empty response)";
             } catch (err: any) {
-              logger.error({ agentId, err: err.message }, "OpenCode message failed");
+              logger.error({ agentId, err: err.message }, "Native runtime message failed");
               reply = `(error contacting agent: ${err.message})`;
             }
 
@@ -739,14 +717,6 @@ Just talk naturally! Examples:
             });
 
             await sessionRegistry.touch(acpSessionId);
-
-            // Log session per agent
-            try {
-              const dbSession = await rs.createSession(agentId, chatId);
-              await rs.logStep({ session_id: dbSession.id, step_num: 1, step_type: "final", obs_summary: reply.slice(0, 500) });
-            } catch (e) {
-              logger.warn({ err: e }, "Failed to log session step");
-            }
 
             const prefix = getStaffById(agentId)?.avatar ? `${getStaffById(agentId)?.avatar} ${getStaffById(agentId)?.name}` : agentId;
             return `${prefix}:\n${reply}`;

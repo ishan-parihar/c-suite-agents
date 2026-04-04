@@ -52,6 +52,15 @@ export class MeetingGovernance {
     return this.messaging;
   }
 
+  private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const results: Record<string, unknown>[] = [];
+    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+    stmt.free();
+    return results;
+  }
+
   private async initDB() {
     if (this.db) return;
     const messaging = await this.getMessaging();
@@ -120,7 +129,7 @@ export class MeetingGovernance {
   private async loadProposals() {
     if (!this.db) return;
 
-    const rows = this.db.prepare("SELECT * FROM meeting_proposals WHERE status NOT IN ('completed', 'cancelled', 'rejected')").all() as Record<string, unknown>[];
+    const rows = this.queryAll("SELECT * FROM meeting_proposals WHERE status NOT IN ('completed', 'cancelled', 'rejected')") as Record<string, unknown>[];
     if (!rows.length) return;
 
     for (const row of rows) {
@@ -166,7 +175,7 @@ export class MeetingGovernance {
 
   private async loadMinutes() {
     if (!this.db) return;
-    const rows = this.db.prepare("SELECT * FROM meeting_minutes").all() as Record<string, unknown>[];
+    const rows = this.queryAll("SELECT * FROM meeting_minutes") as Record<string, unknown>[];
     if (!rows.length) return;
     for (const row of rows) {
       const minutes: MeetingMinutes = {

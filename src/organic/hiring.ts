@@ -57,6 +57,15 @@ export class HiringSystem {
     return this.messaging;
   }
 
+  private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const results: Record<string, unknown>[] = [];
+    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+    stmt.free();
+    return results;
+  }
+
   static async init(dbPath: string = process.env.HIRING_DB || "hiring.db"): Promise<HiringSystem> {
     const resolved = resolve(dbPath);
     if (!resolved.endsWith(".db") && !resolved.endsWith(".sqlite")) {
@@ -118,7 +127,7 @@ export class HiringSystem {
   }
 
   private async loadFromDB() {
-    const contractRows = this.db.prepare("SELECT * FROM contracts").all() as Record<string, unknown>[];
+    const contractRows = this.queryAll("SELECT * FROM contracts") as Record<string, unknown>[];
     for (const row of contractRows) {
       const contract: EmploymentContract = {
         id: row.id as string,
@@ -135,7 +144,7 @@ export class HiringSystem {
       this.contracts.set(contract.agent_id, contract);
     }
 
-    const delegationRows = this.db.prepare("SELECT * FROM delegations").all() as Record<string, unknown>[];
+    const delegationRows = this.queryAll("SELECT * FROM delegations") as Record<string, unknown>[];
     for (const row of delegationRows) {
       const delegation: Delegation = {
         id: row.id as string,

@@ -124,6 +124,15 @@ export class ReportsAndSessions {
     await fs.rename(tmpPath, this.path);
   }
 
+  private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const results: Record<string, unknown>[] = [];
+    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+    stmt.free();
+    return results;
+  }
+
   async close(): Promise<void> {
     await this.persist();
   }
@@ -142,7 +151,7 @@ export class ReportsAndSessions {
   }
 
   async getLatestReports(agent_id: string, limit = 5): Promise<Report[]> {
-    const rows = this.db.prepare("SELECT * FROM reports WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?").all([agent_id, limit]);
+    const rows = this.queryAll("SELECT * FROM reports WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?", [agent_id, limit]);
     return rows.map((row: any) => ({
       id: row.id, agent_id: row.agent_id, period: row.period, summary: row.summary,
       metrics: safeJsonParse(row.metrics, {}), actions: safeJsonParse(row.actions, []), created_at: row.created_at
@@ -196,7 +205,7 @@ export class ReportsAndSessions {
   }
 
   async getSessionSteps(session_id: string, limit = 10): Promise<SessionStep[]> {
-    const rows = this.db.prepare("SELECT * FROM session_steps WHERE session_id = ? ORDER BY step_num DESC LIMIT ?").all([session_id, limit]);
+    const rows = this.queryAll("SELECT * FROM session_steps WHERE session_id = ? ORDER BY step_num DESC LIMIT ?", [session_id, limit]);
     return rows.map((row: any) => ({
       id: row.id, session_id: row.session_id, step_num: row.step_num, step_type: row.step_type,
       tool: row.tool, args_hash: row.args_hash, obs_summary: row.obs_summary, ts: row.ts

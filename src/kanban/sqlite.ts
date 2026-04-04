@@ -117,6 +117,16 @@ export class Kanban {
     await this.persist();
   }
 
+  /** sql.js has no .all() — iterate with .step() to collect all rows. */
+  private queryAll(sql: string, params?: unknown[]): unknown[][] {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const results: unknown[][] = [];
+    while (stmt.step()) results.push(stmt.get() as unknown[]);
+    stmt.free();
+    return results;
+  }
+
   async ensureBoard(agentId: string, name: string) {
     await validateAgentIdentity(agentId);
     const boardRow = this.db.prepare("SELECT id FROM boards WHERE agent_id=?").get([agentId]) as { id: string } | undefined;
@@ -182,7 +192,7 @@ export class Kanban {
     if (!boardRow) return null;
 
     const boardId = boardRow.id;
-    const columns = this.db.prepare("SELECT id, name FROM columns WHERE board_id=? ORDER BY ord").all([boardId]) as Array<{ id: string; name: string }>;
+    const columnRows = this.queryAll("SELECT id, name FROM columns WHERE board_id=? ORDER BY ord", [boardId]) as unknown[][];
 
     const board: KanbanBoard = {
       id: boardId,
@@ -191,11 +201,11 @@ export class Kanban {
       columns: []
     };
 
-    for (const col of columns) {
-      const colId = col.id;
-      const colName = col.name;
+    for (const colRow of columnRows) {
+      const colId = (colRow as unknown[])[0] as string;
+      const colName = (colRow as unknown[])[1] as string;
 
-      const rows = this.db.prepare(`SELECT ${CARD_COLUMNS} FROM cards WHERE column_id=?`).all([colId]) as unknown[][];
+      const rows = this.queryAll(`SELECT ${CARD_COLUMNS} FROM cards WHERE column_id=?`, [colId]);
 
       board.columns.push({
         id: colId,
@@ -224,8 +234,8 @@ export class Kanban {
 
   /** Column names for a board, ordered. */
   private getColumnNames(boardId: string): string[] {
-    const rows = this.db.prepare("SELECT name FROM columns WHERE board_id=? ORDER BY ord").all([boardId]) as Array<{ name: string }>;
-    return rows.map(r => r.name);
+    const rows = this.queryAll("SELECT name FROM columns WHERE board_id=? ORDER BY ord", [boardId]);
+    return rows.map(r => (r as unknown[])[0] as string);
   }
 
   async reassignCard(cardId: string, fromAgentId: string, toAgentId: string, managerId: string): Promise<void> {
@@ -318,7 +328,7 @@ export class Kanban {
   }
 
   listAgents(): string[] {
-    const rows = this.db.prepare("SELECT DISTINCT agent_id FROM boards").all() as { agent_id: string }[];
-    return rows.map(r => r.agent_id);
+    const rows = this.queryAll("SELECT DISTINCT agent_id FROM boards");
+    return rows.map(r => (r as unknown[])[0] as string);
   }
 }
