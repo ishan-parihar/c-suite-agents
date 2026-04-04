@@ -665,19 +665,40 @@ Just talk naturally! Examples:
             }
 
             // Get persistent session via registry
-            let acpSessionId = await sessionRegistry.getOrCreate(agentId, { chatId });
+            try {
+              await sessionRegistry.getOrCreate(agentId, { chatId });
+            } catch (e: any) {
+              logger.warn({ agentId, err: e.message }, "sessionRegistry.getOrCreate failed");
+            }
 
             // Build delta
-            const memoryFacade = await getMemoryFacade();
+            let memoryFacade: any;
+            try {
+              memoryFacade = await getMemoryFacade();
+            } catch (e: any) {
+              logger.warn({ agentId, err: e.message }, "MemoryFacade unavailable");
+            }
 
             // AUTO RECALL: Fetch relevant memories before responding
-            const recallText = await autoRecall({
-              agentId,
-              queryText: text,
-              trigger: "user_message",
-            });
+            let recallText = "";
+            try {
+              recallText = await autoRecall({
+                agentId,
+                queryText: text,
+                trigger: "user_message",
+              });
+            } catch (e: any) {
+              logger.warn({ agentId, err: e.message }, "autoRecall failed");
+            }
 
-            const memoryInjection = await memoryFacade.injectForTask(agentId, text);
+            let memoryInjection = "";
+            if (memoryFacade) {
+              try {
+                memoryInjection = await memoryFacade.injectForTask(agentId, text);
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "memory inject failed");
+              }
+            }
 
             const delta = [
               recallText,
@@ -696,8 +717,9 @@ Just talk naturally! Examples:
             const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
             let reply = "(no reply)";
             try {
-              logger.info({ agentId, nativeAgentId, sessionId: acpSessionId }, "Sending delta to native runtime...");
-              const result = await runtime.sendMessage(acpSessionId, delta, nativeAgentId);
+              const runtimeSessionId = runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+              logger.info({ agentId, nativeAgentId, sessionId: runtimeSessionId }, "Sending delta to native runtime...");
+              const result = await runtime.sendMessage(runtimeSessionId, delta, nativeAgentId);
               logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
               reply = result.text || "(empty response)";
             } catch (err: any) {
@@ -706,17 +728,25 @@ Just talk naturally! Examples:
             }
 
             // AUTO STORE: Save the conversation turn
-            await autoStore({
-              agentId,
-              inputText: text,
-              outputText: reply,
-              trigger: "user_message",
-              context: {
-                threadId: chatId,
-              },
-            });
+            try {
+              await autoStore({
+                agentId,
+                inputText: text,
+                outputText: reply,
+                trigger: "user_message",
+                context: {
+                  threadId: chatId,
+                },
+              });
+            } catch (e: any) {
+              logger.warn({ agentId, err: e.message }, "autoStore failed");
+            }
 
-            await sessionRegistry.touch(acpSessionId);
+            try {
+              await sessionRegistry.touch(runtimeSessionId);
+            } catch (e: any) {
+              logger.warn({ agentId, err: e.message }, "session touch failed");
+            }
 
             const prefix = getStaffById(agentId)?.avatar ? `${getStaffById(agentId)?.avatar} ${getStaffById(agentId)?.name}` : agentId;
             return `${prefix}:\n${reply}`;
@@ -729,6 +759,10 @@ Just talk naturally! Examples:
           const failed = replies.filter(r => r.status === "rejected");
 
           if (failed.length > 0) {
+            for (const f of failed) {
+              const err = (f as PromiseRejectedResult).reason;
+              logger.error({ err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined }, "Agent response rejected");
+            }
             logger.warn({ failed: failed.length, total: replies.length }, "Partial agent response failure");
           }
           if (successful.length === 0) {
