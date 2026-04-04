@@ -14,6 +14,7 @@ const McpLocalServerSchema = z.object({
   command: z.array(z.string()).min(1),
   env: z.record(z.string(), z.string()).optional(),
   enabled: z.boolean().optional().default(true),
+  timeoutMs: z.number().int().positive().optional(),
 }).strict();
 
 /** MCP server: remote HTTP/SSE endpoint */
