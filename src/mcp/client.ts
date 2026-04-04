@@ -24,6 +24,7 @@ interface McpLocalConfig {
   command: string[];
   env?: Record<string, string>;
   enabled?: boolean;
+  timeoutMs?: number;
 }
 
 interface McpRemoteConfig {
@@ -36,6 +37,7 @@ interface McpRemoteConfig {
 type McpServerConfig = McpLocalConfig | McpRemoteConfig;
 
 const CONNECTION_TIMEOUT_MS = 10_000;
+const SLOW_START_TIMEOUT_MS = 30_000; // For Rust/binary MCP servers that need time to initialize
 const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000; // 5 minutes cap
 const INITIAL_RECONNECT_DELAY_MS = 2000; // 2 seconds
 
@@ -86,6 +88,7 @@ async function connectLocal(
     command: cmd,
     args,
     env: { ...process.env, ...config.env } as Record<string, string>,
+    stderr: "pipe",
   });
 
   const client = new Client(
@@ -94,7 +97,8 @@ async function connectLocal(
   );
 
   try {
-    await connectWithTimeout(client, transport, CONNECTION_TIMEOUT_MS);
+    const timeout = config.timeoutMs ?? CONNECTION_TIMEOUT_MS;
+    await connectWithTimeout(client, transport, timeout);
     const listedTools = await listAllTools(client);
 
     const tools: McpCatalogTool[] = listedTools
