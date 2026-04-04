@@ -165,6 +165,15 @@ export class MessagingSystem extends EventEmitter {
     await fs.rename(tmpPath, this.dbPath);
   }
 
+  private queryAllArrays(sql: string, params?: unknown[]): unknown[][] {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const results: unknown[][] = [];
+    while (stmt.step()) results.push(stmt.get() as unknown[]);
+    stmt.free();
+    return results;
+  }
+
   async close(): Promise<void> {
     await this.persist();
   }
@@ -289,8 +298,8 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async getThreadMessages(thread_id: string): Promise<Message[]> {
-    const messageRows = this.db.prepare(`SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC`).all([thread_id]);
-    return messageRows?.values.map((row: any[]) => ({
+    const messageRows = this.queryAllArrays(`SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC`, [thread_id]);
+    return messageRows?.map((row: any[]) => ({
       id: row[0],
       thread_id: row[1],
       from: row[2],
@@ -306,14 +315,14 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async getThreadsForAgent(agent_id: string, limit = 20): Promise<MessageThread[]> {
-    const threadRows = this.db.prepare(`
+    const threadRows = this.queryAllArrays(`
       SELECT DISTINCT t.* FROM threads t
       JOIN messages m ON t.id = m.thread_id
       WHERE m.from_agent = ? OR m.to_agent = ?
       ORDER BY t.updated_at DESC
       LIMIT ?
-    `).all([agent_id, agent_id, limit]);
-    return threadRows?.values.map((row: any[]) => this.getThread(row[0])!) || [];
+    `, [agent_id, agent_id, limit]);
+    return threadRows?.map((row: any[]) => this.getThread(row[0] as string)!) || [];
   }
 
   async getUnreadCount(agent_id: string): Promise<number> {
@@ -357,8 +366,8 @@ export class MessagingSystem extends EventEmitter {
     if (date_from) { whereClauses.push(`created_at >= ?`); params.push(date_from); }
     if (date_to) { whereClauses.push(`created_at <= ?`); params.push(date_to); }
 
-    const candidateRows = this.db.prepare(`SELECT * FROM messages WHERE ${whereClauses.join(" AND ")} ORDER BY created_at DESC LIMIT 100`).all(params);
-    const candidates: Message[] = candidateRows?.values.map((row: any[]) => ({
+    const candidateRows = this.queryAllArrays(`SELECT * FROM messages WHERE ${whereClauses.join(" AND ")} ORDER BY created_at DESC LIMIT 100`, params);
+    const candidates: Message[] = candidateRows?.map((row: any[]) => ({
       id: row[0], thread_id: row[1], from: row[2], to: row[3], content: row[4],
       priority: row[5], requires_response: row[6] === 1, responded: row[7] === 1,
       created_at: row[8], read: row[9] === 1, tags: safeJsonParse(row[10], []),
@@ -442,8 +451,8 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async getEscalationsForAgent(agent_id: string): Promise<Escalation[]> {
-    const rows = this.db.prepare(`SELECT * FROM escalations WHERE to_agent = ? ORDER BY created_at DESC`).all([agent_id]);
-    return rows?.values.map((row: any[]) => ({ id: row[0], thread_id: row[1], from: row[2], to: row[3], reason: row[4], created_at: row[5], status: row[6] })) || [];
+    const rows = this.queryAllArrays(`SELECT * FROM escalations WHERE to_agent = ? ORDER BY created_at DESC`, [agent_id]);
+    return rows?.map((row: any[]) => ({ id: row[0], thread_id: row[1], from: row[2], to: row[3], reason: row[4], created_at: row[5], status: row[6] })) || [];
   }
 
   async resolveEscalation(escalation_id: string, status: "resolved" | "dismissed"): Promise<void> {
@@ -456,8 +465,8 @@ export class MessagingSystem extends EventEmitter {
     const unread_count = await this.getUnreadCount(agent_id);
     const active_threads = (await this.getThreadsForAgent(agent_id, 10)).filter(t => t.updated_at > cutoff && t.status === "active");
     
-    const pendingRows = this.db.prepare(`SELECT * FROM messages WHERE to_agent = ? AND requires_response = 1 AND responded = 0 AND created_at > ?`).all([agent_id, cutoff]);
-    const pending_responses: Message[] = pendingRows?.values.map((row: any[]) => ({
+    const pendingRows = this.queryAllArrays(`SELECT * FROM messages WHERE to_agent = ? AND requires_response = 1 AND responded = 0 AND created_at > ?`, [agent_id, cutoff]);
+    const pending_responses: Message[] = pendingRows?.map((row: any[]) => ({
       id: row[0], thread_id: row[1], from: row[2], to: row[3], content: row[4], priority: row[5],
       requires_response: true, responded: false, created_at: row[8], read: row[9] === 1, tags: safeJsonParse(row[10], [])
     })) || [];
@@ -466,8 +475,8 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async getUnreadMessages(agent_id: string, limit = 50): Promise<Message[]> {
-    const rows = this.db.prepare(`SELECT * FROM messages WHERE to_agent = ? AND read = 0 ORDER BY created_at DESC LIMIT ?`).all([agent_id, limit]);
-    return rows?.values.map((row: any[]) => ({
+    const rows = this.queryAllArrays(`SELECT * FROM messages WHERE to_agent = ? AND read = 0 ORDER BY created_at DESC LIMIT ?`, [agent_id, limit]);
+    return rows?.map((row: any[]) => ({
       id: row[0], thread_id: row[1], from: row[2], to: row[3], content: row[4], priority: row[5],
       requires_response: row[6] === 1, responded: row[7] === 1, created_at: row[8], read: row[9] === 1,
       tags: safeJsonParse(row[10], [])

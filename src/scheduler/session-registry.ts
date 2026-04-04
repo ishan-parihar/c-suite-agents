@@ -105,6 +105,10 @@ export class SessionRegistry {
     `);
   }
 
+  private queryAll<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[] {
+    return this.db.prepare(sql).all(...params) as T[];
+  }
+
   async getOrCreate(agentId: string, context: { chatId?: string; title?: string; workspacePath?: string }): Promise<string> {
     const chatId = context.chatId || null;
     const title = context.title || `${agentId}${chatId ? ` @ ${chatId}` : ""}`;
@@ -202,13 +206,15 @@ export class SessionRegistry {
       "SELECT compaction_count, previous_summary, has_real_conversation FROM sessions WHERE session_id = ?"
     ).get(sessionId) as { compaction_count: number; previous_summary: string | null; has_real_conversation: number } | undefined;
 
-    const messages = this.db.prepare(
-      "SELECT role, content, token_estimate, is_summary, compacted, timestamp FROM session_messages WHERE session_id = ? ORDER BY message_index ASC"
-    ).all(sessionId) as StoredMessage[];
+    const messages = this.queryAll<StoredMessage>(
+      "SELECT role, content, token_estimate, is_summary, compacted, timestamp FROM session_messages WHERE session_id = ? ORDER BY message_index ASC",
+      sessionId
+    );
 
-    const toolCalls = this.db.prepare(
-      "SELECT id, name, arguments, result, token_estimate, compacted, timestamp FROM session_tool_calls WHERE session_id = ? ORDER BY tool_index ASC"
-    ).all(sessionId) as StoredToolCall[];
+    const toolCalls = this.queryAll<StoredToolCall>(
+      "SELECT id, name, arguments, result, token_estimate, compacted, timestamp FROM session_tool_calls WHERE session_id = ? ORDER BY tool_index ASC",
+      sessionId
+    );
 
     if (messages.length === 0) return null;
 
@@ -293,7 +299,7 @@ export class SessionRegistry {
       const session = this.db.prepare("SELECT session_id FROM sessions WHERE agent_id = ? AND chat_id = ?").get(agentId, chatId) as { session_id: string } | undefined;
       if (session) this.deleteSessionData(session.session_id);
     } else {
-      const sessions = this.db.prepare("SELECT session_id FROM sessions WHERE agent_id = ? AND chat_id IS NULL").all(agentId) as { session_id: string }[];
+      const sessions = this.queryAll<{ session_id: string }>("SELECT session_id FROM sessions WHERE agent_id = ? AND chat_id IS NULL", agentId) as { session_id: string }[];
       for (const s of sessions) this.deleteSessionData(s.session_id);
     }
     logger.info({ agentId, chatId }, "Session invalidated");
@@ -312,23 +318,24 @@ export class SessionRegistry {
     const maxPerAgent = options?.maxPerAgent ?? 3;
 
     const cutoff = Date.now() - maxAgeMs;
-    const oldSessions = this.db.prepare("SELECT session_id FROM sessions WHERE last_used < ?").all(cutoff) as { session_id: string }[];
+    const oldSessions = this.queryAll<{ session_id: string }>("SELECT session_id FROM sessions WHERE last_used < ?", cutoff) as { session_id: string }[];
     for (const s of oldSessions) this.deleteSessionData(s.session_id);
     if (oldSessions.length > 0) {
       logger.info({ count: oldSessions.length }, "Cleaned up old sessions");
     }
 
-    const agents = this.db.prepare("SELECT DISTINCT agent_id FROM sessions").all() as { agent_id: string }[];
+    const agents = this.queryAll<{ agent_id: string }>("SELECT DISTINCT agent_id FROM sessions") as { agent_id: string }[];
     for (const { agent_id } of agents) {
-      const excess = this.db.prepare(
-        "SELECT session_id FROM sessions WHERE agent_id = ? ORDER BY last_used DESC LIMIT -1 OFFSET ?"
-      ).all(agent_id, maxPerAgent) as { session_id: string }[];
+      const excess = this.queryAll<{ session_id: string }>(
+        "SELECT session_id FROM sessions WHERE agent_id = ? ORDER BY last_used DESC LIMIT -1 OFFSET ?",
+        agent_id, maxPerAgent
+      ) as { session_id: string }[];
       for (const { session_id } of excess) this.deleteSessionData(session_id);
     }
   }
 
   async list(): Promise<SessionRecord[]> {
-    return this.db.prepare("SELECT * FROM sessions ORDER BY last_used DESC").all() as SessionRecord[];
+    return this.queryAll<SessionRecord>("SELECT * FROM sessions ORDER BY last_used DESC") as SessionRecord[];
   }
 
   async findBySessionId(sessionId: string): Promise<SessionRecord | null> {

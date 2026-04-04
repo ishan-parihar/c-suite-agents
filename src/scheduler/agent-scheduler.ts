@@ -4,7 +4,7 @@
 
 import { logger } from "../logger.js";
 import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
-import { getOpenCodeClient } from "../acp/opencode-client.js";
+import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { Memory } from "../memory/lancedb.js";
 import { getMemoryFacade } from "../memory/index.js";
@@ -156,6 +156,15 @@ export class AgentScheduler {
     await fs.rename(tmpPath, this.dbPath);
   }
 
+  private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
+    const stmt = this.db.prepare(sql);
+    if (params) stmt.bind(params);
+    const results: Record<string, unknown>[] = [];
+    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+    stmt.free();
+    return results;
+  }
+
   async close(): Promise<void> {
     this.stop();
     await this.persist();
@@ -163,7 +172,7 @@ export class AgentScheduler {
 
   private async loadTasks() {
     this.tasks.clear();
-    const rows = this.db.prepare("SELECT * FROM scheduled_tasks").all() as Record<string, unknown>[];
+    const rows = this.queryAll("SELECT * FROM scheduled_tasks") as Record<string, unknown>[];
     if (!rows.length) return;
 
     for (const row of rows) {
@@ -292,14 +301,13 @@ export class AgentScheduler {
     }
 
     let triggered = 0;
-    const acp = getOpenCodeClient();
     const memory = await this.getMemoryInstance();
 
     for (const task of matchingTasks) {
       try {
         logger.info({ taskId: task.id, agentId: task.agent_id, eventName }, "Event-triggered task firing");
         task.next_run = Date.now();
-        await this.executeTask(task, acp, memory);
+        await this.executeTask(task, memory);
         task.last_run = Date.now();
         task.run_count++;
 
@@ -375,7 +383,6 @@ export class AgentScheduler {
 
   private async checkAndRunTasks() {
     const now = Date.now();
-    const acp = getOpenCodeClient();
     const memory = await this.getMemoryInstance();
 
     for (const task of this.getAllActiveTasks()) {
@@ -384,7 +391,7 @@ export class AgentScheduler {
       logger.info({ taskId: task.id, agentId: task.agent_id, name: task.name }, "Running scheduled task");
 
       try {
-        await this.executeTask(task, acp, memory);
+        await this.executeTask(task, memory);
 
         // Update task
         task.last_run = now;
@@ -418,7 +425,7 @@ export class AgentScheduler {
    * Execute a scheduled task using a persistent session (SessionRegistry).
    * Pushes results to SystemEventQueue for heartbeat injection.
    */
-  private async executeTask(task: ScheduledTask, acp: any, memory: Memory) {
+  private async executeTask(task: ScheduledTask, memory: Memory) {
     const staff = getStaffById(task.agent_id);
     const promptData = getPromptForRole(task.agent_id);
     const systemPrompt = promptData ? promptData.prompt : "You are a helpful AI assistant.";
@@ -429,16 +436,6 @@ export class AgentScheduler {
     let sessionId = await sessionRegistry.getOrCreate(task.agent_id, {
       title: `cron:${task.id} ${task.name}`
     });
-
-    // Verify session health, auto-heal if stale
-    if (!(await acp.verifySession(sessionId))) {
-      await sessionRegistry.invalidate(task.agent_id);
-      const newSessionId = await sessionRegistry.getOrCreate(task.agent_id, {
-        title: `cron:${task.id} ${task.name}`
-      });
-      logger.info({ oldSession: sessionId, newSession: newSessionId }, "Session healed for task");
-      sessionId = newSessionId;
-    }
 
     // Build task-specific prompt with time injection (OpenClaw pattern)
     const timeLine = currentTimeLine();
@@ -489,8 +486,9 @@ ${timeLine}
       // Memory not ready, skip
     }
 
-    // Send message with agent parameter so OpenCode loads the native system prompt
-    const result = await acp.sendMessage(sessionId, prompt, undefined, { agent: nativeAgentId });
+    // Send message with agent parameter so the runtime loads the native system prompt
+    const runtime = getNativeRuntime();
+    const result = await runtime.sendMessage(sessionId, prompt, nativeAgentId);
     await sessionRegistry.touch(sessionId);
 
     if (result.text && result.text.trim().length > 0) {

@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { logger } from "../logger.js";
-import { getOpenCodeClient } from "../acp/opencode-client.js";
+import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
 import type { MemoryStore } from "./store.js";
 import type { EmbeddingService } from "./embeddings.js";
 import type { MemoryDedup } from "./dedup.js";
@@ -63,14 +63,10 @@ export class MemoryLifecycle {
 
     let summary: string;
     try {
-      const acp = getOpenCodeClient();
-      const sessionId = await acp.createSession(process.cwd());
-      if (!sessionId) {
-        summary = `[Consolidation of ${recent.length} entries about ${tag}]`;
-      } else {
-        const result = await acp.sendMessage(sessionId, prompt);
-        summary = result.text || `[Consolidation of ${recent.length} entries about ${tag}]`;
-      }
+      const runtime = getNativeRuntime();
+      const sessionId = runtime.createSession("memory-consolidation");
+      const result = await runtime.sendMessage(sessionId, prompt, "memory-consolidation");
+      summary = result.text || `[Consolidation of ${recent.length} entries about ${tag}]`;
     } catch {
       summary = `[Consolidation of ${recent.length} entries about ${tag}]`;
     }
