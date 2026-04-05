@@ -4,7 +4,8 @@
 
 import OpenAI from "openai";
 import { logger } from "../logger.js";
-import { buildSystemPrompt, isSilentAck, stripHeartbeatToken, hasSubstantiveFinding, currentTimeLine } from "./prompt-builder.js";
+import { buildSystemPrompt } from "./prompt-builder.js";
+import { isSilentAck, stripHeartbeatToken, hasSubstantiveFinding, currentTimeLine } from "./utils.js";
 import { ContextManager, type ChatMessage, type ToolCall, estimateTokens, type SummarizeFn, type PersistCallbacks } from "./context-manager.js";
 import { buildToolDefinitions, createToolBridge, type ToolExecutor, type ToolResult } from "./tool-bridge.js";
 import { v4 as uuidv4 } from "uuid";

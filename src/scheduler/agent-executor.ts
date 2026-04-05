@@ -12,7 +12,7 @@ import { InactivityTracker } from "./inactivity-tracker.js";
 import { sendTelegramMessage } from "../integrations/telegram.js";
 import { getMemoryFacade } from "../memory/index.js";
 import { getSessionRegistry } from "./session-registry.js";
-import { SystemEventQueue, buildSystemEventPrompt, currentTimeLine } from "./system-events.js";
+import { SystemEventQueue, buildSystemEventPrompt, currentTimeLine, stripHeartbeatToken } from "./system-events.js";
 import { autoStore } from "../memory/auto.js";
 import {
   NativeAgentRuntime,
@@ -624,11 +624,6 @@ export class AgentExecutor {
 
   getRecoveryRegistry(): RecoveryRegistry { return this.recovery; }
   getPolicyEngine(): PolicyEngine { return this.policyEngine; }
-}
-
-// Helper
-function stripHeartbeatToken(text: string): string {
-  return text.replace(/heartbeat_ok/gi, "").replace(/HEARTBEAT_OK/g, "").trim();
 }
 
 let agentExecutor: AgentExecutor | null = null;
