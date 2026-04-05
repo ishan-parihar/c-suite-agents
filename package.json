@@ -1,6 +1,6 @@
 {
   "name": "strategos",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -11,7 +11,9 @@
     "build:cli": "bun build src/cli/program.ts --outdir build/cli --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm",
     "start": "node build/index.js",
     "dev": "bun run src/index.ts",
-    "deploy": "bash deploy.sh"
+    "deploy": "bash deploy.sh",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.11.0",

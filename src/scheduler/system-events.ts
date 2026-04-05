@@ -3,6 +3,7 @@
 // Based on OpenClaw's system-events.ts architecture
 
 import { logger } from "../logger.js";
+export { currentTimeLine, isSilentAck, stripHeartbeatToken } from "../runtime/utils.js";
 
 export interface SystemEvent {
   id: string;
@@ -346,93 +347,4 @@ export function buildSystemEventPrompt(events: SystemEvent[]): string {
   }
 
   return sections.join("\n");
-}
-
-/**
- * Detect if a heartbeat response is a silent ack (HEARTBEAT_OK protocol).
- *
- * IMPROVED: Strips HEARTBEAT_OK token first, then evaluates the remaining text.
- * Catches verbose responses like "I'll just send HEARTBEAT_OK" where the agent
- * wraps the token in reasoning text.
- */
-export function isSilentAck(text: string, maxChars: number = 500): boolean {
-  const trimmed = text.trim();
-  const lower = trimmed.toLowerCase();
-
-  // Strategy 1: Direct token match for short responses (original behavior)
-  if (trimmed.length < 150) {
-    const silentTokens = [
-      "heartbeat_ok",
-      "heartbeat ok",
-      "all clear",
-      "nothing to report",
-      "nothing needs attention",
-      "no action needed",
-      "all good",
-      "no issues found",
-      "nothing new",
-    ];
-    if (silentTokens.some(token => lower.includes(token))) return true;
-    if (trimmed.length < 50 && lower.includes("clear")) return true;
-  }
-
-  // Strategy 2: HEARTBEAT_OK is present but buried in verbose reasoning
-  if (lower.includes("heartbeat_ok") || lower.includes("heartbeat ok")) {
-    // Strip the token and check what remains
-    const stripped = trimmed.replace(/heartbeat[_\s]?ok/gi, "").trim();
-
-    // If remaining text is short filler, it's a silent ack
-    if (stripped.length < maxChars) {
-      const fillerPatterns = [
-        /just\s+(send|say|reply|do)/i,
-        /same\s+(picture|pattern|as\s*before|as\s+last)/i,
-        /nothing\s+(new|changed|different|to\s+flag)/i,
-        /repetitive/i,
-        /monitoring/i,
-        /no\s+(new|actionable)/i,
-        /all\s+clear/i,
-        /no\s+escalation/i,
-        /pattern\s+has\s+been/i,
-        /nothing\s+urgent/i,
-      ];
-      const isFiller = fillerPatterns.some(p => stripped.match(p));
-      if (isFiller || stripped.length < 100) {
-        return true;
-      }
-    }
-  }
-
-  // Strategy 3: Very short "all clear" style responses (original behavior)
-  if (trimmed.length < 50 && lower.includes("clear")) return true;
-
-  return false;
-}
-
-/**
- * Strip HEARTBEAT_OK token from response text.
- */
-export function stripHeartbeatToken(text: string): string {
-  return text
-    .replace(/heartbeat[_\s]?ok/gi, "")
-    .trim();
-}
-
-/**
- * Generate current time line for prompt injection (OpenClaw pattern).
- */
-export function currentTimeLine(): string {
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-  const dateStr = now.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  const utcStr = now.toISOString().replace("T", " ").substring(0, 16) + " UTC";
-  return `Current time: ${timeStr}, ${dateStr} / ${utcStr}`;
 }

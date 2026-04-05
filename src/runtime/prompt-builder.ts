@@ -6,6 +6,7 @@
 
 import { loadBootstrapFiles, buildWorkspaceContext, CORE_FILES } from "../agents/workspace-manager.js";
 import { getStaffById } from "../staff/core-staff.js";
+import { currentTimeLine } from "./utils.js";
 
 // Anti-prompt-injection instruction injected into every system prompt.
 // Must appear early (high-attention zone) so the LLM processes it before any user data.
@@ -277,70 +278,4 @@ export function buildMessagePrompt(agentId: string, messages: string[], wakeCont
   return lines.join("\n");
 }
 
-/**
- * Current time injection (OpenClaw pattern).
- */
-export function currentTimeLine(): string {
-  const now = new Date();
-  return `Current time: ${now.toLocaleString("en-US", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })}`;
-}
-
-/**
- * Check if a response is a silent ack (HEARTBEAT_OK or equivalent).
- */
-export function isSilentAck(text: string): boolean {
-  const clean = text.trim().toLowerCase();
-  return (
-    clean === "heartbeat_ok" ||
-    clean === "heartbeat ok" ||
-    clean === "heartbeatok" ||
-    clean.includes("heartbeat_ok") ||
-    /^all\s*clear[\s.!]*$/i.test(clean) ||
-    /^nothing\s+(new|to\s+report|here|changed)/i.test(clean) ||
-    /^same\s+(picture|pattern|as\s*before|as\s+last)/i.test(clean)
-  );
-}
-
-/**
- * Strip heartbeat token from response text for cleaner storage.
- */
-export function stripHeartbeatToken(text: string): string {
-  return text
-    .replace(/heartbeat_ok/gi, "")
-    .replace(/HEARTBEAT_OK/g, "")
-    .trim();
-}
-
-/**
- * Check if text contains substantive findings (not just monitoring noise).
- */
-export function hasSubstantiveFinding(text: string): boolean {
-  const lower = text.toLowerCase().trim();
-
-  const passivePatterns = [
-    /^same\s+(picture|pattern|as\s*before|as\s+last)/i,
-    /nothing\s+(new|changed|different|to\s+flag|urgent)/i,
-    /just\s+(monitoring|checking|watching)/i,
-    /no\s+(new|actionable|overdue|blockers?)/i,
-    /all\s+clear/i,
-    /repetitive/i,
-    /no\s+escalation\s+needed/i,
-  ];
-  if (passivePatterns.some(p => lower.match(p))) return false;
-
-  const substantivePatterns = [
-    /\d+\s*(tasks?|cards?|items?|projects?|risks?|changes?)/i,
-    /overdue|blocked|stalled|stale/i,
-    /action\s+(taken|required|needed|recommended)/i,
-    /recommend|suggest|advise/i,
-    /anomal|spike|drop|increase|decrease/i,
-    /update|fix|resolve|address/i,
-    /deadline|missed|delay/i,
-    /escalate|escalation|critical|urgent/i,
-    /spent|revenue|budget|cost/i,
-    /sleep|workout|exercise|mood|nutrition|calories/i,
-    /follow.?up|contact|relationship|connection/i,
-    /content|pipeline|publish|stale|draft/i,
-  ];
-  return substantivePatterns.some(p => lower.match(p));
-}
+export { currentTimeLine, isSilentAck, stripHeartbeatToken, hasSubstantiveFinding } from "./utils.js";
