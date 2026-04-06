@@ -3,6 +3,10 @@
 
 import { z } from "zod";
 import { logger } from "../logger.js";
+import { createFsReadTool } from "./tools/fs-read.js";
+import { createFsWriteTool } from "./tools/fs-write.js";
+import { createFsEditTool } from "./tools/fs-edit.js";
+import { createBashTool } from "./tools/bash-exec.js";
 
 export type PermissionTier = "read" | "write" | "danger";
 
@@ -34,12 +38,12 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           query: { type: "string", description: "Natural language search query" },
           top_k: { type: "number", description: "Max results (default: 10)" },
           scopes: { type: "array", items: { type: "string", enum: ["personal", "project", "company"] }, description: "Scopes to search" },
         },
-        required: ["agent_id", "query"],
+        required: ["query"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -49,11 +53,11 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           query: { type: "string", description: "Search query" },
           top_k: { type: "number", description: "Max results" },
         },
-        required: ["agent_id", "query"],
+        required: ["query"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -63,7 +67,6 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           scope: { type: "string", enum: ["personal", "project", "company"], description: "Memory scope" },
           kind: { type: "string", enum: ["episodic", "semantic", "procedural"], description: "Memory kind" },
           type: { type: "string", enum: ["note", "obs", "io", "log", "decision", "meeting", "insight"], description: "Memory type" },
@@ -71,7 +74,8 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
           importance: { type: "number", minimum: 0, maximum: 1, description: "Importance 0-1" },
           tags: { type: "array", items: { type: "string" }, description: "Tags" },
         },
-        required: ["agent_id", "type", "content"],
+        required: ["type", "content"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
@@ -81,12 +85,12 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          scope: { type: "string", enum: ["personal", "project", "company"] },
+          scope: { type: "string", enum: ["personal", "project", "company"], description: "Memory scope" },
           id: { type: "string", description: "Specific memory ID to delete" },
-          agent_id: { type: "string" },
           tag: { type: "string", description: "Tag to delete all matching memories" },
         },
         required: ["scope"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
@@ -96,18 +100,18 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          scope: { type: "string", enum: ["personal", "project", "company"] },
+          scope: { type: "string", enum: ["personal", "project", "company"], description: "Memory scope" },
           tag: { type: "string", description: "Tag to consolidate" },
         },
-        required: ["agent_id", "scope", "tag"],
+        required: ["scope", "tag"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "memory.stats": {
       name: "memory.stats",
       description: "Show memory statistics — total entries per scope, per-agent breakdown.",
-      parameters: { type: "object", properties: {} },
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
 
@@ -122,6 +126,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
           maxResults: { type: "number", description: "Max results to return (default: 5)" },
         },
         required: ["query"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -129,84 +134,82 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Kanban tools
     "board.get": {
       name: "board.get",
-      description: "Get Kanban board",
-      parameters: {
-        type: "object",
-        properties: {
-          agent_id: { type: "string" },
-        },
-        required: ["agent_id"],
-      },
+      description: "Review your Kanban board — shows all cards grouped by column. Use to check workload, find blocked tasks, or assess overall progress before reporting.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
     "board.addCard": {
       name: "board.addCard",
-      description: "Add Kanban task",
+      description: "Create a new task card on your Kanban board. Use when a new task is identified during work, assigned to you, or discovered from conversations.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          title: { type: "string" },
-          description: { type: "string" },
-          priority: { type: "string" },
-          due: { type: "string" },
-          tags: { type: "array", items: { type: "string" } },
+          title: { type: "string", description: "Short, descriptive task title" },
+          description: { type: "string", description: "Detailed task description with context and acceptance criteria" },
+          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"], description: "Task priority: P1=critical, P2=high, P3=normal, P4=low" },
+          due: { type: "string", description: "Due date in ISO format (e.g., '2026-04-15') or relative (e.g., 'tomorrow', 'next week')" },
+          tags: { type: "array", items: { type: "string" }, description: "Labels for categorization (e.g., 'bug', 'feature', 'urgent')" },
         },
-        required: ["agent_id", "title"],
+        required: ["title"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "board.moveCard": {
       name: "board.moveCard",
-      description: "Move card",
+      description: "Move a card to a different column. Use when task status changes (starting work → 'In Progress', finishing → 'Done', hitting obstacle → 'Blocked').",
       parameters: {
         type: "object",
         properties: {
-          card_id: { type: "string" },
+          card_id: { type: "string", description: "The card ID to move" },
           status: { type: "string", description: "Target column name (must match agent's board columns)" },
         },
         required: ["card_id", "status"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "board.viewReports": {
       name: "board.viewReports",
-      description: "Manager view of all reports' boards",
+      description: "Manager view of all direct reports' Kanban boards. Shows card counts and status summaries. Use to monitor team workload and identify bottlenecks.",
       parameters: {
         type: "object",
         properties: {
-          manager_id: { type: "string" },
+          manager_id: { type: "string", description: "The manager's agent ID whose reports to view" },
         },
         required: ["manager_id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "board.reassign": {
       name: "board.reassign",
-      description: "Manager reassign card between reports",
+      description: "Reassign a card from one report to another. Use when redistributing workload or when a report is overloaded/unavailable. Requires manager authority.",
       parameters: {
         type: "object",
         properties: {
-          card_id: { type: "string" },
-          from_agent_id: { type: "string" },
-          to_agent_id: { type: "string" },
-          manager_id: { type: "string" },
+          card_id: { type: "string", description: "The card ID to reassign" },
+          from_agent_id: { type: "string", description: "Current owner's agent ID" },
+          to_agent_id: { type: "string", description: "New owner's agent ID" },
+          manager_id: { type: "string", description: "The manager's agent ID performing the reassignment" },
         },
         required: ["card_id", "from_agent_id", "to_agent_id", "manager_id"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "board.escalate": {
       name: "board.escalate",
-      description: "Escalate blocked card to manager",
+      description: "Escalate a blocked card to your manager with a reason. Use when you cannot resolve a blocker yourself and need managerial intervention.",
       parameters: {
         type: "object",
         properties: {
-          card_id: { type: "string" },
-          to_manager_id: { type: "string" },
-          reason: { type: "string" },
+          card_id: { type: "string", description: "The blocked card ID to escalate" },
+          to_manager_id: { type: "string", description: "The manager's agent ID to escalate to" },
+          reason: { type: "string", description: "Explanation of why the card is blocked and needs escalation" },
         },
         required: ["card_id", "to_manager_id", "reason"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
@@ -214,131 +217,131 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Messaging tools
     "message.send": {
       name: "message.send",
-      description: "Send message to another agent",
+      description: "Send an async message to another agent. Use for requests, updates, or questions. Set requires_response=true when you need a reply.",
       parameters: {
         type: "object",
         properties: {
-          from: { type: "string" },
-          to: { type: "string" },
-          content: { type: "string" },
-          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"] },
-          requires_response: { type: "boolean" },
-          subject: { type: "string" },
-          tags: { type: "array", items: { type: "string" } },
+          to: { type: "string", description: "Recipient agent ID" },
+          content: { type: "string", description: "Message body — be clear and specific about what you need" },
+          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"], description: "Message priority: P1=urgent, P2=high, P3=normal, P4=low" },
+          requires_response: { type: "boolean", description: "Set true when you need the recipient to reply" },
+          subject: { type: "string", description: "Brief subject line summarizing the message purpose" },
+          tags: { type: "array", items: { type: "string" }, description: "Labels for categorization (e.g., 'question', 'update', 'decision')" },
         },
-        required: ["from", "to", "content"],
+        required: ["to", "content"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "message.reply": {
       name: "message.reply",
-      description: "Reply to message thread",
+      description: "Reply to an existing message thread. Use to continue a conversation. Always include thread_id from the original message.",
       parameters: {
         type: "object",
         properties: {
-          thread_id: { type: "string" },
-          from: { type: "string" },
-          content: { type: "string" },
-          requires_response: { type: "boolean" },
-          tags: { type: "array", items: { type: "string" } },
+          thread_id: { type: "string", description: "The thread ID to reply to" },
+          content: { type: "string", description: "Reply message body" },
+          requires_response: { type: "boolean", description: "Set true when you need a further reply" },
+          tags: { type: "array", items: { type: "string" }, description: "Additional labels for the reply" },
         },
-        required: ["thread_id", "from", "content"],
+        required: ["thread_id", "content"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "message.getThread": {
       name: "message.getThread",
-      description: "Read full message thread (like checking phone)",
+      description: "Read the full message thread — like checking a conversation history. Use before replying to understand context.",
       parameters: {
         type: "object",
         properties: {
-          thread_id: { type: "string" },
+          thread_id: { type: "string", description: "The thread ID to read" },
         },
         required: ["thread_id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "message.getThreads": {
       name: "message.getThreads",
-      description: "Get all threads for agent",
+      description: "List all active message threads for your agent. Use to see who's contacted you and what conversations are ongoing.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          limit: { type: "number" },
+          limit: { type: "number", description: "Max threads to return (default: 20)" },
         },
-        required: ["agent_id"],
+        required: [],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "message.search": {
       name: "message.search",
-      description: "Search message history with semantic search",
+      description: "Search message history with semantic search. Use to find past conversations, decisions, or references by topic.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          query: { type: "string" },
-          top_k: { type: "number" },
-          from_agent: { type: "string" },
-          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"] },
+          query: { type: "string", description: "Search query — describe what you're looking for" },
+          top_k: { type: "number", description: "Max results to return (default: 10)" },
+          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"], description: "Filter by message priority" },
         },
-        required: ["agent_id", "query"],
+        required: ["query"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "message.markRead": {
       name: "message.markRead",
-      description: "Mark messages as read",
+      description: "Mark messages or an entire thread as read. Use after reviewing unread messages to clear them from your inbox.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          thread_id: { type: "string" },
+          thread_id: { type: "string", description: "Thread ID to mark as read (omit to mark all as read)" },
         },
-        required: ["agent_id"],
+        required: [],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "message.escalate": {
       name: "message.escalate",
-      description: "Escalate thread to superior",
+      description: "Escalate a message thread to a superior agent. Use when an issue is above your authority or requires higher-level decision.",
       parameters: {
         type: "object",
         properties: {
-          thread_id: { type: "string" },
-          from: { type: "string" },
-          to: { type: "string" },
-          reason: { type: "string" },
+          thread_id: { type: "string", description: "The thread ID to escalate" },
+          to: { type: "string", description: "Superior agent ID to escalate to" },
+          reason: { type: "string", description: "Why this thread needs escalation" },
         },
-        required: ["thread_id", "from", "to", "reason"],
+        required: ["thread_id", "to", "reason"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "message.getUnread": {
       name: "message.getUnread",
-      description: "Get all unread messages for an agent with full content.",
+      description: "Get all unread messages with full content. Use to check what other agents have sent you. After reading, call message.markRead to clear.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          limit: { type: "number", default: 20 },
+          limit: { type: "number", default: 20, description: "Max unread messages to return (default: 20)" },
         },
-        required: ["agent_id"],
+        required: [],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "agent.inbox": {
       name: "agent.inbox",
-      description: "View agent's message inbox — unread messages, pending responses, and active threads",
+      description: "View your message inbox summary — unread count, pending responses, active threads, and escalations. Use as your first action to check communications.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          include_read: { type: "boolean", default: false },
-          include_content: { type: "boolean", default: false },
+          include_read: { type: "boolean", default: false, description: "Include already-read messages (default: false)" },
+          include_content: { type: "boolean", default: false, description: "Include full message content in response (default: false)" },
         },
-        required: ["agent_id"],
+        required: [],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -350,13 +353,14 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          id: { type: "string" },
-          name: { type: "string" },
-          role: { type: "string" },
-          model: { type: "string" },
-          tools: { type: "array", items: { type: "string" } },
+          id: { type: "string", description: "Unique agent identifier (lowercase, hyphens allowed)" },
+          name: { type: "string", description: "Display name for the agent" },
+          role: { type: "string", description: "Agent's role or job title (e.g., 'COO-Productivity')" },
+          model: { type: "string", description: "LLM model to use (e.g., 'gpt-4', 'claude-3', 'qwen2.5')" },
+          tools: { type: "array", items: { type: "string" }, description: "List of tool names this agent has access to" },
         },
         required: ["name"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
@@ -366,50 +370,50 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Parent agent ID" },
           task: { type: "string", description: "Task description" },
-          role: { type: "string" },
-          project_dir: { type: "string" },
+          role: { type: "string", description: "Role for the spawned agent (e.g., 'researcher', 'coder')" },
+          project_dir: { type: "string", description: "Project directory path for the spawned agent to work in" },
         },
-        required: ["agent_id", "task"],
+        required: ["task"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "agent.list": {
       name: "agent.list",
-      description: "List all active agents",
-      parameters: { type: "object", properties: {} },
+      description: "List all active agents in the organization. Use to discover who's available before sending messages or calling meetings.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
 
     // Agent communication
     "agent.handoff": {
       name: "agent.handoff",
-      description: "Handoff conversation to another agent (they take over)",
+      description: "Hand off a conversation to another agent — they take over with full context. Use when a topic is outside your domain and better handled by another agent.",
       parameters: {
         type: "object",
         properties: {
-          from_agent: { type: "string" },
-          to_agent: { type: "string" },
-          context: { type: "string" },
-          conversation_id: { type: "string" },
+          to_agent: { type: "string", description: "Target agent ID to hand off to" },
+          context: { type: "string", description: "Summary of conversation context to transfer" },
+          conversation_id: { type: "string", description: "The conversation/session ID being handed off" },
         },
-        required: ["from_agent", "to_agent", "context"],
+        required: ["to_agent", "context"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "agent.meeting": {
       name: "agent.meeting",
-      description: "Call a board meeting with multiple agents",
+      description: "Call a board meeting with multiple agents. Use for decisions requiring group consensus or cross-functional coordination.",
       parameters: {
         type: "object",
         properties: {
-          from_agent: { type: "string" },
-          participants: { type: "array", items: { type: "string" } },
-          topic: { type: "string" },
-          urgency: { type: "string", enum: ["normal", "urgent"] },
+          participants: { type: "array", items: { type: "string" }, description: "List of agent IDs to invite to the meeting" },
+          topic: { type: "string", description: "Meeting topic or agenda item" },
+          urgency: { type: "string", enum: ["normal", "urgent"], description: "Meeting urgency level" },
         },
-        required: ["from_agent", "participants", "topic"],
+        required: ["participants", "topic"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
@@ -422,24 +426,26 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
           objective: { type: "string", description: "Optional objective/focus for the meeting" },
         },
         required: [],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "boardmeeting.status": {
       name: "boardmeeting.status",
       description: "Get current board meeting state if a meeting is active. Returns meeting ID, status, current turn, and objective.",
-      parameters: { type: "object", properties: {} },
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
     "agent.wake": {
       name: "agent.wake",
-      description: "Get wake-up context for agent (inject on activation)",
+      description: "Get wake-up context for an agent — recent activity, pending items, and state summary. Inject this on activation to restore context.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
+          agent_id: { type: "string", description: "The agent ID to get wake-up context for" },
         },
         required: ["agent_id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -447,25 +453,26 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Organization tools
     "org.chart": {
       name: "org.chart",
-      description: "Show organization chart",
-      parameters: { type: "object", properties: {} },
+      description: "Display the full organization chart showing hierarchy and reporting structure. Use to understand who reports to whom.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
     "staff.list": {
       name: "staff.list",
-      description: "List core staff",
-      parameters: { type: "object", properties: {} },
+      description: "List core staff members with their roles. Use for quick reference of the C-suite team.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
     "staff.get": {
       name: "staff.get",
-      description: "Get staff details",
+      description: "Get detailed info about a staff member — role, databases, Kanban columns, reporting. Use before delegating or messaging to understand their capabilities.",
       parameters: {
         type: "object",
         properties: {
-          id: { type: "string" },
+          id: { type: "string", description: "Staff member's agent ID" },
         },
         required: ["id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -473,69 +480,75 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Meeting governance
     "meeting.propose": {
       name: "meeting.propose",
-      description: "Propose board meeting",
+      description: "Propose a new board meeting with title, reason, and urgency. Triggers a voting process among staff.",
       parameters: {
         type: "object",
         properties: {
-          proposer: { type: "string" },
-          title: { type: "string" },
-          reason: { type: "string" },
-          urgency: { type: "string", enum: ["P1", "P2", "P3", "P4"] },
+          proposer: { type: "string", description: "Agent ID of the person proposing the meeting" },
+          title: { type: "string", description: "Meeting title" },
+          reason: { type: "string", description: "Why this meeting is needed" },
+          urgency: { type: "string", enum: ["P1", "P2", "P3", "P4"], description: "Meeting urgency level" },
         },
         required: ["proposer", "title", "reason"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "meeting.vote": {
       name: "meeting.vote",
-      description: "Vote on meeting proposal",
+      description: "Vote yes/no/abstain on a meeting proposal. Required for quorum — meetings need majority approval.",
       parameters: {
         type: "object",
         properties: {
-          meeting_id: { type: "string" },
-          voter: { type: "string" },
-          vote: { type: "string", enum: ["yes", "no", "abstain"] },
+          meeting_id: { type: "string", description: "The meeting proposal ID to vote on" },
+          voter: { type: "string", description: "Agent ID of the voter" },
+          vote: { type: "string", enum: ["yes", "no", "abstain"], description: "Your vote" },
         },
         required: ["meeting_id", "voter", "vote"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "meeting.get": {
       name: "meeting.get",
-      description: "Get meeting proposal",
+      description: "Get details of a meeting proposal including current votes, status, and deadline.",
       parameters: {
         type: "object",
         properties: {
-          meeting_id: { type: "string" },
+          meeting_id: { type: "string", description: "The meeting proposal ID" },
         },
         required: ["meeting_id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "meeting.recordMinutes": {
       name: "meeting.recordMinutes",
-      description: "Record meeting minutes",
+      description: "Record meeting outcomes — decisions, action items with assignees/due dates, and attendees. Use after a meeting concludes.",
       parameters: {
         type: "object",
         properties: {
-          meeting_id: { type: "string" },
-          decisions: { type: "array", items: { type: "string" } },
+          meeting_id: { type: "string", description: "The meeting ID to record minutes for" },
+          decisions: { type: "array", items: { type: "string" }, description: "List of decisions made during the meeting" },
           action_items: {
             type: "array",
             items: {
               type: "object",
               properties: {
-                description: { type: "string" },
-                assignee: { type: "string" },
-                due_date: { type: "string" },
+                description: { type: "string", description: "What needs to be done" },
+                assignee: { type: "string", description: "Agent ID responsible for this action item" },
+                due_date: { type: "string", description: "Due date in ISO format" },
               },
               required: ["description", "assignee"],
+              additionalProperties: false,
             },
+            description: "Action items with assignees and optional due dates",
           },
-          attendees: { type: "array", items: { type: "string" } },
-          recorded_by: { type: "string" },
+          attendees: { type: "array", items: { type: "string" }, description: "List of agent IDs who attended" },
+          recorded_by: { type: "string", description: "Agent ID of the person recording the minutes" },
         },
         required: ["meeting_id", "decisions", "action_items", "attendees", "recorded_by"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
@@ -543,108 +556,115 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Hiring & delegation
     "hire.create": {
       name: "hire.create",
-      description: "Hire auxiliary staff",
+      description: "Hire auxiliary staff with role, manager, budget, and task list. Use when you need dedicated capacity for a specific responsibility.",
       parameters: {
         type: "object",
         properties: {
-          role: { type: "string" },
-          reports_to: { type: "string" },
-          budget: { type: "number" },
-          tasks: { type: "array", items: { type: "string" } },
+          role: { type: "string", description: "Role/title for the new hire (e.g., 'QA Engineer', 'Data Analyst')" },
+          reports_to: { type: "string", description: "Manager agent ID the new hire reports to" },
+          budget: { type: "number", description: "Budget allocation for this hire" },
+          tasks: { type: "array", items: { type: "string" }, description: "List of tasks/responsibilities for this role" },
         },
         required: ["role", "reports_to", "tasks"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "hire.fire": {
       name: "hire.fire",
-      description: "Release auxiliary staff",
+      description: "Release auxiliary staff with a reason. Use when a contract is complete, underperforming, or no longer needed.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          reason: { type: "string" },
+          agent_id: { type: "string", description: "Agent ID of the auxiliary staff to release" },
+          reason: { type: "string", description: "Reason for releasing this staff member" },
         },
         required: ["agent_id", "reason"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "hire.getTeam": {
       name: "hire.getTeam",
-      description: "Get manager's team",
+      description: "Get all auxiliary staff reporting to a manager with their tasks. Use to review team composition.",
       parameters: {
         type: "object",
         properties: {
-          manager_id: { type: "string" },
+          manager_id: { type: "string", description: "Manager agent ID whose team to retrieve" },
         },
         required: ["manager_id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
     "delegate.to": {
       name: "delegate.to",
-      description: "Delegate task to report",
+      description: "Delegate a task to a direct report with description, priority, and optional deadline. Use to distribute work down the chain of command.",
       parameters: {
         type: "object",
         properties: {
-          from: { type: "string" },
-          to: { type: "string" },
-          task: { type: "string" },
-          description: { type: "string" },
-          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"] },
-          deadline: { type: "string" },
+          to: { type: "string", description: "Agent ID of the direct report to delegate to" },
+          task: { type: "string", description: "Short task title" },
+          description: { type: "string", description: "Detailed task description with context and expectations" },
+          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"], description: "Task priority: P1=critical, P2=high, P3=normal, P4=low" },
+          deadline: { type: "string", description: "Deadline in ISO format or relative (e.g., '2026-04-15', 'end of week')" },
         },
-        required: ["from", "to", "task", "description"],
+        required: ["to", "task", "description"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "delegate.accept": {
       name: "delegate.accept",
-      description: "Accept delegated task",
+      description: "Accept a delegated task from your manager. Use to acknowledge and take ownership of assigned work.",
       parameters: {
         type: "object",
         properties: {
-          delegation_id: { type: "string" },
+          delegation_id: { type: "string", description: "The delegation ID to accept" },
         },
         required: ["delegation_id"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "delegate.reject": {
       name: "delegate.reject",
-      description: "Reject delegated task",
+      description: "Reject a delegated task with a reason. Use when you lack capacity, authority, or the task is outside your scope.",
       parameters: {
         type: "object",
         properties: {
-          delegation_id: { type: "string" },
-          reason: { type: "string" },
+          delegation_id: { type: "string", description: "The delegation ID to reject" },
+          reason: { type: "string", description: "Why you're rejecting this delegation" },
         },
         required: ["delegation_id", "reason"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "delegate.update": {
       name: "delegate.update",
-      description: "Update delegation status",
+      description: "Update a delegation's status (pending→accepted→in_progress→blocked→completed→rejected). Use to track progress.",
       parameters: {
         type: "object",
         properties: {
-          delegation_id: { type: "string" },
-          status: { type: "string", enum: ["pending", "accepted", "in_progress", "blocked", "completed", "rejected"] },
+          delegation_id: { type: "string", description: "The delegation ID to update" },
+          status: { type: "string", enum: ["pending", "accepted", "in_progress", "blocked", "completed", "rejected"], description: "New status for the delegation" },
         },
         required: ["delegation_id", "status"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "delegate.get": {
       name: "delegate.get",
-      description: "Get delegation details",
+      description: "Get full details of a delegation including task, priority, deadline, and current status.",
       parameters: {
         type: "object",
         properties: {
-          delegation_id: { type: "string" },
+          delegation_id: { type: "string", description: "The delegation ID to retrieve" },
         },
         required: ["delegation_id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -652,41 +672,43 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Reports
     "reports.save": {
       name: "reports.save",
-      description: "Save a report (storage-only)",
+      description: "Save a periodic report with summary, metrics, and action items. Use for daily/weekly status reporting to your manager.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          period: { type: "string" },
-          summary: { type: "string" },
-          metrics: { type: "object" },
+          period: { type: "string", description: "Reporting period (e.g., 'daily', 'weekly', '2026-04-07')" },
+          summary: { type: "string", description: "Executive summary of the reporting period" },
+          metrics: { type: "object", description: "Key metrics as key-value pairs (e.g., {tasks_completed: 5, blockers: 1})" },
           actions: {
             type: "array",
             items: {
               type: "object",
               properties: {
-                description: { type: "string" },
-                assignee: { type: "string" },
-                due: { type: "string" },
+                description: { type: "string", description: "Action item description" },
+                assignee: { type: "string", description: "Agent ID responsible" },
+                due: { type: "string", description: "Due date in ISO format" },
               },
               required: ["description"],
+              additionalProperties: false,
             },
+            description: "Follow-up action items with optional assignees and due dates",
           },
         },
-        required: ["agent_id", "period", "summary"],
+        required: ["period", "summary"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
     "reports.getLatest": {
       name: "reports.getLatest",
-      description: "Get latest reports for agent",
+      description: "Get the most recent reports for an agent. Use to review past performance or understand recent activity.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string" },
-          limit: { type: "number" },
+          limit: { type: "number", description: "Max reports to return (default: 5)" },
         },
-        required: ["agent_id"],
+        required: [],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -694,14 +716,15 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Notifications (CEO only)
     "notify.telegram": {
       name: "notify.telegram",
-      description: "Send notification to user via Telegram. Only use for critical, time-sensitive items.",
+      description: "Send a notification to the user (Ishan) via Telegram. ONLY use for critical, time-sensitive items requiring immediate human attention.",
       parameters: {
         type: "object",
         properties: {
-          text: { type: "string" },
-          priority: { type: "string", enum: ["info", "warning", "urgent"], default: "info" },
+          text: { type: "string", description: "Notification message text" },
+          priority: { type: "string", enum: ["info", "warning", "urgent"], default: "info", description: "Notification priority level" },
         },
         required: ["text"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
@@ -709,21 +732,22 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Heartbeat
     "heartbeat.runNow": {
       name: "heartbeat.runNow",
-      description: "Trigger audit",
-      parameters: { type: "object", properties: {} },
+      description: "Trigger an immediate system health audit — checks all agents, pending messages, board status, and cron jobs. Use when you suspect something is wrong or before making org-level decisions.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
 
     // Task
     "task.get": {
       name: "task.get",
-      description: "Get full task details",
+      description: "Get full task details from Kanban by card ID. Use to understand a specific task's description, priority, due date, and tags.",
       parameters: {
         type: "object",
         properties: {
-          card_id: { type: "string" },
+          card_id: { type: "string", description: "The card/task ID to retrieve details for" },
         },
         required: ["card_id"],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -731,27 +755,26 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     // Cron / Scheduling
     "cron.status": {
       name: "cron.status",
-      description: "Check the cron scheduler status and list your active scheduled tasks",
+      description: "Check your scheduled tasks — shows active, paused, and total counts with next run times. Use to review your automation schedule.",
       parameters: {
         type: "object",
-        properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
-        },
-        required: ["agent_id"],
+        properties: {},
+        required: [],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
 
     "cron.list": {
       name: "cron.list",
-      description: "List your scheduled tasks. Use includeDisabled=true to see paused/completed ones.",
+      description: "List all your scheduled tasks with details — action, schedule, run count, failure count. Use includeDisabled=true to see paused/completed ones.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           includeDisabled: { type: "boolean", description: "Include paused/completed tasks (default: false)" },
         },
-        required: ["agent_id"],
+        required: [],
+        additionalProperties: false,
       },
       permissionTier: "read",
     },
@@ -762,7 +785,6 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           name: { type: "string", description: "Short task name (e.g., 'Daily Report', 'Weekly Review')" },
           description: { type: "string", description: "Detailed description of what the task should do" },
           schedule_type: { type: "string", enum: ["interval", "cron", "once", "on_event"], description: "Schedule type: 'interval' (every N seconds), 'cron' (cron expression), 'once' (specific time), 'on_event' (triggered by event name)" },
@@ -773,64 +795,131 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
           action: { type: "string", enum: ["query_database", "check_kanban", "send_report", "call_agent", "custom_prompt", "telegram_notify"], description: "What action to perform: 'query_database' (query LifeOS), 'check_kanban' (review board), 'send_report' (generate status report), 'call_agent' (message another agent), 'custom_prompt' (run custom instructions), 'telegram_notify' (send Telegram notification - CEO only)" },
           action_params: { type: "object", description: "Parameters for the action. For custom_prompt: { prompt: 'your instructions' }. For call_agent: { to_agent: 'agent-id', message: 'message text' }. For telegram_notify: { text: 'notification text' }. For query_database: { query: 'what to look for' }. Add priority: 'P1'|'P2'|'P3'|'P4' to set report priority (default P3). Add notify_user: true to deliver results to user via Telegram (CEO only) or to CEO internally (non-CEO)." },
         },
-        required: ["agent_id", "name", "description", "schedule_type", "action"],
+        required: ["name", "description", "schedule_type", "action"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
 
     "cron.pause": {
       name: "cron.pause",
-      description: "Pause a scheduled task by ID",
+      description: "Pause a scheduled task by ID. Use to temporarily disable automation without deleting it.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           task_id: { type: "string", description: "The task ID to pause" },
         },
-        required: ["agent_id", "task_id"],
+        required: ["task_id"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
 
     "cron.resume": {
       name: "cron.resume",
-      description: "Resume a paused scheduled task by ID",
+      description: "Resume a previously paused scheduled task by ID. Use to reactivate paused automation.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           task_id: { type: "string", description: "The task ID to resume" },
         },
-        required: ["agent_id", "task_id"],
+        required: ["task_id"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
 
     "cron.delete": {
       name: "cron.delete",
-      description: "Delete a scheduled task permanently by ID",
+      description: "Delete a scheduled task permanently by ID. Use when a task is no longer needed.",
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID" },
           task_id: { type: "string", description: "The task ID to delete" },
         },
-        required: ["agent_id", "task_id"],
+        required: ["task_id"],
+        additionalProperties: false,
       },
       permissionTier: "write",
     },
 
     "cron.run": {
       name: "cron.run",
-      description: "Trigger an event-based task immediately. Use with event_name to fire all tasks listening for that event.",
+      description: "Trigger an event-based task immediately by event name. Use to fire all tasks listening for a specific event.",
       parameters: {
         type: "object",
         properties: {
           event_name: { type: "string", description: "The event name to trigger (e.g., 'user-login', 'daily-briefing')" },
         },
         required: ["event_name"],
+        additionalProperties: false,
       },
       permissionTier: "write",
+    },
+
+    // Filesystem tools
+    "fs.read": {
+      name: "fs.read",
+      description: "Read the contents of a file in your workspace directory. Returns the full file content.",
+      parameters: {
+        type: "object",
+        properties: {
+          file_path: { type: "string", description: "Path to the file, relative to your workspace directory." },
+          agent_id: { type: "string", description: "Your agent ID (auto-injected by the runtime)." },
+        },
+        required: ["file_path"],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "fs.write": {
+      name: "fs.write",
+      description: "Write content to a file in your workspace directory. Creates the file if it doesn't exist. Use append=true to add to the end of an existing file.",
+      parameters: {
+        type: "object",
+        properties: {
+          file_path: { type: "string", description: "Path to the file, relative to your workspace directory." },
+          content: { type: "string", description: "Content to write to the file." },
+          agent_id: { type: "string", description: "Your agent ID (auto-injected by the runtime)." },
+          append: { type: "boolean", description: "If true, append to the end of the file. Default: false (overwrite)." },
+        },
+        required: ["file_path", "content"],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "fs.edit": {
+      name: "fs.edit",
+      description: "Make a precise edit to a file in your workspace. Replaces old_string with new_string. The old_string must match the file content exactly.",
+      parameters: {
+        type: "object",
+        properties: {
+          file_path: { type: "string", description: "Path to the file, relative to your workspace directory." },
+          old_string: { type: "string", description: "The exact text to replace." },
+          new_string: { type: "string", description: "The new text to insert." },
+          agent_id: { type: "string", description: "Your agent ID (auto-injected by the runtime)." },
+        },
+        required: ["file_path", "old_string", "new_string"],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "bash": {
+      name: "bash",
+      description: "Execute a shell command in your workspace directory. The command runs with your workspace as the working directory.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The command to execute (e.g., 'ls', 'git', 'node')." },
+          args: { type: "array", items: { type: "string" }, description: "Arguments to pass to the command." },
+          agent_id: { type: "string", description: "Your agent ID (auto-injected by the runtime)." },
+          cwd: { type: "string", description: "Working directory (relative to workspace, default: workspace root)." },
+          timeout_ms: { type: "number", description: "Timeout in milliseconds (default: 30000)." },
+        },
+        required: ["command"],
+        additionalProperties: false,
+      },
+      permissionTier: "danger",
     },
   };
 
@@ -866,6 +955,8 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     "cron.status", "cron.list", "cron.create", "cron.pause", "cron.resume", "cron.delete", "cron.run",
     "tool.search",
     "boardmeeting.run", "boardmeeting.status",
+    // Filesystem tools
+    "fs.read", "fs.write", "fs.edit", "bash",
   ]);
 }
 

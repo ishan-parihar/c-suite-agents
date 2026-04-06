@@ -6,6 +6,10 @@ import { logger } from "../logger.js";
 import { createImageAnalyzeTool } from "../runtime/tools/image-analyze.js";
 import { createImageGenerateTool } from "../runtime/tools/image-generate.js";
 import { createTtsSynthesizeTool } from "../runtime/tools/tts-synthesize.js";
+import { createFsReadTool } from "../runtime/tools/fs-read.js";
+import { createFsWriteTool } from "../runtime/tools/fs-write.js";
+import { createFsEditTool } from "../runtime/tools/fs-edit.js";
+import { createBashTool } from "../runtime/tools/bash-exec.js";
 import { Memory } from "../memory/lancedb.js";
 import { getMemoryFacade } from "../memory/index.js";
 import type { MemoryFacade } from "../memory/index.js";
@@ -86,7 +90,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Agent created: ${agentId} (${args.name}${args.role ? ` — ${args.role}` : ""})`);
     };
     sessionToolImpls["agent.create"] = agentCreate;
-    sessionServer.registerTool("agent.create", { description: "Create new agent with Kanban board and memory", inputSchema: z.object({ id: z.string().optional(), name: z.string(), role: z.string().optional(), model: z.string().optional(), tools: z.array(z.string()).optional() }) }, agentCreate);
+    sessionServer.registerTool("agent.create", { description: "Create a new agent with dedicated Kanban board and memory. Use when the org needs a new permanent or temporary agent.", inputSchema: z.object({ id: z.string().optional().describe("Agent ID (auto-generated if omitted)"), name: z.string().describe("Agent display name"), role: z.string().optional().describe("Agent role or title"), model: z.string().optional().describe("LLM model to use"), tools: z.array(z.string()).optional().describe("List of tool names available to this agent") }) }, agentCreate);
 
     const agentSpawn = async (args: any): Promise<ToolResult> => {
       const subAgentId = uuidv4();
@@ -96,7 +100,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Sub-agent spawned: ${subAgentId}\nTask: ${args.task}\nParent: ${args.agent_id}`);
     };
     sessionToolImpls["agent.spawn"] = agentSpawn;
-    sessionServer.registerTool("agent.spawn", { description: "Spawn sub-agent with dedicated board and memory", inputSchema: z.object({ agent_id: z.string().describe("Parent agent ID"), task: z.string().describe("Task description"), role: z.string().optional(), project_dir: z.string().optional() }) }, agentSpawn);
+    sessionServer.registerTool("agent.spawn", { description: "Spawn a sub-agent for a specific task with dedicated board and memory. Use for isolated work that shouldn't affect the parent agent's context.", inputSchema: z.object({ agent_id: z.string().describe("Parent agent ID"), task: z.string().describe("Task description"), role: z.string().optional().describe("Sub-agent role"), project_dir: z.string().optional().describe("Project directory context") }) }, agentSpawn);
 
     const agentList = async (): Promise<ToolResult> => {
       const staffIds = getCoreStaffIds();
@@ -108,7 +112,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["agent.list"] = agentList;
-    sessionServer.registerTool("agent.list", { description: "List all active agents", inputSchema: z.object({}) }, agentList);
+    sessionServer.registerTool("agent.list", { description: "List all active agents with their roles and avatars. Quick reference of the current team.", inputSchema: z.object({}) }, agentList);
 
     // === AGENT COMMUNICATION TOOLS ===
     const agentHandoff = async (args: any): Promise<ToolResult> => {
@@ -127,7 +131,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       }
     };
     sessionToolImpls["agent.handoff"] = agentHandoff;
-    sessionServer.registerTool("agent.handoff", { description: "Handoff conversation to another agent (they take over)", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID"), to_agent: z.string().describe("Agent to handoff to"), context: z.string().describe("Conversation context and summary"), conversation_id: z.string().optional().describe("Optional conversation/thread ID") }) }, agentHandoff);
+    sessionServer.registerTool("agent.handoff", { description: "Hand off a conversation to another agent — they take over with full context. Use when a topic is outside your domain.", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID"), to_agent: z.string().describe("Agent to handoff to"), context: z.string().describe("Conversation context and summary"), conversation_id: z.string().optional().describe("Optional conversation/thread ID") }) }, agentHandoff);
 
     const agentMeeting = async (args: any): Promise<ToolResult> => {
       const { from_agent, participants, topic, urgency = "normal" } = withCallerIdentity(args);
@@ -152,7 +156,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       }
     };
     sessionToolImpls["agent.meeting"] = agentMeeting;
-    sessionServer.registerTool("agent.meeting", { description: "Call a board meeting with multiple agents", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID (caller)"), participants: z.array(z.string()).describe("List of agent IDs to invite"), topic: z.string().describe("Meeting topic"), urgency: z.enum(["normal", "urgent"]).optional().describe("Meeting urgency") }) }, agentMeeting);
+    sessionServer.registerTool("agent.meeting", { description: "Call a board meeting with multiple agents. Use for decisions requiring group consensus or cross-functional coordination.", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID (caller)"), participants: z.array(z.string()).describe("List of agent IDs to invite"), topic: z.string().describe("Meeting topic"), urgency: z.enum(["normal", "urgent"]).optional().describe("Meeting urgency") }) }, agentMeeting);
 
     // === CONTEXT & RECALL TOOLS ===
     const agentWake = async (args: any): Promise<ToolResult> => {
@@ -161,7 +165,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(formatted);
     };
     sessionToolImpls["agent.wake"] = agentWake;
-    sessionServer.registerTool("agent.wake", { description: "Get wake-up context for agent (inject on activation)", inputSchema: z.object({ agent_id: z.string() }) }, agentWake);
+    sessionServer.registerTool("agent.wake", { description: "Get wake-up context for an agent — recent activity, pending items, state summary. Inject on activation to restore context.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to get wake context for") }) }, agentWake);
 
     const memoryRecall = async (args: any): Promise<ToolResult> => {
       const result = await contextManager.recall({ agent_id: args.agent_id, query: args.query, top_k: args.top_k || 10 });
@@ -174,7 +178,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["memory.recall"] = memoryRecall;
-    sessionServer.registerTool("memory.recall", { description: "Search across messages, tasks, and memory", inputSchema: z.object({ agent_id: z.string(), query: z.string(), top_k: z.number().optional() }) }, memoryRecall);
+    sessionServer.registerTool("memory.recall", { description: "Search across messages, tasks, and memory for an agent. Use to find past conversations, completed tasks, or stored memories.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to search within"), query: z.string().describe("Search query"), top_k: z.number().optional().describe("Max results (default: 10)") }) }, memoryRecall);
 
     const messageGetThread = async (args: any): Promise<ToolResult> => {
       const thread = await contextManager.getFullThread(args.thread_id);
@@ -190,7 +194,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["message.getThread"] = messageGetThread;
-    sessionServer.registerTool("message.getThread", { description: "Read full message thread (like checking phone)", inputSchema: z.object({ thread_id: z.string() }) }, messageGetThread);
+    sessionServer.registerTool("message.getThread", { description: "Read full message thread with all messages in chronological order. Use to review a conversation.", inputSchema: z.object({ thread_id: z.string().describe("Thread ID to read") }) }, messageGetThread);
 
     const taskGet = async (args: any): Promise<ToolResult> => {
       const card = await contextManager.getFullTask(args.card_id);
@@ -199,19 +203,19 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.filter(Boolean).join("\n"));
     };
     sessionToolImpls["task.get"] = taskGet;
-    sessionServer.registerTool("task.get", { description: "Get full task details", inputSchema: z.object({ card_id: z.string() }) }, taskGet);
+    sessionServer.registerTool("task.get", { description: "Get full details of a task card — status, priority, description, tags. Use to review task context.", inputSchema: z.object({ card_id: z.string().describe("Card/task ID") }) }, taskGet);
 
     // === ORGANIZATION TOOLS ===
     const orgChart = async (): Promise<ToolResult> => ok(getOrgChart());
     sessionToolImpls["org.chart"] = orgChart;
-    sessionServer.registerTool("org.chart", { description: "Show organization chart", inputSchema: z.object({}) }, orgChart);
+    sessionServer.registerTool("org.chart", { description: "Display the full organization chart showing hierarchy and reporting structure.", inputSchema: z.object({}) }, orgChart);
 
     const staffList = async (): Promise<ToolResult> => {
       const staff = getCoreStaffIds().map(id => { const s = getStaffById(id); return s ? `${s.avatar} ${s.name} — ${s.title}` : ""; }).filter(Boolean).join("\n");
       return ok(`**Core Staff:**\n\n${staff}`);
     };
     sessionToolImpls["staff.list"] = staffList;
-    sessionServer.registerTool("staff.list", { description: "List core staff", inputSchema: z.object({}) }, staffList);
+    sessionServer.registerTool("staff.list", { description: "List core staff members with their roles. Quick reference of the C-suite team.", inputSchema: z.object({}) }, staffList);
 
     const staffGet = async (args: any): Promise<ToolResult> => {
       const staff = getStaffById(args.id);
@@ -219,7 +223,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`${staff.avatar} **${staff.name}** — ${staff.title}\n\nBoard Seat: ${staff.boardSeat ? "Yes" : "No"}\nReports To: ${staff.reportsTo || "CEO"}\n\nDatabases:\n${staff.databases.join("\n")}\n\nKanban Columns:\n${staff.kanbanColumns.join(" → ")}`);
     };
     sessionToolImpls["staff.get"] = staffGet;
-    sessionServer.registerTool("staff.get", { description: "Get staff details", inputSchema: z.object({ id: z.string() }) }, staffGet);
+    sessionServer.registerTool("staff.get", { description: "Get detailed info about a staff member — role, databases, Kanban columns, reporting.", inputSchema: z.object({ id: z.string().describe("Staff/agent ID") }) }, staffGet);
 
     // === MEMORY TOOLS ===
     const memoryUpsert = async (args: any): Promise<ToolResult> => {
@@ -251,7 +255,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(cardId);
     };
     sessionToolImpls["board.addCard"] = boardAddCard;
-    sessionServer.registerTool("board.addCard", { description: "Add Kanban task", inputSchema: z.object({ agent_id: z.string(), title: z.string(), description: z.string().optional(), priority: z.string().optional(), due: z.string().optional(), tags: z.array(z.string()).optional(), project_id: z.string().optional() }) }, boardAddCard);
+    sessionServer.registerTool("board.addCard", { description: "Create a new task card on your Kanban board. Use when a new task is identified during work or from conversations.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), title: z.string().describe("Task title"), description: z.string().optional().describe("Task description"), priority: z.string().optional().describe("Priority P1-P4 (default: P3)"), due: z.string().optional().describe("Due date (ISO string)"), tags: z.array(z.string()).optional().describe("Tags for categorization"), project_id: z.string().optional().describe("Associated project ID") }) }, boardAddCard);
 
     const boardMoveCard = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -266,7 +270,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok("ok");
     };
     sessionToolImpls["board.moveCard"] = boardMoveCard;
-    sessionServer.registerTool("board.moveCard", { description: "Move card", inputSchema: z.object({ card_id: z.string(), status: z.string().describe("Target column name (must match agent's board columns)") }) }, boardMoveCard);
+    sessionServer.registerTool("board.moveCard", { description: "Move a card to a different column. Use when task status changes.", inputSchema: z.object({ card_id: z.string().describe("Card ID to move"), status: z.string().describe("Target column name (must match agent's board columns)") }) }, boardMoveCard);
 
     const boardGet = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -281,7 +285,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["board.get"] = boardGet;
-    sessionServer.registerTool("board.get", { description: "Get Kanban board", inputSchema: z.object({ agent_id: z.string() }) }, boardGet);
+    sessionServer.registerTool("board.get", { description: "Review your Kanban board — shows all cards grouped by column. Use to check workload and progress.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID") }) }, boardGet);
 
     const boardViewReports = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -300,7 +304,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["board.viewReports"] = boardViewReports;
-    sessionServer.registerTool("board.viewReports", { description: "Manager view of all reports' boards", inputSchema: z.object({ manager_id: z.string() }) }, boardViewReports);
+    sessionServer.registerTool("board.viewReports", { description: "Manager view of all direct reports' Kanban boards. Shows card counts and status summaries.", inputSchema: z.object({ manager_id: z.string().describe("Manager agent ID") }) }, boardViewReports);
 
     const boardReassign = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -308,7 +312,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Card reassigned from ${resolved.from_agent_id} to ${resolved.to_agent_id}`);
     };
     sessionToolImpls["board.reassign"] = boardReassign;
-    sessionServer.registerTool("board.reassign", { description: "Manager reassign card between reports", inputSchema: z.object({ card_id: z.string(), from_agent_id: z.string(), to_agent_id: z.string(), manager_id: z.string().describe("Manager ID performing the reassignment") }) }, boardReassign);
+    sessionServer.registerTool("board.reassign", { description: "Reassign a card from one report to another. Requires manager authority.", inputSchema: z.object({ card_id: z.string().describe("Card ID to reassign"), from_agent_id: z.string().describe("Current assignee agent ID"), to_agent_id: z.string().describe("New assignee agent ID"), manager_id: z.string().describe("Manager ID performing the reassignment") }) }, boardReassign);
 
     const boardEscalate = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -316,7 +320,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Card escalated to ${resolved.to_manager_id}: ${resolved.reason}`);
     };
     sessionToolImpls["board.escalate"] = boardEscalate;
-    sessionServer.registerTool("board.escalate", { description: "Escalate blocked card to manager", inputSchema: z.object({ card_id: z.string(), to_manager_id: z.string(), reason: z.string() }) }, boardEscalate);
+    sessionServer.registerTool("board.escalate", { description: "Escalate a blocked card to your manager with a reason.", inputSchema: z.object({ card_id: z.string().describe("Card ID to escalate"), to_manager_id: z.string().describe("Manager agent ID to escalate to"), reason: z.string().describe("Why this card is blocked or needs escalation") }) }, boardEscalate);
 
     // === MESSAGING TOOLS ===
     const messageSend = async (args: any): Promise<ToolResult> => {
@@ -325,7 +329,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Message sent to ${resolved.to}. Thread ID: ${thread.id}`);
     };
     sessionToolImpls["message.send"] = messageSend;
-    sessionServer.registerTool("message.send", { description: "Send message to another agent", inputSchema: z.object({ from: z.string(), to: z.string(), content: z.string(), priority: z.enum(["P1", "P2", "P3", "P4"]).optional(), requires_response: z.boolean().optional(), subject: z.string().optional(), tags: z.array(z.string()).optional() }) }, messageSend);
+    sessionServer.registerTool("message.send", { description: "Send an async message to another agent. Use for requests, updates, or questions.", inputSchema: z.object({ from: z.string().describe("Your agent ID"), to: z.string().describe("Recipient agent ID"), content: z.string().describe("Message content"), priority: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("Priority level (default: P3)"), requires_response: z.boolean().optional().describe("Whether a response is expected"), subject: z.string().optional().describe("Thread subject line"), tags: z.array(z.string()).optional().describe("Tags for categorization") }) }, messageSend);
 
     const messageReply = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -333,7 +337,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Reply sent. Thread updated: ${thread.id}`);
     };
     sessionToolImpls["message.reply"] = messageReply;
-    sessionServer.registerTool("message.reply", { description: "Reply to message thread", inputSchema: z.object({ thread_id: z.string(), from: z.string(), content: z.string(), requires_response: z.boolean().optional(), tags: z.array(z.string()).optional() }) }, messageReply);
+    sessionServer.registerTool("message.reply", { description: "Reply to an existing message thread. Use to continue a conversation.", inputSchema: z.object({ thread_id: z.string().describe("Thread ID to reply to"), from: z.string().describe("Your agent ID"), content: z.string().describe("Reply content"), requires_response: z.boolean().optional().describe("Whether a response is expected"), tags: z.array(z.string()).optional().describe("Tags for categorization") }) }, messageReply);
 
     const messageSearch = async (args: any): Promise<ToolResult> => {
       const results = await messaging.searchMessages({ agent_id: args.agent_id, query: args.query, top_k: args.top_k || 10, from_agent: args.from_agent, priority: args.priority, date_from: args.date_from, date_to: args.date_to });
@@ -342,7 +346,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["message.search"] = messageSearch;
-    sessionServer.registerTool("message.search", { description: "Search message history with semantic search", inputSchema: z.object({ agent_id: z.string(), query: z.string(), top_k: z.number().optional(), from_agent: z.string().optional(), priority: z.enum(["P1", "P2", "P3", "P4"]).optional(), date_from: z.number().optional(), date_to: z.number().optional() }) }, messageSearch);
+    sessionServer.registerTool("message.search", { description: "Search message history with semantic search. Use to find past conversations or decisions.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to search within"), query: z.string().describe("Search query"), top_k: z.number().optional().describe("Max results (default: 10)"), from_agent: z.string().optional().describe("Filter by sender agent ID"), priority: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("Filter by priority"), date_from: z.number().optional().describe("Start timestamp (ms)"), date_to: z.number().optional().describe("End timestamp (ms)") }) }, messageSearch);
 
     const messageGetThreads = async (args: any): Promise<ToolResult> => {
       const threads = await messaging.getThreadsForAgent(args.agent_id, args.limit || 20);
@@ -351,14 +355,14 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["message.getThreads"] = messageGetThreads;
-    sessionServer.registerTool("message.getThreads", { description: "Get all threads for agent", inputSchema: z.object({ agent_id: z.string(), limit: z.number().optional() }) }, messageGetThreads);
+    sessionServer.registerTool("message.getThreads", { description: "List all active message threads for your agent.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), limit: z.number().optional().describe("Max threads to return (default: 20)") }) }, messageGetThreads);
 
     const messageMarkRead = async (args: any): Promise<ToolResult> => {
       await messaging.markAsRead(args.agent_id, args.thread_id);
       return ok("Messages marked as read");
     };
     sessionToolImpls["message.markRead"] = messageMarkRead;
-    sessionServer.registerTool("message.markRead", { description: "Mark messages as read", inputSchema: z.object({ agent_id: z.string(), thread_id: z.string().optional() }) }, messageMarkRead);
+    sessionServer.registerTool("message.markRead", { description: "Mark messages or a thread as read. Use after reviewing to clear from inbox.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), thread_id: z.string().optional().describe("Specific thread ID (omit to mark all as read)") }) }, messageMarkRead);
 
     const messageEscalate = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -366,7 +370,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Escalated to ${resolved.to}. Escalation ID: ${escalation.id}`);
     };
     sessionToolImpls["message.escalate"] = messageEscalate;
-    sessionServer.registerTool("message.escalate", { description: "Escalate thread to superior", inputSchema: z.object({ thread_id: z.string(), from: z.string(), to: z.string(), reason: z.string() }) }, messageEscalate);
+    sessionServer.registerTool("message.escalate", { description: "Escalate a message thread to a superior agent.", inputSchema: z.object({ thread_id: z.string().describe("Thread ID to escalate"), from: z.string().describe("Your agent ID"), to: z.string().describe("Superior agent ID to escalate to"), reason: z.string().describe("Reason for escalation") }) }, messageEscalate);
 
     const agentInbox = async (args: any): Promise<ToolResult> => {
       const { agent_id, include_read = false, include_content = false } = args;
@@ -408,7 +412,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["agent.inbox"] = agentInbox;
-    sessionServer.registerTool("agent.inbox", { description: "View agent's message inbox - unread messages, pending responses, and active threads", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to check inbox for"), include_read: z.boolean().optional().default(false), include_content: z.boolean().optional().default(false).describe("When true, return full message content instead of previews") }) }, agentInbox);
+    sessionServer.registerTool("agent.inbox", { description: "View your message inbox summary — unread count, pending responses, active threads, escalations.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to check inbox for"), include_read: z.boolean().optional().default(false).describe("Include read messages in results"), include_content: z.boolean().optional().default(false).describe("When true, return full message content instead of previews") }) }, agentInbox);
 
     const messageGetUnread = async (args: any): Promise<ToolResult> => {
       const { agent_id, limit = 20 } = args;
@@ -427,7 +431,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Meeting proposed: ${proposal.id}\nVotes needed: ${proposal.required_votes}/${getCoreStaffIds().length}\nDeadline: ${new Date(proposal.voting_deadline).toISOString()}`);
     };
     sessionToolImpls["meeting.propose"] = meetingPropose;
-    sessionServer.registerTool("meeting.propose", { description: "Propose board meeting", inputSchema: z.object({ proposer: z.string(), title: z.string(), reason: z.string(), urgency: z.enum(["P1", "P2", "P3", "P4"]).optional() }) }, meetingPropose);
+    sessionServer.registerTool("meeting.propose", { description: "Propose a new board meeting with title, reason, and urgency. Triggers voting process.", inputSchema: z.object({ proposer: z.string().describe("Agent ID proposing the meeting"), title: z.string().describe("Meeting title"), reason: z.string().describe("Why this meeting is needed"), urgency: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("Meeting urgency (default: P3)") }) }, meetingPropose);
 
     const meetingVote = async (args: any): Promise<ToolResult> => {
       const result = await meetings.vote({ meeting_id: args.meeting_id, voter: args.voter, vote: args.vote });
@@ -435,7 +439,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Vote recorded. Current: ${yesVotes}/${result.required_votes} yes votes. Status: ${result.status}`);
     };
     sessionToolImpls["meeting.vote"] = meetingVote;
-    sessionServer.registerTool("meeting.vote", { description: "Vote on meeting proposal", inputSchema: z.object({ meeting_id: z.string(), voter: z.string(), vote: z.enum(["yes", "no", "abstain"]) }) }, meetingVote);
+    sessionServer.registerTool("meeting.vote", { description: "Vote yes/no/abstain on a meeting proposal. Required for quorum.", inputSchema: z.object({ meeting_id: z.string().describe("Meeting proposal ID"), voter: z.string().describe("Your agent ID"), vote: z.enum(["yes", "no", "abstain"]).describe("Your vote") }) }, meetingVote);
 
     const meetingGet = async (args: any): Promise<ToolResult> => {
       const proposal = await meetings.getProposal(args.meeting_id);
@@ -445,14 +449,14 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.filter(Boolean).join("\n"));
     };
     sessionToolImpls["meeting.get"] = meetingGet;
-    sessionServer.registerTool("meeting.get", { description: "Get meeting proposal", inputSchema: z.object({ meeting_id: z.string() }) }, meetingGet);
+    sessionServer.registerTool("meeting.get", { description: "Get details of a meeting proposal including votes, status, and deadline.", inputSchema: z.object({ meeting_id: z.string().describe("Meeting proposal ID") }) }, meetingGet);
 
     const meetingRecordMinutes = async (args: any): Promise<ToolResult> => {
       const minutes = await meetings.recordMinutes({ meeting_id: args.meeting_id, decisions: args.decisions, action_items: args.action_items, attendees: args.attendees, recorded_by: args.recorded_by });
       return ok(`Minutes recorded. ${minutes.decisions.length} decisions, ${minutes.action_items.length} action items.`);
     };
     sessionToolImpls["meeting.recordMinutes"] = meetingRecordMinutes;
-    sessionServer.registerTool("meeting.recordMinutes", { description: "Record meeting minutes", inputSchema: z.object({ meeting_id: z.string(), decisions: z.array(z.string()), action_items: z.array(z.object({ description: z.string(), assignee: z.string(), due_date: z.string().optional() })), attendees: z.array(z.string()), recorded_by: z.string() }) }, meetingRecordMinutes);
+    sessionServer.registerTool("meeting.recordMinutes", { description: "Record meeting outcomes — decisions, action items with assignees/due dates, and attendees.", inputSchema: z.object({ meeting_id: z.string().describe("Meeting ID"), decisions: z.array(z.string()).describe("List of decisions made"), action_items: z.array(z.object({ description: z.string().describe("Action item description"), assignee: z.string().describe("Responsible agent ID"), due_date: z.string().optional().describe("Due date (ISO string)") })).describe("Action items from the meeting"), attendees: z.array(z.string()).describe("Agent IDs who attended"), recorded_by: z.string().describe("Agent ID recording the minutes") }) }, meetingRecordMinutes);
 
     // === HIRING & DELEGATION TOOLS ===
     const hireCreate = async (args: any): Promise<ToolResult> => {
@@ -460,42 +464,42 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Hired: ${contract.role} (ID: ${contract.agent_id})\nReports to: ${contract.reports_to}`);
     };
     sessionToolImpls["hire.create"] = hireCreate;
-    sessionServer.registerTool("hire.create", { description: "Hire auxiliary staff", inputSchema: z.object({ role: z.string(), reports_to: z.string(), budget: z.number().optional(), tasks: z.array(z.string()) }) }, hireCreate);
+    sessionServer.registerTool("hire.create", { description: "Hire auxiliary staff with role, manager, budget, and task list.", inputSchema: z.object({ role: z.string().describe("Staff role/title"), reports_to: z.string().describe("Manager agent ID"), budget: z.number().optional().describe("Budget allocation"), tasks: z.array(z.string()).describe("List of tasks/responsibilities") }) }, hireCreate);
 
     const hireFire = async (args: any): Promise<ToolResult> => {
       const contract = await hiring.fire({ agent_id: args.agent_id, reason: args.reason });
       return ok(`Released: ${contract.role}\nReason: ${contract.termination_reason}`);
     };
     sessionToolImpls["hire.fire"] = hireFire;
-    sessionServer.registerTool("hire.fire", { description: "Release auxiliary staff", inputSchema: z.object({ agent_id: z.string(), reason: z.string() }) }, hireFire);
+    sessionServer.registerTool("hire.fire", { description: "Release auxiliary staff with a reason.", inputSchema: z.object({ agent_id: z.string().describe("Staff agent ID to release"), reason: z.string().describe("Reason for termination") }) }, hireFire);
 
     const delegateTo = async (args: any): Promise<ToolResult> => {
       const delegation = await hiring.delegate({ from: args.from, to: args.to, task: args.task, description: args.description, priority: args.priority || "P3", deadline: args.deadline });
       return ok(`Delegated: ${delegation.task}\nTo: ${delegation.to}\nID: ${delegation.id}`);
     };
     sessionToolImpls["delegate.to"] = delegateTo;
-    sessionServer.registerTool("delegate.to", { description: "Delegate task to report", inputSchema: z.object({ from: z.string(), to: z.string(), task: z.string(), description: z.string(), priority: z.enum(["P1", "P2", "P3", "P4"]).optional(), deadline: z.string().optional() }) }, delegateTo);
+    sessionServer.registerTool("delegate.to", { description: "Delegate a task to a direct report with description, priority, and optional deadline.", inputSchema: z.object({ from: z.string().describe("Your agent ID (manager)"), to: z.string().describe("Report agent ID"), task: z.string().describe("Task name/title"), description: z.string().describe("Detailed task description"), priority: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("Priority level (default: P3)"), deadline: z.string().optional().describe("Deadline (ISO string)") }) }, delegateTo);
 
     const delegateAccept = async (args: any): Promise<ToolResult> => {
       const delegation = await hiring.acceptDelegation(args.delegation_id);
       return ok(`Delegation accepted: ${delegation.task}`);
     };
     sessionToolImpls["delegate.accept"] = delegateAccept;
-    sessionServer.registerTool("delegate.accept", { description: "Accept delegated task", inputSchema: z.object({ delegation_id: z.string() }) }, delegateAccept);
+    sessionServer.registerTool("delegate.accept", { description: "Accept a delegated task from your manager.", inputSchema: z.object({ delegation_id: z.string().describe("Delegation ID to accept") }) }, delegateAccept);
 
     const delegateReject = async (args: any): Promise<ToolResult> => {
       const delegation = await hiring.rejectDelegation(args.delegation_id, args.reason);
       return ok(`Delegation rejected: ${delegation.task}\nReason: ${args.reason}`);
     };
     sessionToolImpls["delegate.reject"] = delegateReject;
-    sessionServer.registerTool("delegate.reject", { description: "Reject delegated task", inputSchema: z.object({ delegation_id: z.string(), reason: z.string() }) }, delegateReject);
+    sessionServer.registerTool("delegate.reject", { description: "Reject a delegated task with a reason.", inputSchema: z.object({ delegation_id: z.string().describe("Delegation ID to reject"), reason: z.string().describe("Why you're rejecting this task") }) }, delegateReject);
 
     const delegateUpdate = async (args: any): Promise<ToolResult> => {
       const delegation = await hiring.updateStatus(args.delegation_id, args.status);
       return ok(`Delegation status: ${delegation.status}`);
     };
     sessionToolImpls["delegate.update"] = delegateUpdate;
-    sessionServer.registerTool("delegate.update", { description: "Update delegation status", inputSchema: z.object({ delegation_id: z.string(), status: z.enum(["pending", "accepted", "in_progress", "blocked", "completed", "rejected"]) }) }, delegateUpdate);
+    sessionServer.registerTool("delegate.update", { description: "Update a delegation's status to track progress.", inputSchema: z.object({ delegation_id: z.string().describe("Delegation ID to update"), status: z.enum(["pending", "accepted", "in_progress", "blocked", "completed", "rejected"]).describe("New status") }) }, delegateUpdate);
 
     const delegateGet = async (args: any): Promise<ToolResult> => {
       const delegation = await hiring.getDelegation(args.delegation_id);
@@ -504,7 +508,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.filter(Boolean).join("\n"));
     };
     sessionToolImpls["delegate.get"] = delegateGet;
-    sessionServer.registerTool("delegate.get", { description: "Get delegation details", inputSchema: z.object({ delegation_id: z.string() }) }, delegateGet);
+    sessionServer.registerTool("delegate.get", { description: "Get full details of a delegation.", inputSchema: z.object({ delegation_id: z.string().describe("Delegation ID") }) }, delegateGet);
 
     const hireGetTeam = async (args: any): Promise<ToolResult> => {
       const contracts = await hiring.getContractsForManager(args.manager_id);
@@ -514,7 +518,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["hire.getTeam"] = hireGetTeam;
-    sessionServer.registerTool("hire.getTeam", { description: "Get manager's team", inputSchema: z.object({ manager_id: z.string() }) }, hireGetTeam);
+    sessionServer.registerTool("hire.getTeam", { description: "Get all auxiliary staff reporting to a manager with their tasks.", inputSchema: z.object({ manager_id: z.string().describe("Manager agent ID") }) }, hireGetTeam);
 
     // === TEAM HEALTH ===
     const agentStatus = async (args: { agent_id: string }): Promise<ToolResult> => {
@@ -537,7 +541,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["agent.status"] = agentStatus;
-    sessionServer.registerTool("agent.status", { description: "Get agent health and workload status", inputSchema: z.object({ agent_id: z.string() }) }, agentStatus);
+    sessionServer.registerTool("agent.status", { description: "Get agent health and workload status — heartbeat recency, pending messages, failure counts.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to check") }) }, agentStatus);
 
     const orgHealth = async (): Promise<ToolResult> => {
       const { getAgentHealthRegistry } = await import("../scheduler/agent-health.js");
@@ -555,7 +559,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["org.health"] = orgHealth;
-    sessionServer.registerTool("org.health", { description: "Get team-wide health overview with silent agent detection" }, orgHealth);
+    sessionServer.registerTool("org.health", { description: "Get team-wide health overview with silent agent detection. Shows status for all agents at a glance.", inputSchema: z.object({}) }, orgHealth);
 
     // === BOARD MEETING TOOLS ===
     const boardmeetingRun = async (args: any): Promise<ToolResult> => {
@@ -575,7 +579,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     };
     sessionToolImpls["boardmeeting.run"] = boardmeetingRun;
     sessionServer.registerTool("boardmeeting.run", {
-      description: "Trigger an immediate board meeting. CEO-only tool.",
+      description: "Trigger an immediate board meeting across all agents. CEO-only tool — restricted to ceo-strategic.",
       inputSchema: z.object({ objective: z.string().optional().describe("Optional meeting objective/focus") })
     }, boardmeetingRun);
 
@@ -596,14 +600,14 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     };
     sessionToolImpls["boardmeeting.status"] = boardmeetingStatus;
     sessionServer.registerTool("boardmeeting.status", {
-      description: "Get current board meeting state if active",
+      description: "Get current board meeting state if active — shows ID, turns, objective, and timestamps.",
       inputSchema: z.object({})
     }, boardmeetingStatus);
 
     // === HEARTBEAT & NOTIFY ===
     const heartbeatRun = async (): Promise<ToolResult> => { logger.info("Heartbeat"); return ok("Audit started"); };
     sessionToolImpls["heartbeat.runNow"] = heartbeatRun;
-    sessionServer.registerTool("heartbeat.runNow", { description: "Trigger audit", inputSchema: z.object({}) }, heartbeatRun);
+    sessionServer.registerTool("heartbeat.runNow", { description: "Trigger an immediate system health audit.", inputSchema: z.object({}) }, heartbeatRun);
 
     const notifyTg = async (args: any): Promise<ToolResult> => {
       const { text, priority = "info" } = args;
@@ -612,7 +616,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       else { logger.warn({ text: text.substring(0, 50) }, "Failed to send Telegram notification"); return ok(`⚠️ Telegram not configured - notification logged only`); }
     };
     sessionToolImpls["notify.telegram"] = notifyTg;
-    sessionServer.registerTool("notify.telegram", { description: "Send notification to user via Telegram. Only use for critical, time-sensitive items the user must know NOW.", inputSchema: z.object({ text: z.string().describe("Notification message"), priority: z.enum(["info", "warning", "urgent"]).optional().default("info") }) }, notifyTg);
+    sessionServer.registerTool("notify.telegram", { description: "Send a notification to the user (Ishan) via Telegram. ONLY for critical, time-sensitive items.", inputSchema: z.object({ text: z.string().describe("Notification message"), priority: z.enum(["info", "warning", "urgent"]).optional().default("info").describe("Notification urgency level") }) }, notifyTg);
 
     // === REPORTS & SESSIONS TOOLS ===
     const reportsSave = async (args: any): Promise<ToolResult> => {
@@ -621,7 +625,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Report saved: ${report.id}`);
     };
     sessionToolImpls["reports.save"] = reportsSave;
-    sessionServer.registerTool("reports.save", { description: "Save a report (storage-only)", inputSchema: z.object({ agent_id: z.string(), period: z.string(), summary: z.string(), metrics: z.record(z.unknown()).optional(), actions: z.array(z.object({ description: z.string(), assignee: z.string().optional(), due: z.string().optional() })).optional() }) }, reportsSave);
+    sessionServer.registerTool("reports.save", { description: "Save a periodic report with summary, metrics, and action items.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), period: z.string().describe("Report period (e.g., '2024-W01')"), summary: z.string().describe("Report summary text"), metrics: z.record(z.unknown()).optional().describe("Key-value metrics data"), actions: z.array(z.object({ description: z.string().describe("Action item description"), assignee: z.string().optional().describe("Responsible agent ID"), due: z.string().optional().describe("Due date (ISO string)") })).optional().describe("Follow-up action items") }) }, reportsSave);
 
     const reportsGetLatest = async (args: any): Promise<ToolResult> => {
       const rs = await getReportsAndSessions();
@@ -629,7 +633,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       try { return ok(JSON.stringify(reports, null, 2)); } catch { return ok("[]"); }
     };
     sessionToolImpls["reports.getLatest"] = reportsGetLatest;
-    sessionServer.registerTool("reports.getLatest", { description: "Get latest reports for agent", inputSchema: z.object({ agent_id: z.string(), limit: z.number().optional() }) }, reportsGetLatest);
+    sessionServer.registerTool("reports.getLatest", { description: "Get the most recent reports for an agent.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID whose reports to fetch"), limit: z.number().optional().describe("Max reports to return (default: 5)") }) }, reportsGetLatest);
 
     const sessionsCreate = async (args: any): Promise<ToolResult> => {
       const rs = await getReportsAndSessions();
@@ -637,7 +641,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(session.id);
     };
     sessionToolImpls["sessions.create"] = sessionsCreate;
-    sessionServer.registerTool("sessions.create", { description: "Create a new session", inputSchema: z.object({ agent_id: z.string(), chat_id: z.string() }) }, sessionsCreate);
+    sessionServer.registerTool("sessions.create", { description: "Create a new session for an agent and chat combination.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID"), chat_id: z.string().describe("Chat/channel ID") }) }, sessionsCreate);
 
     const sessionsGet = async (args: any): Promise<ToolResult> => {
       const rs = await getReportsAndSessions();
@@ -645,7 +649,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(session ? (() => { try { return JSON.stringify(session, null, 2); } catch { return "Session data error"; } })() : "Session not found");
     };
     sessionToolImpls["sessions.get"] = sessionsGet;
-    sessionServer.registerTool("sessions.get", { description: "Get session by ID", inputSchema: z.object({ session_id: z.string() }) }, sessionsGet);
+    sessionServer.registerTool("sessions.get", { description: "Get session details by ID.", inputSchema: z.object({ session_id: z.string().describe("Session ID") }) }, sessionsGet);
 
     const sessionsGetActive = async (args: any): Promise<ToolResult> => {
       const rs = await getReportsAndSessions();
@@ -653,7 +657,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(session ? (() => { try { return JSON.stringify(session, null, 2); } catch { return "Session data error"; } })() : "No active session");
     };
     sessionToolImpls["sessions.getActive"] = sessionsGetActive;
-    sessionServer.registerTool("sessions.getActive", { description: "Get active session for agent+chat", inputSchema: z.object({ agent_id: z.string(), chat_id: z.string() }) }, sessionsGetActive);
+    sessionServer.registerTool("sessions.getActive", { description: "Get the active session for an agent and chat combination.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID"), chat_id: z.string().describe("Chat/channel ID") }) }, sessionsGetActive);
 
     const sessionsLogStep = async (args: any): Promise<ToolResult> => {
       const rs = await getReportsAndSessions();
@@ -661,7 +665,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(`Step logged: ${step.id}`);
     };
     sessionToolImpls["sessions.logStep"] = sessionsLogStep;
-    sessionServer.registerTool("sessions.logStep", { description: "Log a session step", inputSchema: z.object({ session_id: z.string(), step_num: z.number(), step_type: z.enum(["thought", "tool_call", "observation", "final"]), tool: z.string().optional(), args_hash: z.string().optional(), obs_summary: z.string().optional() }) }, sessionsLogStep);
+    sessionServer.registerTool("sessions.logStep", { description: "Log a step in a session's execution trace.", inputSchema: z.object({ session_id: z.string().describe("Session ID"), step_num: z.number().describe("Step number in sequence"), step_type: z.enum(["thought", "tool_call", "observation", "final"]).describe("Type of step"), tool: z.string().optional().describe("Tool name (for tool_call steps)"), args_hash: z.string().optional().describe("Hash of tool arguments"), obs_summary: z.string().optional().describe("Observation summary") }) }, sessionsLogStep);
 
     const sessionsGetSteps = async (args: any): Promise<ToolResult> => {
       const rs = await getReportsAndSessions();
@@ -669,7 +673,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       try { return ok(JSON.stringify(steps, null, 2)); } catch { return ok("[]"); }
     };
     sessionToolImpls["sessions.getSteps"] = sessionsGetSteps;
-    sessionServer.registerTool("sessions.getSteps", { description: "Get session steps", inputSchema: z.object({ session_id: z.string(), limit: z.number().optional() }) }, sessionsGetSteps);
+    sessionServer.registerTool("sessions.getSteps", { description: "Get execution steps for a session.", inputSchema: z.object({ session_id: z.string().describe("Session ID"), limit: z.number().optional().describe("Max steps to return (default: 10)") }) }, sessionsGetSteps);
 
     const memoryConsolidate = async (args: any): Promise<ToolResult> => {
       if (!memoryFacade) return ok("Error: MemoryFacade not initialized");
@@ -721,7 +725,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["cron.status"] = cronStatus;
-    sessionServer.registerTool("cron.status", { description: "Check your scheduled tasks status", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID") }) }, cronStatus);
+    sessionServer.registerTool("cron.status", { description: "Check your scheduled tasks — active, paused, total counts with next run times.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID") }) }, cronStatus);
 
     const cronList = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -738,7 +742,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["cron.list"] = cronList;
-    sessionServer.registerTool("cron.list", { description: "List your scheduled tasks", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), includeDisabled: z.boolean().optional() }) }, cronList);
+    sessionServer.registerTool("cron.list", { description: "List all your scheduled tasks with details. Use includeDisabled=true to see paused/completed ones.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), includeDisabled: z.boolean().optional().describe("Include paused/completed tasks") }) }, cronList);
 
     const cronCreate = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -760,7 +764,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     };
     sessionToolImpls["cron.create"] = cronCreate;
     sessionServer.registerTool("cron.create", {
-      description: "Create a scheduled task (cron, interval, once, or event-triggered)",
+      description: "Create a scheduled task — cron, interval, once, or event-triggered. Use for recurring work like reports, health checks, or data syncs.",
       inputSchema: z.object({
         agent_id: z.string().describe("Your agent ID"),
         name: z.string().describe("Task name"),
@@ -782,7 +786,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return result ? ok(`⏸ Task paused: ${resolved.task_id}`) : ok("Task not found");
     };
     sessionToolImpls["cron.pause"] = cronPause;
-    sessionServer.registerTool("cron.pause", { description: "Pause a scheduled task", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string() }) }, cronPause);
+    sessionServer.registerTool("cron.pause", { description: "Pause a scheduled task by ID.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string().describe("Task ID to pause") }) }, cronPause);
 
     const cronResume = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -791,7 +795,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return result ? ok(`▶️ Task resumed: ${resolved.task_id}`) : ok("Task not found");
     };
     sessionToolImpls["cron.resume"] = cronResume;
-    sessionServer.registerTool("cron.resume", { description: "Resume a paused task", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string() }) }, cronResume);
+    sessionServer.registerTool("cron.resume", { description: "Resume a previously paused scheduled task by ID.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string().describe("Task ID to resume") }) }, cronResume);
 
     const cronDelete = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -800,7 +804,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return result ? ok(`🗑 Task deleted: ${resolved.task_id}`) : ok("Task not found");
     };
     sessionToolImpls["cron.delete"] = cronDelete;
-    sessionServer.registerTool("cron.delete", { description: "Delete a scheduled task permanently", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string() }) }, cronDelete);
+    sessionServer.registerTool("cron.delete", { description: "Delete a scheduled task permanently by ID.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string().describe("Task ID to delete") }) }, cronDelete);
 
     const cronRun = async (args: any): Promise<ToolResult> => {
       const scheduler = await getAgentScheduler();
@@ -808,7 +812,63 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(count > 0 ? `⚡ Event '${args.event_name}' triggered ${count} task(s)` : `No tasks listening for event '${args.event_name}'`);
     };
     sessionToolImpls["cron.run"] = cronRun;
-    sessionServer.registerTool("cron.run", { description: "Trigger event-based tasks immediately", inputSchema: z.object({ event_name: z.string() }) }, cronRun);
+    sessionServer.registerTool("cron.run", { description: "Trigger an event-based task immediately by event name.", inputSchema: z.object({ event_name: z.string().describe("Event name to trigger") }) }, cronRun);
+
+    // === FILESYSTEM TOOLS ===
+    const fsReadTool = createFsReadTool();
+    sessionServer.registerTool("fs.read", {
+      description: fsReadTool.description,
+      inputSchema: z.object({
+        file_path: z.string().describe("Path to the file, relative to your workspace directory."),
+        agent_id: z.string().optional().describe("Your agent ID (auto-injected)."),
+      }),
+    }, async (args) => {
+      const result = await fsReadTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
+      return ok(result.content[0].text);
+    });
+
+    const fsWriteTool = createFsWriteTool();
+    sessionServer.registerTool("fs.write", {
+      description: fsWriteTool.description,
+      inputSchema: z.object({
+        file_path: z.string().describe("Path to the file, relative to your workspace directory."),
+        content: z.string().describe("Content to write."),
+        agent_id: z.string().optional().describe("Your agent ID (auto-injected)."),
+        append: z.boolean().optional().describe("Append to existing file. Default: false."),
+      }),
+    }, async (args) => {
+      const result = await fsWriteTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
+      return ok(result.content[0].text);
+    });
+
+    const fsEditTool = createFsEditTool();
+    sessionServer.registerTool("fs.edit", {
+      description: fsEditTool.description,
+      inputSchema: z.object({
+        file_path: z.string().describe("Path to the file, relative to your workspace directory."),
+        old_string: z.string().describe("Exact text to replace."),
+        new_string: z.string().describe("Replacement text."),
+        agent_id: z.string().optional().describe("Your agent ID (auto-injected)."),
+      }),
+    }, async (args) => {
+      const result = await fsEditTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
+      return ok(result.content[0].text);
+    });
+
+    const bashToolInstance = createBashTool();
+    sessionServer.registerTool("bash", {
+      description: bashToolInstance.description,
+      inputSchema: z.object({
+        command: z.string().describe("Command to execute (e.g., 'ls', 'git', 'node')."),
+        args: z.array(z.string()).optional().describe("Command arguments."),
+        agent_id: z.string().optional().describe("Your agent ID (auto-injected)."),
+        cwd: z.string().optional().describe("Working directory (relative to workspace)."),
+        timeout_ms: z.number().optional().describe("Timeout in ms (default: 30000)."),
+      }),
+    }, async (args) => {
+      const result = await bashToolInstance.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
+      return ok(result.content[0].text);
+    });
 
     return { server: sessionServer, toolImpls: sessionToolImpls };
   }

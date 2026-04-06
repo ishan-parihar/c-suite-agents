@@ -67,6 +67,10 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "heartbeat.runNow",
     "boardmeeting.run",
     "boardmeeting.status",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
+    "bash",
   ],
 
   "coo-productivity": [
@@ -118,6 +122,10 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "cron.list",
     "cron.create",
     "heartbeat.runNow",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
+    "bash",
   ],
 
   "cmo-content": [
@@ -160,6 +168,9 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "reports.getLatest",
     "cron.status",
     "cron.list",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
   ],
 
   "cro-relational": [
@@ -203,6 +214,9 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "cron.status",
     "cron.list",
     "cron.create",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
   ],
 
   "cfo-financial": [
@@ -247,6 +261,9 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "cron.list",
     "cron.create",
     "heartbeat.runNow",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
   ],
 
   "cio-intelligence": [
@@ -283,6 +300,9 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "cron.list",
     "cron.create",
     "heartbeat.runNow",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
   ],
 
   "cpo-psychologist": [
@@ -327,6 +347,9 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "cron.list",
     "cron.create",
     "heartbeat.runNow",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
   ],
 
   "physician-health": [
@@ -362,6 +385,9 @@ export const AGENT_TOOL_SCOPES: Record<string, string[]> = {
     "cron.status",
     "cron.list",
     "heartbeat.runNow",
+    "fs.read",
+    "fs.write",
+    "fs.edit",
   ],
 };
 
