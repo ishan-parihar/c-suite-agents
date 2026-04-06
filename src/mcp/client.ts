@@ -3,6 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { logger } from "../logger.js";
+import { ErrorBus } from "../runtime/error-emitter.js";
 
 export interface McpCatalogTool {
   serverName: string;
@@ -148,10 +149,26 @@ async function connectLocal(
           const newConn = await connectLocal(config, serverName, onReconnect, 0);
           if (newConn) {
             logger.info({ server: serverName }, "MCP server reconnected");
+            ErrorBus.emit({
+              type: "gateway:restored",
+              severity: "info",
+              component: "gateway-mcp-client",
+              error: null,
+              message: `MCP server ${serverName} reconnected`,
+              context: { gatewayType: "mcp-client" },
+            });
             onReconnect?.(newConn);
           }
         } catch (err: any) {
           logger.error({ server: serverName, err: err.message }, "MCP reconnect failed");
+          ErrorBus.emit({
+            type: "gateway:down",
+            severity: "error",
+            component: "gateway-mcp-client",
+            error: err,
+            message: `MCP server ${serverName} connection lost: ${err.message}`,
+            context: { gatewayType: "mcp-client", url: serverName },
+          });
         }
       }, delay);
       reconnectTimer.unref();
@@ -258,10 +275,26 @@ async function connectRemote(
             const newConn = await connectRemote(config, serverName, onReconnect, 0);
             if (newConn) {
               logger.info({ server: serverName }, "Remote MCP server reconnected");
+              ErrorBus.emit({
+                type: "gateway:restored",
+                severity: "info",
+                component: "gateway-mcp-client",
+                error: null,
+                message: `MCP server ${serverName} reconnected`,
+                context: { gatewayType: "mcp-client" },
+              });
               onReconnect?.(newConn);
             }
           } catch (err: any) {
             logger.error({ server: serverName, err: err.message }, "Remote MCP reconnect failed");
+            ErrorBus.emit({
+              type: "gateway:down",
+              severity: "error",
+              component: "gateway-mcp-client",
+              error: err,
+              message: `MCP server ${serverName} connection lost: ${err.message}`,
+              context: { gatewayType: "mcp-client", url: serverName },
+            });
           }
         }, delay);
         reconnectTimer.unref();

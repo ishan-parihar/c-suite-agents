@@ -23,7 +23,7 @@ export interface StoredMessage {
   session_id: string;
   message_index: number;
   role: string;
-  content: string;
+  content: string | null;
   token_estimate: number;
   is_summary: number;
   compacted: number;
@@ -57,11 +57,40 @@ export class SessionRegistry {
     this.db.pragma("foreign_keys = ON");
 
     this.initSchema();
+    this.migrateSessionMessagesNullableContent();
   }
 
   private migrateColumns(): void {
     for (const col of ["workspace_path TEXT", "compaction_count INTEGER DEFAULT 0", "previous_summary TEXT", "has_real_conversation INTEGER DEFAULT 0"]) {
       try { this.db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { }
+    }
+  }
+
+  private migrateSessionMessagesNullableContent(): void {
+    const info = this.db.pragma("table_info(session_messages)") as Array<{ name: string; notnull: number }>;
+    const contentCol = info.find(c => c.name === "content");
+    if (contentCol && contentCol.notnull === 1) {
+      this.db.exec(`
+        PRAGMA foreign_keys = OFF;
+        BEGIN TRANSACTION;
+        ALTER TABLE session_messages RENAME TO session_messages_old;
+        CREATE TABLE session_messages (
+          session_id TEXT NOT NULL,
+          message_index INTEGER NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT,
+          token_estimate INTEGER NOT NULL DEFAULT 0,
+          is_summary INTEGER NOT NULL DEFAULT 0,
+          compacted INTEGER NOT NULL DEFAULT 0,
+          timestamp INTEGER NOT NULL,
+          PRIMARY KEY (session_id, message_index)
+        );
+        INSERT INTO session_messages (session_id, message_index, role, content, token_estimate, is_summary, compacted, timestamp)
+          SELECT session_id, message_index, role, content, token_estimate, is_summary, compacted, timestamp FROM session_messages_old;
+        DROP TABLE session_messages_old;
+        COMMIT;
+        PRAGMA foreign_keys = ON;
+      `);
     }
   }
 
@@ -86,17 +115,17 @@ export class SessionRegistry {
       CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_last_used ON sessions(last_used);
 
-      CREATE TABLE IF NOT EXISTS session_messages (
-        session_id TEXT NOT NULL,
-        message_index INTEGER NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        token_estimate INTEGER NOT NULL DEFAULT 0,
-        is_summary INTEGER NOT NULL DEFAULT 0,
-        compacted INTEGER NOT NULL DEFAULT 0,
-        timestamp INTEGER NOT NULL,
-        PRIMARY KEY (session_id, message_index)
-      );
+       CREATE TABLE IF NOT EXISTS session_messages (
+         session_id TEXT NOT NULL,
+         message_index INTEGER NOT NULL,
+         role TEXT NOT NULL,
+         content TEXT,
+         token_estimate INTEGER NOT NULL DEFAULT 0,
+         is_summary INTEGER NOT NULL DEFAULT 0,
+         compacted INTEGER NOT NULL DEFAULT 0,
+         timestamp INTEGER NOT NULL,
+         PRIMARY KEY (session_id, message_index)
+       );
 
       CREATE TABLE IF NOT EXISTS session_tool_calls (
         session_id TEXT NOT NULL,
@@ -148,14 +177,14 @@ export class SessionRegistry {
   /**
    * Save messages for a session. Replaces all existing messages.
    */
-  saveMessages(sessionId: string, messages: Array<{
-    role: string;
-    content: string;
-    tokenEstimate: number;
-    isSummary?: boolean;
-    compacted?: boolean;
-    timestamp: number;
-  }>): void {
+   saveMessages(sessionId: string, messages: Array<{
+     role: string;
+     content: string | null;
+     tokenEstimate: number;
+     isSummary?: boolean;
+     compacted?: boolean;
+     timestamp: number;
+   }>): void {
     const saveStmt = this.db.prepare(
       "INSERT OR REPLACE INTO session_messages (session_id, message_index, role, content, token_estimate, is_summary, compacted, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
@@ -205,11 +234,11 @@ export class SessionRegistry {
   /**
    * Load messages and tool calls for a session from SQLite.
    */
-  loadSessionData(sessionId: string): {
-    messages: Array<{ role: string; content: string; tokenEstimate: number; isSummary: boolean; compacted: boolean; timestamp: number }>;
-    toolCalls: Array<{ id: string; name: string; arguments: string; result?: string; tokenEstimate: number; compacted: boolean; timestamp: number }>;
-    metadata: { compactionCount: number; previousSummary?: string; hasRealConversation: boolean } | null;
-  } | null {
+   loadSessionData(sessionId: string): {
+     messages: Array<{ role: string; content: string | null; tokenEstimate: number; isSummary: boolean; compacted: boolean; timestamp: number }>;
+     toolCalls: Array<{ id: string; name: string; arguments: string; result?: string; tokenEstimate: number; compacted: boolean; timestamp: number }>;
+     metadata: { compactionCount: number; previousSummary?: string; hasRealConversation: boolean } | null;
+   } | null {
     const metadata = this.db.prepare(
       "SELECT compaction_count, previous_summary, has_real_conversation FROM sessions WHERE session_id = ?"
     ).get(sessionId) as { compaction_count: number; previous_summary: string | null; has_real_conversation: number } | undefined;

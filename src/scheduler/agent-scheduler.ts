@@ -17,6 +17,7 @@ import * as fs from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
 import { getSessionRegistry } from "./session-registry.js";
 import { SystemEventQueue, currentTimeLine } from "./system-events.js";
+import { ErrorBus, createErrorEvent } from "../runtime/error-emitter.js";
 import { autoStore } from "../memory/auto.js";
 import * as os from "node:os";
 
@@ -453,6 +454,17 @@ export class AgentScheduler {
         logger.error({ cronId: job.id, err: err.message }, "Cron job execution failed");
         job.lastResult = `Error: ${err.message}`;
         await this.persistCronJobs();
+
+        // Emit error event via ErrorBus
+        ErrorBus.emit({
+          type: "cron:failed",
+          severity: "warn",
+          component: "scheduler",
+          error: err,
+          message: `Cron job ${job.id} failed: ${err.message}`,
+          agentId: job.agentId,
+          context: { cronId: job.id },
+        });
       }
     }
   }
@@ -506,6 +518,17 @@ Execute these instructions and report results.`;
 
       job.lastResult = result.text.slice(0, 500);
       logger.info({ cronId: job.id, agentId: job.agentId }, "Cron job completed");
+
+      // Emit success event
+      ErrorBus.emit({
+        type: "cron:success",
+        severity: "info",
+        component: "scheduler",
+        error: null,
+        message: `Cron job ${job.id} completed successfully`,
+        agentId: job.agentId,
+        context: { cronId: job.id },
+      });
     }
   }
 
@@ -582,6 +605,17 @@ Execute these instructions and report results.`;
         task.fail_count++;
         this.db.run("UPDATE scheduled_tasks SET fail_count = ? WHERE id = ?", [task.fail_count, task.id]);
         await this.persist();
+
+        // Emit error event via ErrorBus
+        ErrorBus.emit({
+          type: "cron:failed",
+          severity: task.fail_count >= 3 ? "error" : "warn",
+          component: "scheduler",
+          error: err,
+          message: `Scheduled task ${task.id} (${task.name}) failed (fail_count: ${task.fail_count})`,
+          agentId: task.agent_id,
+          context: { taskId: task.id, failCount: task.fail_count },
+        });
       }
     }
   }

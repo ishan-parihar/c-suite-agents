@@ -471,6 +471,10 @@ export class HiringSystem {
       .filter(c => c.reports_to === manager_id && c.status === "active");
   }
 
+  async getAllContracts(): Promise<EmploymentContract[]> {
+    return Array.from(this.contracts.values()).sort((a, b) => b.hired_at - a.hired_at);
+  }
+
   async getDelegation(delegation_id: string): Promise<Delegation | null> {
     return this.delegations.get(delegation_id) || null;
   }

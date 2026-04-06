@@ -4,15 +4,21 @@ import { cfg } from "../config.js";
 import type { StrategosRuntime } from "../types.js";
 import { getOrgChart, getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
+import { getMeetingGovernance } from "../organic/meetings.js";
+import { getHiringSystem } from "../organic/hiring.js";
 import { AgentContextManager } from "../organic/context.js";
 import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
 import { autoStore, autoRecall } from "../memory/auto.js";
 import { getMemoryFacade } from "../memory/index.js";
 import { getSessionRegistry } from "../scheduler/session-registry.js";
 import { getAgentHealthRegistry } from "../scheduler/agent-health.js";
+import { getReportsAndSessions } from "../mcp/tools-reports.js";
+import { getAgentScheduler } from "../scheduler/agent-scheduler.js";
 import os from "node:os";
 import path from "node:path";
 import * as fs from "node:fs";
+import { ErrorBus } from "../runtime/error-emitter.js";
+import { GatewayError } from "../runtime/error-types.js";
 
 type AgentRegistry = { agents: Map<string, { id: string; role: string; boardId: string }>; cards: Map<string, string> };
 
@@ -431,7 +437,7 @@ ${staffList}
 
 <b>Commands:</b>
 /start — Welcome message
-/agent [name] — Summon an agent (e.g., /agent CFO)
+/agent — Pick an agent from inline menu
 /help — Command reference
 /org — Organization chart
 /staff — List core staff
@@ -439,7 +445,18 @@ ${staffList}
 /wake [agent] — Agent context
 /messages [agent] — Browse messages
 /recall [query] — Search memory
+/meeting [end|names...] — Start/end board meeting
+/session — Session management
 /status — System status
+/board [agent] — View Kanban board
+/inbox [agent] — Message inbox
+/report [agent] — Latest reports
+/hire [role] [manager] [tasks...] — Hire staff
+/fire [agent_id] [reason] — Fire staff
+/team [manager] — View auxiliary team
+/memory — Memory statistics
+/cron — Scheduled tasks
+/meetings — Pending meeting proposals
 
 Just talk naturally to interact with the team!`;
       
@@ -457,15 +474,31 @@ Just talk naturally to interact with the team!`;
       const agentName = args[1]?.toLowerCase();
       
       if (!agentName) {
-        const agents = getCoreStaffIds()
-          .map(id => {
-            const s = getStaffById(id);
-            return s ? `${s.avatar} ${s.name} — /agent ${s.name.toLowerCase().replace(/\s+/g, '-')}` : "";
-          })
-          .filter(Boolean)
-          .join("\n");
-        
-        await ctx.reply(`<b>🎯 Summon an Agent:</b>\n\n${agents}`, { parse_mode: "HTML" });
+        const chatId = ctx.chat.id.toString();
+        const currentAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
+
+        const buttons = getCoreStaffIds().map(id => {
+          const s = getStaffById(id);
+          if (!s) return null;
+          const isActive = id === currentAgentId;
+          const label = isActive ? `✅ ${s.avatar} ${s.name}` : `${s.avatar} ${s.name}`;
+          return Markup.button.callback(label, `agent_${id}`);
+        }).filter(Boolean);
+
+        const rows: any[][] = [];
+        for (let i = 0; i < buttons.length; i += 2) {
+          rows.push(buttons.slice(i, i + 2));
+        }
+
+        const currentStaff = getStaffById(currentAgentId);
+        const currentLabel = currentStaff
+          ? `${currentStaff.avatar} ${currentStaff.name}`
+          : currentAgentId;
+
+        await ctx.reply(
+          `<b>🎯 Summon an Agent</b>\n\nCurrently: ${currentLabel}\n\nTap an agent below to switch:`,
+          { parse_mode: "HTML", ...Markup.inlineKeyboard(rows) },
+        );
         return;
       }
       
@@ -492,7 +525,16 @@ Just talk naturally to interact with the team!`;
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
       const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply("Usage: /meeting [end|names...]\nExample: /meeting CFO CMO CTO");
+        await ctx.reply(`<b>⏳ Board Meeting Management</b>
+
+Usage:
+/meeting [end|names...]
+
+Examples:
+• <b>/meeting CFO CMO CTO</b> — Start board meeting with these agents
+• <b>/meeting end</b> — End current meeting and return to single-agent mode
+
+The meeting will be processed through the board meeting engine with turn-based discussion.`, { parse_mode: "HTML" });
         return;
       }
       const chatId = ctx.chat.id.toString();
@@ -512,8 +554,22 @@ Just talk naturally to interact with the team!`;
       if (ids.length === 0) { await ctx.reply(`<b>❌ No valid agents found</b>`, { parse_mode: "HTML" }); return; }
       setRoute(chatId, { participants: ids, mode: "meeting", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
       persistState();
-      const names = ids.map(id => getStaffById(id)?.name || id).join(", ");
-      await ctx.reply(`<b>🏛 Boardroom meeting active with:</b> ${names}`, { parse_mode: "HTML" });
+      const names = ids.map(id => {
+        const s = getStaffById(id);
+        return s ? `${s.avatar} ${s.name}` : id;
+      }).join(", ");
+      const namesList = ids.map(id => {
+        const s = getStaffById(id);
+        return s ? `• ${s.avatar} <b>${s.name}</b> — ${s.title}` : `• ${id}`;
+      }).join("\n");
+      await ctx.reply(`<b>🏛 Multi-Agent Discussion Active</b>
+
+Participants:
+${namesList}
+
+Your messages will be sent to all participants concurrently. Each agent will respond independently.
+
+<b>Note:</b> This routes messages to multiple agents. For formal board meetings with quorum voting, agents can use the board meeting tools internally.`, { parse_mode: "HTML" });
     });
 
     // ── Board Meeting Decision Callbacks ──────────────────────────────
@@ -531,8 +587,8 @@ Just talk naturally to interact with the team!`;
           const msg = ctx.callbackQuery.message;
           if (msg && "text" in msg) {
             const originalText = msg.text || "";
-            const decisionEmoji = decision === "approved" ? "✅ **Approved**" : "❌ **Rejected**";
-            await ctx.editMessageText(`${originalText}\n\n${decisionEmoji}`, { parse_mode: "Markdown" });
+            const decisionEmoji = decision === "approved" ? "✅ <b>Approved</b>" : "❌ <b>Rejected</b>";
+            await ctx.editMessageText(`${originalText}\n\n${decisionEmoji}`, { parse_mode: "HTML" });
           }
         } catch { /* ignore edit failures (e.g., message too old) */ }
 
@@ -563,21 +619,38 @@ Just talk naturally to interact with the team!`;
       await ctx.reply(`<b>Core Staff:</b>\n\n${staffLines}`, { parse_mode: "HTML" });
     });
 
-    // /agents command
+    // /agents command — core staff + auxiliary from HiringSystem
     bot.command("agents", async (ctx) => {
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      await ctx.sendChatAction("typing");
 
       const core = getCoreStaffIds()
         .map(id => {
           const s = getStaffById(id);
-          return s ? `🏢 ${s.avatar} ${s.id} (${s.title})` : "";
+          return s ? `🏢 ${s.avatar} <b>${s.name}</b> — ${s.title}` : "";
         })
         .filter(Boolean);
 
-      const aux = Array.from(registry.agents.values()).map(a => `• ${a.id} (${a.role})`);
-      const list = [...core, ...aux].join("\n") || "No agents yet";
+      let aux: string[] = [];
+      try {
+        const hiring = await getHiringSystem();
+        const allContracts = await hiring.getAllContracts();
+        const activeContracts = allContracts.filter(c => c.status === "active");
+        aux = activeContracts.map(c => {
+          const mgr = getStaffById(c.reports_to);
+          const mgrName = mgr ? `${mgr.avatar} ${mgr.name}` : c.reports_to;
+          return `  🤖 <b>${escapeHtml(c.role)}</b> (<code>${escapeHtml(c.agent_id)}</code>) → ${mgrName}`;
+        });
+      } catch (e: any) {
+        logger.warn({ err: e.message }, "Failed to fetch auxiliary agents");
+      }
 
-      await ctx.reply(`<b>🤖 All Agents:</b>\n\n${list}`, { parse_mode: "HTML" });
+      const coreSection = `<b>Core Staff (${core.length}):</b>\n${core.join("\n")}`;
+      const auxSection = aux.length > 0
+        ? `\n\n<b>Auxiliary Staff (${aux.length}):</b>\n${aux.join("\n")}`
+        : `\n\n<i>No auxiliary staff hired yet. Use /hire to add team members.</i>`;
+
+      await ctx.reply(`${coreSection}${auxSection}`, { parse_mode: "HTML" });
     });
 
     // /wake command
@@ -601,7 +674,7 @@ Just talk naturally to interact with the team!`;
       }
     });
 
-    // /messages command
+    // /messages command — Browse message threads (superseded by /inbox)
     bot.command("messages", async (ctx) => {
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
       const args = (ctx.message as any)?.text?.split(" ") || [];
@@ -610,10 +683,10 @@ Just talk naturally to interact with the team!`;
       await ctx.sendChatAction("typing");
       try {
         const messaging = await getMessagingSystem();
-        const threads = await messaging.getThreadsForAgent(agentId, 10);
+        const threads = await messaging.getThreadsForAgent(agentId, 15);
 
         if (threads.length === 0) {
-          await ctx.reply("📭 No messages yet");
+          await ctx.reply(`<b>📭 No message threads for</b> <b>${escapeHtml(agentId)}</b>\n\nTry /inbox for a complete inbox view with unread counts and escalations.`, { parse_mode: "HTML" });
           return;
         }
 
@@ -624,13 +697,18 @@ Just talk naturally to interact with the team!`;
           return d.toLocaleString();
         };
 
+        const statusEmoji: Record<string, string> = { active: "🟢", resolved: "✅", escalated: "⚠️", archived: "📦" };
         const lines = threads.map(t => {
           const other = t.participants.find(p => p !== agentId) || "unknown";
+          const otherStaff = getStaffById(other);
+          const otherName = otherStaff ? `${otherStaff.avatar} ${otherStaff.name}` : other;
           const ts = formatTime(t.updated_at);
-          return `• <b>${escapeHtml(t.subject)}</b> (with ${other})\n  <i>${ts}</i>`;
+          const sEmoji = statusEmoji[t.status] || "⚪";
+          return `${sEmoji} <b>${escapeHtml(t.subject)}</b> (with ${escapeHtml(otherName)})\n  <i>${ts} [${t.status}]</i>`;
         }).join("\n");
 
-        await ctx.reply(`<b>📬 Messages for ${agentId} (${threads.length})</b>\n\n${lines}`, { parse_mode: "HTML" });
+        const unreadCount = await messaging.getUnreadCount(agentId);
+        await ctx.reply(`<b>📬 Message Threads for ${escapeHtml(agentId)} (${threads.length})</b>\nUnread messages: <b>${unreadCount}</b>\n\n${lines}`, { parse_mode: "HTML" });
       } catch (err: any) {
         await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
       }
@@ -643,7 +721,12 @@ Just talk naturally to interact with the team!`;
       const query = args.slice(1).join(" ");
       
       if (!query) {
-        await ctx.reply("Usage: /recall [query]\nExample: /recall budget meeting");
+        await ctx.reply(`<b>🧠 Vector Memory Search</b>
+
+Usage: /recall [query]
+Example: /recall budget meeting
+
+Searches across messages, tasks, and stored memories for the CEO agent.`, { parse_mode: "HTML" });
         return;
       }
       
@@ -675,15 +758,38 @@ Just talk naturally to interact with the team!`;
 /org — Organization chart
 /staff — Core staff list
 /agents — All agents (core + auxiliary)
-/agent [name] — Summon an agent
+/agent — Pick an agent from inline menu
 
 <b>Memory &amp; Context:</b>
 /wake [agent] — View agent's wake context
 /messages [agent] — Browse message threads
-/recall [query] — Search across all memory
+/inbox [agent] — Full inbox with unread, escalations (recommended)
+/recall [query] — Search CEO memory (messages, tasks, embeddings)
+/memory — Memory statistics across all scopes
+
+<b>Kanban &amp; Reports:</b>
+/board [agent] — View Kanban board (tap names to switch)
+/inbox [agent] — Message inbox
+/report [agent] — Latest periodic reports
+
+<b>Team Management:</b>
+/hire [role] [manager] [tasks...] — Hire auxiliary staff
+/fire [agent_id] [reason] — Fire auxiliary staff
+/team [manager] — View auxiliary team
+
+<b>Meetings:</b>
+/meeting [end|names...] — Multi-agent discussion mode
+/meetings — Active meetings + governance proposals
+
+<b>Scheduling:</b>
+/cron — List scheduled tasks
+/cron status [agent] — Task status for agent
+/cron pause [task_id] — Pause a task
+/cron resume [task_id] — Resume a task
 
 <b>System Commands:</b>
 /status — System status
+/session — Session management
 /help — This help message
 
 <b>Natural Language:</b>
@@ -722,6 +828,21 @@ Just talk naturally! Examples:
           })
           .join("\n");
 
+        // Check actual subsystem states
+        let kanbanStatus = "⚪ Unknown";
+        try {
+          const ceoBoard = await rt.ctx.kanban.getBoard("ceo-strategic");
+          kanbanStatus = ceoBoard ? "🟢 Active" : "🔴 No boards";
+        } catch { kanbanStatus = "🔴 Error"; }
+
+        let memoryStatus = "⚪ Unknown";
+        let memoryCount = 0;
+        try {
+          const memStats = await (await getMemoryFacade()).stats();
+          memoryCount = Object.values(memStats).reduce((sum: number, s: any) => sum + s.total, 0);
+          memoryStatus = memoryCount > 0 ? `🟢 Active (${memoryCount} entries)` : "🟡 Empty";
+        } catch { memoryStatus = "🔴 Error"; }
+
         await ctx.reply(`<b>✅ Strategos System Status</b>
 
 <b>Active agent:</b> ${activeAgentDisplay}
@@ -729,7 +850,8 @@ Just talk naturally! Examples:
 <b>System:</b>
 • MCP Server: Running
 • Core Staff: ${teamStatus.length} agents
-• Memory: Active
+• Kanban: ${kanbanStatus}
+• Memory: ${memoryStatus}
 • Telegram: Online
 • Native Runtime: Healthy (${sessions.length} session(s) active)
 
@@ -776,6 +898,538 @@ ${agentLines}`, { parse_mode: "HTML" });
       }
 
       await ctx.reply("Usage: /session — List sessions\n/session reset [agent] — Clear session (memory preserved)");
+    });
+
+    // /board command — View Kanban board
+    bot.command("board", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+      const chatId = ctx.chat.id.toString();
+      const activeAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
+
+      await ctx.sendChatAction("typing");
+      try {
+        if (args.length > 0) {
+          // Specific agent's board
+          const agentId = args[0];
+          const board = await rt.ctx.kanban.getBoard(agentId);
+          if (!board) {
+            await ctx.reply(`<b>❌ Board not found for</b> <b>${escapeHtml(agentId)}</b>`, { parse_mode: "HTML" });
+            return;
+          }
+          const staff = getStaffById(agentId);
+          const agentName = staff ? `${staff.avatar} ${staff.name}` : agentId;
+          const priorityEmoji: Record<string, string> = { P1: "🔴", P2: "🟡", P3: "🔵", P4: "⚪" };
+
+          const lines = [`<b>📋 ${escapeHtml(agentName)}'s Board</b>\n`];
+          for (const col of board.columns) {
+            const cardCount = col.cards.length;
+            lines.push(`<b>${escapeHtml(col.name)}</b> (${cardCount})`);
+            for (const card of col.cards.slice(0, 8)) {
+              const emoji = priorityEmoji[card.priority] || "⚪";
+              const dueStr = card.due ? ` <i>(due: ${escapeHtml(card.due)})</i>` : "";
+              lines.push(`  ${emoji} <b>${escapeHtml(card.title)}</b>${dueStr}`);
+            }
+            if (col.cards.length > 8) lines.push(`  ... and ${col.cards.length - 8} more`);
+            if (cardCount === 0) lines.push(`  <i>(empty)</i>`);
+          }
+          const totalCards = board.columns.reduce((sum, c) => sum + c.cards.length, 0);
+          lines.push(`\n<b>Total: ${totalCards} cards</b>`);
+          await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+        } else {
+          // Show current agent's board with option to switch
+          const board = await rt.ctx.kanban.getBoard(activeAgentId);
+          if (!board) {
+            await ctx.reply(`<b>❌ Board not found for active agent</b>`, { parse_mode: "HTML" });
+            return;
+          }
+          const staff = getStaffById(activeAgentId);
+          const agentName = staff ? `${staff.avatar} ${staff.name}` : activeAgentId;
+          const priorityEmoji: Record<string, string> = { P1: "🔴", P2: "🟡", P3: "🔵", P4: "⚪" };
+
+          const lines = [`<b>📋 ${escapeHtml(agentName)}'s Board</b>\n`];
+          for (const col of board.columns) {
+            const cardCount = col.cards.length;
+            lines.push(`<b>${escapeHtml(col.name)}</b> (${cardCount})`);
+            for (const card of col.cards.slice(0, 8)) {
+              const emoji = priorityEmoji[card.priority] || "⚪";
+              const dueStr = card.due ? ` <i>(due: ${escapeHtml(card.due)})</i>` : "";
+              lines.push(`  ${emoji} <b>${escapeHtml(card.title)}</b>${dueStr}`);
+            }
+            if (col.cards.length > 8) lines.push(`  ... and ${col.cards.length - 8} more`);
+            if (cardCount === 0) lines.push(`  <i>(empty)</i>`);
+          }
+          const totalCards = board.columns.reduce((sum, c) => sum + c.cards.length, 0);
+          lines.push(`\n<b>Total: ${totalCards} cards</b>`);
+
+          // Build inline keyboard with other staff agents
+          const buttons = getCoreStaffIds()
+            .filter(id => id !== activeAgentId)
+            .slice(0, 6)
+            .map(id => {
+              const s = getStaffById(id);
+              return s ? Markup.button.callback(`${s.avatar} ${s.name}`, `board_view_${id}`) : null;
+            })
+            .filter(Boolean);
+          const rows: any[][] = [];
+          for (let i = 0; i < buttons.length; i += 2) {
+            rows.push(buttons.slice(i, i + 2));
+          }
+
+          await ctx.reply(lines.join("\n"), {
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard(rows),
+          });
+        }
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /inbox command — View message inbox
+    bot.command("inbox", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+      const chatId = ctx.chat.id.toString();
+      const activeAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
+      const agentId = args[0] || activeAgentId;
+
+      await ctx.sendChatAction("typing");
+      try {
+        const messaging = await getMessagingSystem();
+        const context = await messaging.getActiveContext(agentId);
+
+        const formatTime = (ts: number): string => {
+          if (!ts) return "unknown";
+          const d = new Date(ts < 1e12 ? ts * 1000 : ts);
+          if (isNaN(d.getTime())) return "unknown";
+          return d.toLocaleString();
+        };
+
+        const lines = [`<b>📬 Inbox for ${escapeHtml(agentId)}</b>\n`];
+        lines.push(`Unread: <b>${context.unread_count}</b> | Pending Responses: <b>${context.pending_responses.length}</b>`);
+
+        if (context.unread_count > 0) {
+          const unread = await messaging.getUnreadMessages(agentId, 10);
+          lines.push("\n<b>📥 Unread Messages:</b>");
+          for (const msg of unread.slice(0, 5)) {
+            const fromStaff = getStaffById(msg.from);
+            const fromName = fromStaff ? `${fromStaff.avatar} ${fromStaff.name}` : msg.from;
+            const ts = formatTime(msg.created_at);
+            const priorityTag = msg.priority === "P1" ? "🔴" : msg.priority === "P2" ? "🟡" : "";
+            const preview = msg.content.length > 100 ? msg.content.slice(0, 100) + "..." : msg.content;
+            lines.push(`${priorityTag} <b>[${msg.priority}] ${escapeHtml(fromName)}</b> — ${ts}`);
+            lines.push(`<i>${escapeHtml(preview)}</i>`);
+          }
+          if (unread.length > 5) lines.push(`... and ${context.unread_count - 5} more`);
+        }
+
+        if (context.pending_responses.length > 0) {
+          lines.push("\n<b>⏳ Awaiting Your Response:</b>");
+          for (const msg of context.pending_responses.slice(0, 3)) {
+            const fromStaff = getStaffById(msg.from);
+            const fromName = fromStaff ? `${fromStaff.avatar} ${fromStaff.name}` : msg.from;
+            lines.push(`• ${escapeHtml(fromName)}: ${escapeHtml(msg.content.slice(0, 80))}...`);
+          }
+        }
+
+        if (context.active_threads.length > 0) {
+          lines.push(`\n<b>💬 Active Threads (${context.active_threads.length}):</b>`);
+          for (const thread of context.active_threads.slice(0, 5)) {
+            const other = thread.participants.find(p => p !== agentId) || "unknown";
+            const otherStaff = getStaffById(other);
+            const otherName = otherStaff ? `${otherStaff.avatar} ${otherStaff.name}` : other;
+            lines.push(`• ${escapeHtml(thread.subject)} (with ${escapeHtml(otherName)})`);
+          }
+        }
+
+        if (context.recent_escalations && context.recent_escalations.length > 0) {
+          lines.push(`\n<b>⚠️ Escalations (${context.recent_escalations.length}):</b>`);
+          for (const esc of context.recent_escalations.slice(0, 3)) {
+            const toStaff = getStaffById(esc.to);
+            const toName = toStaff ? `${toStaff.avatar} ${toStaff.name}` : esc.to;
+            lines.push(`• → ${escapeHtml(toName)}: ${escapeHtml(esc.reason.slice(0, 80))} <i>[${esc.status}]</i>`);
+          }
+        }
+
+        if (context.unread_count === 0 && context.pending_responses.length === 0 && (!context.recent_escalations || context.recent_escalations.length === 0)) {
+          lines.push("\n<i>📭 Inbox is clear</i>");
+        }
+
+        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /report command — View latest periodic reports
+    bot.command("report", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+      const chatId = ctx.chat.id.toString();
+      const activeAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
+      const agentId = args[0] || activeAgentId;
+
+      await ctx.sendChatAction("typing");
+      try {
+        const rs = await getReportsAndSessions();
+        const reports = await rs.getLatestReports(agentId, 5);
+
+        if (!reports || reports.length === 0) {
+          await ctx.reply(`<b>📊 No reports found for</b> <b>${escapeHtml(agentId)}</b>`, { parse_mode: "HTML" });
+          return;
+        }
+
+        const lines = [`<b>📊 Latest Reports for ${escapeHtml(agentId)}</b>\n`];
+        for (const report of reports) {
+          const dateStr = report.created_at ? new Date(report.created_at).toLocaleString() : "unknown";
+          lines.push(`<b>📅 ${escapeHtml(report.period)}</b> — ${dateStr}`);
+          if (report.summary) lines.push(`<i>${escapeHtml(report.summary.slice(0, 200))}</i>`);
+          if (report.metrics && Object.keys(report.metrics).length > 0) {
+            const metricStrs = Object.entries(report.metrics).slice(0, 5).map(([k, v]) => `  • ${escapeHtml(String(k))}: ${escapeHtml(String(v))}`);
+            lines.push(metricStrs.join("\n"));
+          }
+          if (report.actions && report.actions.length > 0) {
+            lines.push(`<b>Action Items:</b>`);
+            for (const action of report.actions.slice(0, 3)) {
+              const assignee = action.assignee ? ` (${action.assignee})` : "";
+              const due = action.due ? ` [due: ${action.due}]` : "";
+              lines.push(`  • ${escapeHtml(action.description)}${assignee}${due}`);
+            }
+          }
+          lines.push("");
+        }
+
+        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /hire command — Hire auxiliary staff
+    bot.command("hire", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+
+      if (args.length < 2) {
+        await ctx.reply(`<b>📋 Hire Auxiliary Staff</b>
+
+Usage: /hire [role] [manager] [task1, task2, ...]
+
+Example:
+/hire Developer coo-productivity Build auth system, Write tests, Review PRs
+
+• <b>role</b> — Job title/role name
+• <b>manager</b> — Core staff member who manages this hire
+• <b>tasks</b> — Comma-separated list of responsibilities`, { parse_mode: "HTML" });
+        return;
+      }
+
+      const role = args[0];
+      const reportsTo = args[1];
+      const tasksStr = args.slice(2).join(" ");
+      const tasks = tasksStr.split(",").map((t: string) => t.trim()).filter(Boolean);
+
+      if (tasks.length === 0) {
+        await ctx.reply(`<b>❌ Please provide at least one task.</b>\n\nUsage: /hire [role] [manager] [task1, task2, ...]`, { parse_mode: "HTML" });
+        return;
+      }
+
+      await ctx.sendChatAction("typing");
+      try {
+        const hiring = await getHiringSystem();
+        const contract = await hiring.create({ role, reports_to: reportsTo, tasks });
+
+        const managerStaff = getStaffById(reportsTo);
+        const managerName = managerStaff ? `${managerStaff.avatar} ${managerStaff.name}` : reportsTo;
+
+        await ctx.reply(`<b>✅ Staff Hired!</b>
+
+<b>Role:</b> ${escapeHtml(contract.role)}
+<b>Agent ID:</b> <code>${escapeHtml(contract.agent_id)}</code>
+<b>Reports to:</b> ${escapeHtml(managerName)}
+<b>Tasks:</b> ${contract.tasks.map((t: string) => escapeHtml(t)).join(", ")}
+
+The new team member has been registered in Kanban and Memory systems.`, { parse_mode: "HTML" });
+        logger.info({ agentId: contract.agent_id, role, reportsTo }, "Staff hired via Telegram");
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /fire command — Fire auxiliary staff
+    bot.command("fire", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+
+      if (args.length < 2) {
+        await ctx.reply(`<b>⚠️ Fire Auxiliary Staff</b>
+
+Usage: /fire [agent_id] [reason]
+
+Example:
+/fire dev-abc12345 Project no longer requires this role
+
+<b>Warning:</b> This will terminate the contract and cancel all pending delegations.`, { parse_mode: "HTML" });
+        return;
+      }
+
+      const agentId = args[0];
+      const reason = args.slice(1).join(" ");
+
+      // Validate it's not core staff
+      const coreStaff = getCoreStaffIds();
+      if (coreStaff.includes(agentId)) {
+        await ctx.reply(`<b>❌ Cannot fire core staff member</b> <b>${escapeHtml(agentId)}</b>. Core staff cannot be terminated.`, { parse_mode: "HTML" });
+        return;
+      }
+
+      await ctx.sendChatAction("typing");
+      try {
+        const hiring = await getHiringSystem();
+        const contract = await hiring.fire({ agent_id: agentId, reason });
+
+        await ctx.reply(`<b>🔴 Staff Released</b>
+
+<b>Role:</b> ${escapeHtml(contract.role)}
+<b>Agent ID:</b> <code>${escapeHtml(agentId)}</code>
+<b>Reason:</b> ${escapeHtml(reason)}
+
+All pending delegations have been cancelled.`, { parse_mode: "HTML" });
+        logger.info({ agentId, role: contract.role, reason }, "Staff fired via Telegram");
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /team command — View auxiliary team members
+    bot.command("team", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+      const managerId = args[0] || "ceo-strategic";
+
+      await ctx.sendChatAction("typing");
+      try {
+        const hiring = await getHiringSystem();
+        const contracts = await hiring.getContractsForManager(managerId);
+
+        const managerStaff = getStaffById(managerId);
+        const managerName = managerStaff ? `${managerStaff.avatar} ${managerStaff.name}` : managerId;
+
+        if (contracts.length === 0) {
+          await ctx.reply(`<b>👥 ${escapeHtml(managerName)} has no auxiliary staff.</b>
+
+Use /hire [role] ${escapeHtml(managerId)} [tasks...] to add team members.`, { parse_mode: "HTML" });
+          return;
+        }
+
+        const lines = [`<b>👥 Team for ${escapeHtml(managerName)}</b> (${contracts.length} members)\n`];
+        for (const contract of contracts) {
+          const statusEmoji = contract.status === "active" ? "🟢" : contract.status === "on_hold" ? "🟡" : "🔴";
+          lines.push(`${statusEmoji} <b>${escapeHtml(contract.role)}</b> (<code>${escapeHtml(contract.agent_id)}</code>)`);
+          lines.push(`   Tasks: ${contract.tasks.map((t: string) => escapeHtml(t)).join(", ")}`);
+          if (contract.budget) lines.push(`   Budget: $${contract.budget}`);
+          lines.push("");
+        }
+
+        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /memory command — Memory statistics
+    bot.command("memory", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+
+      await ctx.sendChatAction("typing");
+      try {
+        const memoryFacade = await getMemoryFacade();
+        const stats = await memoryFacade.stats();
+
+        const lines = [`<b>🧠 Memory Statistics</b>\n`];
+
+        let grandTotal = 0;
+        const scopeEmoji: Record<string, string> = { personal: "👤", project: "📁", company: "🏢" };
+
+        lines.push("<b>By Scope:</b>");
+        for (const [scope, data] of Object.entries(stats)) {
+          grandTotal += data.total;
+          const emoji = scopeEmoji[scope] || "📄";
+          lines.push(`  ${emoji} <b>${escapeHtml(scope)}:</b> ${data.total} entries`);
+        }
+        lines.push(`\n<b>Total Entries:</b> ${grandTotal}`);
+
+        const allAgentCounts: Record<string, number> = {};
+        for (const [, data] of Object.entries(stats)) {
+          for (const [agentId, count] of Object.entries(data.perAgent)) {
+            allAgentCounts[agentId] = (allAgentCounts[agentId] || 0) + count;
+          }
+        }
+
+        if (Object.keys(allAgentCounts).length > 0) {
+          lines.push("\n<b>By Agent:</b>");
+          const sorted = Object.entries(allAgentCounts).sort((a, b) => b[1] - a[1]);
+          for (const [agentId, count] of sorted.slice(0, 10)) {
+            const staff = getStaffById(agentId);
+            const agentName = staff ? `${staff.avatar} ${staff.name}` : agentId;
+            lines.push(`  • ${escapeHtml(agentName)}: ${count} entries`);
+          }
+          if (sorted.length > 10) lines.push(`  ... and ${sorted.length - 10} more agents`);
+        }
+
+        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /cron command — Scheduled tasks management
+    bot.command("cron", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+      const chatId = ctx.chat.id.toString();
+      const activeAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
+
+      await ctx.sendChatAction("typing");
+      try {
+        if (args.length === 0) {
+          // List all scheduled tasks for active agent
+          const scheduler = await getAgentScheduler();
+          const tasks = await scheduler.getTasksForAgent(activeAgentId, true);
+
+          if (tasks.length === 0) {
+            await ctx.reply(`<b>⏱ No scheduled tasks for</b> <b>${escapeHtml(activeAgentId)}</b>`, { parse_mode: "HTML" });
+            return;
+          }
+
+          const lines = [`<b>📋 Scheduled Tasks</b> (${tasks.length})\n`];
+          for (const t of tasks) {
+            const status = t.enabled ? (t.status === "active" ? "🟢" : "🟡") : "🔴";
+            const nextRun = t.next_run > 0 ? new Date(t.next_run).toLocaleString() : "—";
+            lines.push(`${status} <b>${escapeHtml(t.name)}</b> — ${escapeHtml(t.action)}`);
+            lines.push(`   Next: ${nextRun} | Runs: ${t.run_count} | Fails: ${t.fail_count}`);
+            lines.push(`   ID: <code>${escapeHtml(t.id)}</code>`);
+          }
+          await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+        } else if (args[0].toLowerCase() === "status") {
+          const agentId = args[1] || activeAgentId;
+          const scheduler = await getAgentScheduler();
+          const tasks = await scheduler.getTasksForAgent(agentId);
+          const active = tasks.filter(t => t.enabled && t.status === "active");
+          const paused = tasks.filter(t => !t.enabled || t.status === "paused");
+
+          const lines = [`<b>⏱ Scheduled Tasks for ${escapeHtml(agentId)}</b>\n`];
+          lines.push(`Active: <b>${active.length}</b> | Paused: <b>${paused.length}</b> | Total: <b>${tasks.length}</b>`);
+          await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+        } else if (args[0].toLowerCase() === "pause") {
+          const taskId = args[1];
+          if (!taskId) {
+            await ctx.reply("Usage: /cron pause [task_id]", { parse_mode: "HTML" });
+            return;
+          }
+          const scheduler = await getAgentScheduler();
+          const result = await scheduler.pauseTask(taskId);
+          if (result) {
+            await ctx.reply(`<b>⏸ Task paused:</b> <code>${escapeHtml(taskId)}</code>`, { parse_mode: "HTML" });
+            logger.info({ taskId }, "Cron task paused via Telegram");
+          } else {
+            await ctx.reply(`<b>❌ Task not found:</b> <code>${escapeHtml(taskId)}</code>`, { parse_mode: "HTML" });
+          }
+        } else if (args[0].toLowerCase() === "resume") {
+          const taskId = args[1];
+          if (!taskId) {
+            await ctx.reply("Usage: /cron resume [task_id]", { parse_mode: "HTML" });
+            return;
+          }
+          const scheduler = await getAgentScheduler();
+          const result = await scheduler.resumeTask(taskId);
+          if (result) {
+            await ctx.reply(`<b>▶️ Task resumed:</b> <code>${escapeHtml(taskId)}</code>`, { parse_mode: "HTML" });
+            logger.info({ taskId }, "Cron task resumed via Telegram");
+          } else {
+            await ctx.reply(`<b>❌ Task not found:</b> <code>${escapeHtml(taskId)}</code>`, { parse_mode: "HTML" });
+          }
+        } else {
+          await ctx.reply(`<b>⏱ Scheduled Tasks Management</b>
+
+Usage:
+/cron — List all tasks
+/cron status [agent] — Task counts for agent
+/cron pause [task_id] — Pause a task
+/cron resume [task_id] — Resume a task`, { parse_mode: "HTML" });
+        }
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // /meetings command — View board meetings + governance proposals
+    bot.command("meetings", async (ctx) => {
+      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+
+      await ctx.sendChatAction("typing");
+      try {
+        const { getActiveMeeting } = await import("../organic/board-meeting.js");
+        const governance = getMeetingGovernance();
+        const active = getActiveMeeting();
+        const proposals = governance ? await governance.getActiveProposals() : [];
+
+        if (!active && proposals.length === 0) {
+          await ctx.reply(`<b>🏛 No Active Meetings</b>
+
+<b>Board Meeting Engine:</b> No active meetings
+<b>Meeting Proposals:</b> None pending
+
+<b>Quick Actions:</b>
+• /meeting [names...] — Start multi-agent discussion
+• Just ask me to "propose a board meeting" and agents will handle it`, { parse_mode: "HTML" });
+          return;
+        }
+
+        const lines: string[] = [];
+
+        if (active) {
+          const statusEmoji: Record<string, string> = { scheduled: "📋", in_progress: "🏛", report_pending: "📝", delivered: "✅", approved: "👍", negated: "❌" };
+          const emoji = statusEmoji[active.status] || "⚪";
+          lines.push(`<b>${emoji} Active Board Meeting</b>`);
+          lines.push(`ID: <code>${escapeHtml(active.id)}</code>`);
+          lines.push(`Status: ${escapeHtml(active.status)}`);
+          lines.push(`Turns: ${active.turns.length}`);
+          if (active.objective) lines.push(`Objective: ${escapeHtml(active.objective)}`);
+          lines.push("");
+        }
+
+        if (proposals.length > 0) {
+          lines.push(`<b>📋 Meeting Proposals (${proposals.length})</b>\n`);
+          const formatTime = (ts: number): string => {
+            const d = new Date(ts);
+            return d.toLocaleString();
+          };
+
+          for (const p of proposals) {
+            const urgencyEmoji = p.urgency === "P1" ? "🔴" : p.urgency === "P2" ? "🟡" : "🔵";
+            const statusEmoji = p.status === "voting" ? "🗳" : p.status === "scheduled" ? "📅" : "🏛";
+            const yesVotes = Object.values(p.votes).filter(v => v === "yes").length;
+            const noVotes = Object.values(p.votes).filter(v => v === "no").length;
+            const abstainVotes = Object.values(p.votes).filter(v => v === "abstain").length;
+            const deadline = p.voting_deadline ? formatTime(p.voting_deadline) : "—";
+
+            lines.push(`${statusEmoji} <b>${urgencyEmoji} ${escapeHtml(p.title)}</b>`);
+            lines.push(`ID: <code>${escapeHtml(p.id)}</code>`);
+            lines.push(`Proposed by: ${escapeHtml(p.proposer)}`);
+            lines.push(`<i>${escapeHtml(p.reason.slice(0, 120))}</i>`);
+            lines.push(`Votes: ✅${yesVotes} ❌${noVotes} ⬜${abstainVotes} | Need: ${p.required_votes}`);
+            lines.push(`Deadline: ${deadline}`);
+            lines.push(`Status: ${escapeHtml(p.status)}`);
+            lines.push("");
+          }
+        }
+
+        await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
     });
 
     // Natural language messages - route to native runtime
@@ -970,11 +1624,117 @@ ${agentLines}`, { parse_mode: "HTML" });
       logger.info({ chatId, agentId }, "Agent switched via inline keyboard");
     });
 
+    // board_view_ callback — view specific agent's board from inline keyboard
+    bot.action(/^board_view_(.+)$/, async (ctx) => {
+      const chatId = String(ctx.callbackQuery?.message?.chat?.id ?? "");
+      if (chatId !== cfg.telegramChatId) {
+        await ctx.answerCbQuery("Not authorized");
+        return;
+      }
+      const agentId = ctx.match[1];
+      const staff = getStaffById(agentId);
+      if (!staff) {
+        await ctx.answerCbQuery("Agent not found");
+        return;
+      }
+
+      await ctx.answerCbQuery(`Viewing ${staff.name}'s board`);
+      try {
+        const board = await rt.ctx.kanban.getBoard(agentId);
+        if (!board) {
+          await ctx.reply(`<b>❌ Board not found for</b> <b>${escapeHtml(agentId)}</b>`, { parse_mode: "HTML" });
+          return;
+        }
+        const agentName = `${staff.avatar} ${staff.name}`;
+        const priorityEmoji: Record<string, string> = { P1: "🔴", P2: "🟡", P3: "🔵", P4: "⚪" };
+        const lines = [`<b>📋 ${escapeHtml(agentName)}'s Board</b>\n`];
+        for (const col of board.columns) {
+          const cardCount = col.cards.length;
+          lines.push(`<b>${escapeHtml(col.name)}</b> (${cardCount})`);
+          for (const card of col.cards.slice(0, 8)) {
+            const emoji = priorityEmoji[card.priority] || "⚪";
+            const dueStr = card.due ? ` <i>(due: ${escapeHtml(card.due)})</i>` : "";
+            lines.push(`  ${emoji} <b>${escapeHtml(card.title)}</b>${dueStr}`);
+          }
+          if (col.cards.length > 8) lines.push(`  ... and ${col.cards.length - 8} more`);
+          if (cardCount === 0) lines.push(`  <i>(empty)</i>`);
+        }
+        const totalCards = board.columns.reduce((sum, c) => sum + c.cards.length, 0);
+        lines.push(`\n<b>Total: ${totalCards} cards</b>`);
+
+        const buttons = getCoreStaffIds()
+          .filter(id => id !== agentId)
+          .slice(0, 6)
+          .map(id => {
+            const s = getStaffById(id);
+            return s ? Markup.button.callback(`${s.avatar} ${s.name}`, `board_view_${id}`) : null;
+          })
+          .filter(Boolean);
+        const rows: any[][] = [];
+        for (let i = 0; i < buttons.length; i += 2) {
+          rows.push(buttons.slice(i, i + 2));
+        }
+
+        await ctx.reply(lines.join("\n"), {
+          parse_mode: "HTML",
+          ...Markup.inlineKeyboard(rows),
+        });
+      } catch (err: any) {
+        await ctx.reply(`<b>❌ Error:</b> ${escapeHtml(err.message)}`, { parse_mode: "HTML" });
+      }
+    });
+
+    // meeting_vote_yes_ callback — vote yes on meeting proposal
+    bot.action(/^meeting_vote_yes_(.+)$/, async (ctx) => {
+      const chatId = String(ctx.callbackQuery?.message?.chat?.id ?? "");
+      if (chatId !== cfg.telegramChatId) {
+        await ctx.answerCbQuery("Not authorized");
+        return;
+      }
+      const meetingId = ctx.match[1];
+      try {
+        const { applyUserDecision } = await import("../organic/board-meeting.js");
+        await applyUserDecision(meetingId, "approved");
+        await ctx.answerCbQuery("✅ Vote recorded: Yes");
+        logger.info({ meetingId, vote: "yes" }, "Meeting vote recorded");
+      } catch (err: any) {
+        await ctx.answerCbQuery("❌ Failed to record vote");
+        logger.error({ meetingId, err: err.message }, "Failed to record meeting vote");
+      }
+    });
+
+    // meeting_vote_no_ callback — vote no on meeting proposal
+    bot.action(/^meeting_vote_no_(.+)$/, async (ctx) => {
+      const chatId = String(ctx.callbackQuery?.message?.chat?.id ?? "");
+      if (chatId !== cfg.telegramChatId) {
+        await ctx.answerCbQuery("Not authorized");
+        return;
+      }
+      const meetingId = ctx.match[1];
+      try {
+        const { applyUserDecision } = await import("../organic/board-meeting.js");
+        await applyUserDecision(meetingId, "negated");
+        await ctx.answerCbQuery("❌ Vote recorded: No");
+        logger.info({ meetingId, vote: "no" }, "Meeting vote recorded");
+      } catch (err: any) {
+        await ctx.answerCbQuery("❌ Failed to record vote");
+        logger.error({ meetingId, err: err.message }, "Failed to record meeting vote");
+      }
+    });
+
     // Error recovery: catch errors from the Telegraf bot
     bot.catch(async (err: any) => {
       const ctx = err.ctx as any;
       const updateType = ctx?.updateType || "unknown";
       logger.error({ err: err.message, updateType }, "Telegram bot error");
+      ErrorBus.emit({
+        type: "gateway:down",
+        severity: "error",
+        component: "gateway-telegram",
+        error: err,
+        message: `Telegram gateway error: ${err.message}`,
+        context: { gatewayType: "telegram" },
+      });
       try {
         await sendTelegramMessage(`⚠️ **Bot Error**: ${err.message}`, "warning");
       } catch { /* ignore notification failures */ }
@@ -995,15 +1755,24 @@ ${agentLines}`, { parse_mode: "HTML" });
     // ── Register native bot command menu (appears on "/" tap) ──
     const TELEGRAM_COMMANDS = [
       { command: "start", description: "Welcome message" },
-      { command: "agent", description: "Summon an agent" },
+      { command: "agent", description: "Pick an agent from inline menu" },
       { command: "meeting", description: "Start/end board meeting" },
+      { command: "meetings", description: "Pending meeting proposals" },
       { command: "org", description: "Organization chart" },
       { command: "staff", description: "Core staff list" },
       { command: "agents", description: "All agents with status" },
       { command: "wake", description: "Agent wake context" },
       { command: "messages", description: "Browse message threads" },
+      { command: "inbox", description: "Message inbox" },
       { command: "recall", description: "Search vector memory" },
+      { command: "memory", description: "Memory statistics" },
+      { command: "board", description: "View Kanban board" },
+      { command: "report", description: "Latest reports" },
       { command: "session", description: "Session management" },
+      { command: "hire", description: "Hire auxiliary staff" },
+      { command: "fire", description: "Fire auxiliary staff" },
+      { command: "team", description: "View auxiliary team" },
+      { command: "cron", description: "Scheduled tasks" },
       { command: "status", description: "System health status" },
       { command: "help", description: "Command reference" },
     ];
@@ -1117,6 +1886,14 @@ export async function sendTelegramMessage(text: string, priority: "info" | "warn
     return true;
   } catch (err: any) {
     logger.error({ err: err.message }, "Failed to send Telegram notification");
+    ErrorBus.emit({
+      type: "gateway:down",
+      severity: "warn",
+      component: "gateway-telegram",
+      error: err,
+      message: `Telegram send failed: ${err.message}`,
+      context: { gatewayType: "telegram" },
+    });
     return false;
   }
 }

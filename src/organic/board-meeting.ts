@@ -4,7 +4,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
 import { getBoardMembers, getStaffById } from "../staff/core-staff.js";
-import { loadConfig } from "../config/loader.js";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
@@ -62,12 +61,11 @@ function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 }
 
-function getBoardConfig() {
-  const config = loadConfig();
+function getBoardSafetyLimits() {
   return {
-    maxTurns: config.boardMeeting?.maxTurns ?? 12,
-    perTurnTimeoutMs: config.boardMeeting?.perTurnTimeoutMs ?? 90000,
-    totalMeetingTimeoutMs: config.boardMeeting?.totalMeetingTimeoutMs ?? 900000,
+    agentResponseMs: 300000,
+    totalMeetingMs: 30 * 60 * 1000,
+    minTurnsForReport: 1,
   };
 }
 
@@ -126,38 +124,37 @@ function buildBoardContext(meeting: BoardMeeting): string {
 }
 
 function buildCeoOpeningPrompt(date: string, objective?: string): string {
-  return `## Daily Board Meeting \u2014 ${date}
+  return `## Board Meeting \u2014 ${date}
 
 ### Context
 It is ${new Date().toLocaleTimeString()}. All board members are present and active.
 
 ### Your Role
-You are facilitating today's board meeting. Your job is to lead this meeting toward meaningful outcomes. Not to run through a checklist \u2014 to actually drive the organization forward.
+You are the CEO. You are leading this board meeting. Your job is to drive the organization toward meaningful outcomes \u2014 not run through a checklist, but actually move things forward.
 
-${objective ? `### Today's Objective\n${objective}\n` : ""}
+${objective ? `### Objective\n${objective}\n` : ""}
 
-### Potential Objectives (choose what matters today)
-- Identify blind spots in the organization's current trajectory
-- Surface risks that no single agent can see from their domain alone
-- Find opportunities where cross-domain collaboration would multiply impact
-- Review whether current priorities still serve the Board Chair's goals
-- Challenge assumptions \u2014 is anyone working on something that's no longer relevant?
-- Propose new initiatives based on patterns you've observed across the team
-- Address any unresolved tensions or blockers between agents
-
-### How to Lead
-1. Start by setting the meeting's focus. What matters most today? Tell the board.
-2. Read every agent's response. Look for connections, contradictions, and gaps.
-3. Synthesize what you're hearing. Share the synthesis with the board.
-4. Direct agents individually or collectively based on what emerges.
-5. Push for concrete conclusions. Not "we should look into this" \u2014 "here's what we're doing."
-6. When you've reached a meaningful conclusion, produce the board report for the Board Chair.
+### How to Lead This Meeting
+1. **Set the focus.** Open with what matters most right now. Tell the board.
+2. **Read every response.** Look for connections, contradictions, and gaps across domains.
+3. **Synthesize and redirect.** After each turn, share what you're seeing and direct the board deeper, wider, or toward a different angle.
+4. **Push for concrete conclusions.** Not "we should explore this" \u2014 "here's what we're doing."
+5. **When you're satisfied, conclude.** Say something like "That covers everything. Let me produce the board report." and then produce the report.
 
 ### Meeting Mechanics
-- Each turn, you issue a directive. All 8 agents receive it and respond in parallel.
-- You also respond alongside them \u2014 your perspective matters too.
+- Each turn, you issue a directive. All agents receive it and respond in parallel with their domain perspective and real data.
+- You also respond alongside them \u2014 your synthesis becomes the directive for the next turn.
 - The board context grows with each turn. Every agent sees everything.
-- You decide when the meeting is over. Aim for substance, not speed.`;
+- **You decide when the meeting is over.** There is no turn limit. Take as many turns as needed to reach substance.
+- When you're done, explicitly state that you're concluding and produce the report.
+
+### What to Focus On
+- Identify blind spots in the organization's current trajectory
+- Surface risks no single agent can see from their domain alone
+- Find opportunities where cross-domain collaboration would multiply impact
+- Challenge assumptions \u2014 is anyone working on something that's no longer relevant?
+- Address unresolved tensions or blockers between agents
+- Propose concrete next steps with clear owners`;
 }
 
 function buildCeoSynthesisPrompt(
@@ -316,19 +313,28 @@ export class BoardMeetingEngine {
     await fs.rename(tmpPath, this.dbPath);
   }
 
-  private queryOneRow(sql: string, params?: unknown[]): any {
+  private queryOneRow(sql: string, params?: unknown[]): Record<string, unknown> | null {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const result = stmt.step() ? stmt.get() : null;
+    if (params && params.length > 0) {
+      const safe = params.map(p => p === undefined ? null : p);
+      stmt.bind(safe);
+    }
+    const result = stmt.step() ? (stmt.get() as Record<string, unknown>) : null;
     stmt.free();
     return result;
   }
 
   private queryAllArrays(sql: string, params?: unknown[]): unknown[][] {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
+    if (params && params.length > 0) {
+      const safe = params.map(p => p === undefined ? null : p);
+      stmt.bind(safe);
+    }
     const results: unknown[][] = [];
-    while (stmt.step()) results.push(stmt.get() as unknown[]);
+    while (stmt.step()) {
+      const row = stmt.get() as Record<string, unknown>;
+      results.push(Object.values(row));
+    }
     stmt.free();
     return results;
   }
@@ -362,17 +368,16 @@ export class BoardMeetingEngine {
     const row = this.queryOneRow("SELECT * FROM board_meetings WHERE id = ?", [id]);
     if (!row) return null;
 
-    const vals = row.values;
     const meeting: BoardMeeting = {
-      id: vals[0],
-      date: vals[1],
-      status: vals[2],
-      objective: vals[3] || undefined,
-      report: vals[4] || undefined,
-      user_decision: vals[5] as BoardMeeting["user_decision"],
-      user_feedback: vals[6] || undefined,
-      started_at: vals[7],
-      concluded_at: vals[8] || undefined,
+      id: row.id as string,
+      date: row.date as string,
+      status: row.status as string,
+      objective: (row.objective as string) || undefined,
+      report: (row.report as string) || undefined,
+      user_decision: row.user_decision as BoardMeeting["user_decision"],
+      user_feedback: (row.user_feedback as string) || undefined,
+      started_at: row.started_at as number,
+      concluded_at: (row.concluded_at as number) || undefined,
       turns: [],
     };
 
@@ -419,6 +424,26 @@ export class BoardMeetingEngine {
   async startBoardMeeting(objective?: string): Promise<BoardMeeting> {
     await this.archiveOldMeetings();
 
+    // Concurrency guard: reject if a meeting is already in_progress with turns
+    const existing = this.queryOneRow(
+      "SELECT id, date, (SELECT COUNT(*) FROM board_meeting_turns WHERE meeting_id = board_meetings.id) as turn_count FROM board_meetings WHERE status = 'in_progress' ORDER BY started_at DESC LIMIT 1"
+    );
+    if (existing && (existing.turn_count as number) > 0) {
+      throw new Error(
+        `A board meeting is already in progress (ID: ${existing.id}, turns: ${existing.turn_count}). Call boardmeeting.status for details or wait for it to complete.`
+      );
+    }
+
+    // Auto-recover: clean up any meetings stuck in "in_progress" with 0 turns
+    if (existing && (existing.turn_count as number) === 0) {
+      const stuckId = existing.id as string;
+      logger.warn({ meetingId: stuckId }, "Cleaning up stuck board meeting with 0 turns");
+      this.db.run("DELETE FROM board_meeting_turns WHERE meeting_id = ?", [stuckId]);
+      this.db.run("DELETE FROM board_meeting_responses WHERE meeting_id = ?", [stuckId]);
+      this.db.run("UPDATE board_meetings SET status = 'negated', user_feedback = 'Auto-cleaned: stuck in_progress with 0 turns' WHERE id = ?", [stuckId]);
+      await this.persist();
+    }
+
     const id = uuidv4();
     const now = Date.now();
     const date = new Date().toISOString();
@@ -447,28 +472,17 @@ export class BoardMeetingEngine {
       throw new Error(`Meeting ${meetingId} is not in progress (status: ${meeting.status})`);
     }
 
-    const config = getBoardConfig();
+    const safety = getBoardSafetyLimits();
     const turnNumber = meeting.turns.length + 1;
 
-    if (turnNumber > config.maxTurns) {
-      throw new Error(`Maximum turns (${config.maxTurns}) exceeded. Meeting must conclude.`);
-    }
-
-    const elapsed = Date.now() - meeting.started_at;
-    if (elapsed > config.totalMeetingTimeoutMs) {
-      throw new Error(
-        `Total meeting timeout (${config.totalMeetingTimeoutMs / 1000}s) exceeded after ${elapsed / 1000}s.`
-      );
-    }
-
-    const ceoResponse = await this.runCeoTurn(meeting, turnNumber, ceoDirective, config.perTurnTimeoutMs);
+    const ceoResponse = await this.runCeoTurn(meeting, turnNumber, ceoDirective, safety.agentResponseMs);
 
     const boardMembers = getBoardMembers().filter((m) => m.id !== "ceo-strategic");
     const agentIds = boardMembers.map((m) => m.id);
 
     const responsePromises = agentIds.map(async (agentId) => {
       const prompt = buildAgentPrompt(meeting, turnNumber, ceoDirective);
-      return this.runAgentWithTimeout(agentId, meetingId, prompt, config.perTurnTimeoutMs);
+      return this.runAgentWithTimeout(agentId, meetingId, prompt, safety.agentResponseMs);
     });
 
     const settled = await Promise.allSettled(responsePromises);
@@ -551,8 +565,8 @@ export class BoardMeetingEngine {
     const meeting = this.loadMeeting(meetingId);
     if (!meeting) throw new Error(`Meeting ${meetingId} not found`);
 
-    if (meeting.turns.length < 2) {
-      throw new Error(`Cannot produce report before turn 2. Currently at turn ${meeting.turns.length}.`);
+    if (meeting.turns.length < 1) {
+      throw new Error(`Cannot produce report before turn 1. Currently at turn ${meeting.turns.length}.`);
     }
 
     const runtime = getNativeRuntime();
@@ -681,7 +695,7 @@ export class BoardMeetingEngine {
       prompt = `${opening}\n\n---\n\nNow issue your first directive to the board. What matters most today?\n\n### Your Directive to the Board\n${directive}`;
     } else {
       const context = buildBoardContext(meeting);
-      prompt = `## Board Meeting \u2014 Turn ${turnNumber}\n\n### Current Board Context\n${context}\n\n### Your Assessment\nBased on the responses so far, what's your next directive? You can either:\n- Push deeper on a specific finding\n- Ask agents to investigate something new\n- Challenge a contradiction you noticed\n- Move toward producing the final report\n\n### Your Directive\n${directive}`;
+      prompt = `## Board Meeting \u2014 Turn ${turnNumber}\n\n### Current Board Context\n${context}\n\n### Your Assessment\nBased on the responses so far, what's your next directive? You can:\n- Push deeper on a specific finding\n- Ask agents to investigate something new\n- Challenge a contradiction you noticed\n- Move toward producing the final report\n\n### Your Directive\n${directive}`;
     }
 
     const result = await this.withTimeout(
@@ -806,27 +820,27 @@ export function getBoardMeetingEngine(): BoardMeetingEngine | null {
 // ── Full Meeting Orchestrator ─────────────────────────────────────────
 
 export async function runFullBoardMeeting(objective?: string): Promise<BoardMeeting> {
-  const config = getBoardConfig();
-  let meeting: BoardMeeting;
+  const safety = getBoardSafetyLimits();
+  let meeting: BoardMeeting | undefined;
 
   try {
     meeting = await startBoardMeeting(objective);
     logger.info({ meetingId: meeting.id }, "Full board meeting lifecycle started");
 
-    const openingDirective = objective || "Set today's strategic focus. What matters most for the organization right now?";
-    const firstTurn = await runMeetingTurn(meeting.id, openingDirective);
-
+    const directive = objective || "Set today's strategic focus. What matters most for the organization right now?";
+    logger.info({ meetingId: meeting.id }, "Running first turn");
+    const firstTurn = await runMeetingTurn(meeting.id, directive);
     let synthesis = await synthesizeTurn(meeting.id, firstTurn.ceo_response);
 
-    for (let turnIndex = 1; turnIndex < config.maxTurns; turnIndex++) {
+    while (true) {
       const elapsed = Date.now() - meeting.started_at;
-      if (elapsed > config.totalMeetingTimeoutMs) {
-        logger.warn({ meetingId: meeting.id, elapsed }, "Total meeting timeout reached, concluding");
+      if (elapsed > safety.totalMeetingMs) {
+        logger.warn({ meetingId: meeting.id, elapsed }, "Safety circuit breaker triggered — concluding meeting");
         break;
       }
 
-      if (_detectConclusion(synthesis) && meeting.turns.length >= 2) {
-        logger.info({ meetingId: meeting.id, turn: turnIndex + 1 }, "Synthesis signals meeting should conclude");
+      if (_detectConclusion(synthesis) && meeting.turns.length >= safety.minTurnsForReport) {
+        logger.info({ meetingId: meeting.id, turns: meeting.turns.length }, "CEO signaled meeting conclusion");
         break;
       }
 
@@ -838,8 +852,12 @@ export async function runFullBoardMeeting(objective?: string): Promise<BoardMeet
       logger.info({ meetingId: meeting.id, turn: turn.turn_number, synthesisLength: synthesis.length }, "Turn synthesized");
     }
 
-    await produceReport(meeting.id);
-    await deliverReport(meeting.id);
+    if (meeting.turns.length >= safety.minTurnsForReport) {
+      await produceReport(meeting.id);
+      await deliverReport(meeting.id);
+    } else {
+      logger.warn({ meetingId: meeting.id, turns: meeting.turns.length }, "Meeting concluded too early for report");
+    }
 
     meeting = getMeeting(meeting.id) || meeting;
 
@@ -850,11 +868,23 @@ export async function runFullBoardMeeting(objective?: string): Promise<BoardMeet
 
     return meeting;
   } catch (err: any) {
-    logger.error({ meetingId: meeting?.id, err: err.message }, "Error during full board meeting lifecycle");
-    return meeting || (getMeeting(meeting?.id) as BoardMeeting) || {
-      id: meeting?.id || "unknown",
+    const meetingId = meeting?.id || "unknown";
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errStack = err instanceof Error ? err.stack : '';
+    logger.error({ meetingId, err: errMsg, stack: errStack }, "Error during full board meeting lifecycle");
+
+    if (meeting?.id) {
+      try {
+        await applyUserDecision(meeting.id, "negated", `Failed during execution: ${err.message}`);
+      } catch (persistErr: any) {
+        logger.error({ meetingId, err: persistErr.message }, "Failed to persist meeting failure state");
+      }
+    }
+
+    return meeting || {
+      id: "unknown",
       date: new Date().toISOString(),
-      status: "in_progress",
+      status: "negated",
       objective,
       turns: [],
       started_at: Date.now(),
@@ -875,6 +905,10 @@ function _detectConclusion(synthesis: string): boolean {
     "we've reached a conclusion",
     "ready to conclude",
     "move toward producing the final report",
+    "that covers everything",
+    "i'm concluding this meeting",
+    "meeting conclusion",
+    "final report",
   ];
   return conclusionSignals.some((signal) => lower.includes(signal));
 }

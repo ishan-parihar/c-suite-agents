@@ -66,8 +66,25 @@ export class BoardMeetingScheduler {
         this.lastFiredDate = today;
         logger.info("Board meeting triggered by scheduler");
 
-        const { startBoardMeeting } = await import("../organic/board-meeting.js");
-        await startBoardMeeting();
+        const { runFullBoardMeeting } = await import("../organic/board-meeting.js");
+
+        const meeting = await runFullBoardMeeting();
+
+        if (meeting && meeting.report) {
+          try {
+            const { deliverMeetingReport } = await import("../integrations/telegram.js");
+            const delivered = await deliverMeetingReport(meeting.report, meeting.id);
+            if (delivered) {
+              logger.info({ meetingId: meeting.id }, "Board meeting report delivered to Telegram");
+            } else {
+              logger.warn({ meetingId: meeting.id }, "Board meeting report delivery returned false");
+            }
+          } catch (err: any) {
+            logger.error({ meetingId: meeting?.id, err: err.message }, "Failed to deliver board report to Telegram");
+          }
+        } else {
+          logger.warn({ meetingId: meeting?.id }, "Board meeting completed but no report was generated");
+        }
       }
     } catch (err: any) {
       logger.error({ err: err.message }, "Board meeting scheduler check failed");
