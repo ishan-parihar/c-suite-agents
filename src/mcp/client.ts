@@ -37,9 +37,10 @@ interface McpRemoteConfig {
 type McpServerConfig = McpLocalConfig | McpRemoteConfig;
 
 const CONNECTION_TIMEOUT_MS = 10_000;
-const SLOW_START_TIMEOUT_MS = 30_000; // For Rust/binary MCP servers that need time to initialize
-const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000; // 5 minutes cap
-const INITIAL_RECONNECT_DELAY_MS = 2000; // 2 seconds
+const TOOL_CALL_TIMEOUT_MS = 30_000;
+const SLOW_START_TIMEOUT_MS = 30_000;
+const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000;
+const INITIAL_RECONNECT_DELAY_MS = 2000;
 
 async function connectWithTimeout(
   client: Client,
@@ -89,6 +90,11 @@ async function connectLocal(
     args,
     env: { ...process.env, ...config.env } as Record<string, string>,
     stderr: "pipe",
+  });
+
+  transport.stderr?.on("data", (data: Buffer) => {
+    const msg = data.toString().trim();
+    if (msg) logger.warn({ server: serverName, stderr: msg }, "MCP subprocess stderr");
   });
 
   const client = new Client(
@@ -154,8 +160,14 @@ async function connectLocal(
     return {
       serverName,
       tools,
-      callTool: async (toolName, args) =>
-        client.callTool({ name: toolName, arguments: args }),
+      callTool: async (toolName, args) => {
+        return Promise.race([
+          client.callTool({ name: toolName, arguments: args }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS),
+          ),
+        ]);
+      },
       dispose: doDispose,
     };
   } catch (err: any) {
@@ -258,8 +270,14 @@ async function connectRemote(
       return {
         serverName,
         tools,
-        callTool: async (toolName, args) =>
-          client.callTool({ name: toolName, arguments: args }),
+        callTool: async (toolName, args) => {
+          return Promise.race([
+            client.callTool({ name: toolName, arguments: args }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS),
+            ),
+          ]);
+        },
         dispose: doDispose,
       };
     } catch {

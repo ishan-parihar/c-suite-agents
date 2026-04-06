@@ -216,7 +216,8 @@ export class MessagingSystem extends EventEmitter {
     const now = Date.now();
     const vector = await this.generateEmbedding(content);
 
-    const trx = this.db.transaction(() => {
+    this.db.run("BEGIN");
+    try {
       this.db.run(
         "INSERT INTO threads (id, participants, subject, status, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
         [thread_id, JSON.stringify([from, to]), subject || content.slice(0, 50), "active", JSON.stringify(tags), now, now]
@@ -225,8 +226,11 @@ export class MessagingSystem extends EventEmitter {
         "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         [message_id, thread_id, from, to, content, priority, requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
       );
-    });
-    trx();
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
 
     await this.persist();
     logger.info({ from, to, priority, thread_id }, "Message sent");
@@ -262,15 +266,19 @@ export class MessagingSystem extends EventEmitter {
 
     const vector = await this.generateEmbedding(content);
 
-    const trx = this.db.transaction(() => {
+    this.db.run("BEGIN");
+    try {
       this.db.run(
         "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         [message_id, thread_id, from, otherParticipant, content, "P3", requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
       );
       this.db.run(`UPDATE messages SET responded = 1 WHERE thread_id = ? AND from_agent = ? AND requires_response = 1`, [thread_id, otherParticipant]);
       this.db.run("UPDATE threads SET updated_at = ? WHERE id = ?", [now, thread_id]);
-    });
-    trx();
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
 
     await this.persist();
     logger.info({ thread_id, from }, "Reply sent");
@@ -441,11 +449,15 @@ export class MessagingSystem extends EventEmitter {
 
     const escalation_id = uuidv4();
     const now = Date.now();
-    const trx = this.db.transaction(() => {
+    this.db.run("BEGIN");
+    try {
       this.db.run("INSERT INTO escalations (id, thread_id, from_agent, to_agent, reason, created_at, status) VALUES (?,?,?,?,?,?,?)", [escalation_id, thread_id, from, to, reason, now, "pending"]);
       this.db.run("UPDATE threads SET status = 'escalated' WHERE id = ?", [thread_id]);
-    });
-    trx();
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
     await this.persist();
     return { id: escalation_id, thread_id, from, to, reason, created_at: now, status: "pending" };
   }

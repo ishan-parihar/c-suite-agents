@@ -197,8 +197,8 @@ export class HiringSystem {
       throw new Error(`Manager ${reports_to} not found`);
     }
 
-    if (hiringManager.autonomyLevel < 3) {
-      throw new Error(`Manager ${reports_to} has insufficient autonomy level (${hiringManager.autonomyLevel}) to hire`);
+    if (!hiringManager.boardSeat) {
+      throw new Error(`Agent ${reports_to} is not a board member and cannot hire`);
     }
 
     const agent_id = `${role.toLowerCase().replace(/\s+/g, "-")}-${uuidv4().slice(0, 8)}`;

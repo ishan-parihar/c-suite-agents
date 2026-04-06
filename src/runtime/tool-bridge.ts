@@ -45,7 +45,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     },
     "memory.recall": {
       name: "memory.recall",
-      description: "Search across messages, tasks, and memory",
+      description: "Cross-search: searches across memory, messages, and tasks simultaneously. Use for broad recall beyond just memory.",
       parameters: {
         type: "object",
         properties: {
@@ -111,6 +111,21 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       permissionTier: "read",
     },
 
+    // Tool discovery
+    "tool.search": {
+      name: "tool.search",
+      description: "Search for available tools by keyword. Returns matching tool names, descriptions, and parameters. Use when you need a tool but don't know its exact name.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "What you're trying to do (e.g., 'send notification', 'search memory', 'check budget')" },
+          maxResults: { type: "number", description: "Max results to return (default: 5)" },
+        },
+        required: ["query"],
+      },
+      permissionTier: "read",
+    },
+
     // Kanban tools
     "board.get": {
       name: "board.get",
@@ -148,7 +163,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         type: "object",
         properties: {
           card_id: { type: "string" },
-          status: { type: "string", enum: ["Backlog", "Todo", "In Progress", "Blocked", "Review", "Done"] },
+          status: { type: "string", description: "Target column name (must match agent's board columns)" },
         },
         required: ["card_id", "status"],
       },
@@ -321,6 +336,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         properties: {
           agent_id: { type: "string" },
           include_read: { type: "boolean", default: false },
+          include_content: { type: "boolean", default: false },
         },
         required: ["agent_id"],
       },
@@ -367,22 +383,6 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
     },
 
     // Agent communication
-    "agent.call": {
-      name: "agent.call",
-      description: "Call another agent (send message, optional response)",
-      parameters: {
-        type: "object",
-        properties: {
-          from_agent: { type: "string" },
-          to_agent: { type: "string" },
-          message: { type: "string" },
-          priority: { type: "string", enum: ["P1", "P2", "P3", "P4"] },
-          requires_response: { type: "boolean" },
-        },
-        required: ["from_agent", "to_agent", "message"],
-      },
-      permissionTier: "write",
-    },
     "agent.handoff": {
       name: "agent.handoff",
       description: "Handoff conversation to another agent (they take over)",
@@ -412,6 +412,24 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
         required: ["from_agent", "participants", "topic"],
       },
       permissionTier: "write",
+    },
+    "boardmeeting.run": {
+      name: "boardmeeting.run",
+      description: "Trigger an immediate board meeting. System-level tool accessible to CEO agent.",
+      parameters: {
+        type: "object",
+        properties: {
+          objective: { type: "string", description: "Optional objective/focus for the meeting" },
+        },
+        required: [],
+      },
+      permissionTier: "write",
+    },
+    "boardmeeting.status": {
+      name: "boardmeeting.status",
+      description: "Get current board meeting state if a meeting is active. Returns meeting ID, status, current turn, and objective.",
+      parameters: { type: "object", properties: {} },
+      permissionTier: "read",
     },
     "agent.wake": {
       name: "agent.wake",
@@ -709,6 +727,111 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       },
       permissionTier: "read",
     },
+
+    // Cron / Scheduling
+    "cron.status": {
+      name: "cron.status",
+      description: "Check the cron scheduler status and list your active scheduled tasks",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string", description: "Your agent ID" },
+        },
+        required: ["agent_id"],
+      },
+      permissionTier: "read",
+    },
+
+    "cron.list": {
+      name: "cron.list",
+      description: "List your scheduled tasks. Use includeDisabled=true to see paused/completed ones.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string", description: "Your agent ID" },
+          includeDisabled: { type: "boolean", description: "Include paused/completed tasks (default: false)" },
+        },
+        required: ["agent_id"],
+      },
+      permissionTier: "read",
+    },
+
+    "cron.create": {
+      name: "cron.create",
+      description: "Create a scheduled task. Supports cron expressions, intervals, one-shot, and event-triggered schedules. Use this for recurring reports, periodic checks, delayed actions, and automated workflows.",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string", description: "Your agent ID" },
+          name: { type: "string", description: "Short task name (e.g., 'Daily Report', 'Weekly Review')" },
+          description: { type: "string", description: "Detailed description of what the task should do" },
+          schedule_type: { type: "string", enum: ["interval", "cron", "once", "on_event"], description: "Schedule type: 'interval' (every N seconds), 'cron' (cron expression), 'once' (specific time), 'on_event' (triggered by event name)" },
+          cron_expression: { type: "string", description: "Cron expression for schedule_type='cron' (e.g., '0 8 * * *' = daily at 8 AM, '*/30 * * * *' = every 30 min)" },
+          interval_seconds: { type: "number", description: "Seconds between runs for schedule_type='interval' (e.g., 86400 = daily)" },
+          trigger_time: { type: "number", description: "Unix timestamp (ms) for schedule_type='once'" },
+          event_name: { type: "string", description: "Event name for schedule_type='on_event' (use with cron.trigger)" },
+          action: { type: "string", enum: ["query_database", "check_kanban", "send_report", "call_agent", "custom_prompt", "telegram_notify"], description: "What action to perform: 'query_database' (query LifeOS), 'check_kanban' (review board), 'send_report' (generate status report), 'call_agent' (message another agent), 'custom_prompt' (run custom instructions), 'telegram_notify' (send Telegram notification - CEO only)" },
+          action_params: { type: "object", description: "Parameters for the action. For custom_prompt: { prompt: 'your instructions' }. For call_agent: { to_agent: 'agent-id', message: 'message text' }. For telegram_notify: { text: 'notification text' }. For query_database: { query: 'what to look for' }. Add priority: 'P1'|'P2'|'P3'|'P4' to set report priority (default P3). Add notify_user: true to deliver results to user via Telegram (CEO only) or to CEO internally (non-CEO)." },
+        },
+        required: ["agent_id", "name", "description", "schedule_type", "action"],
+      },
+      permissionTier: "write",
+    },
+
+    "cron.pause": {
+      name: "cron.pause",
+      description: "Pause a scheduled task by ID",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string", description: "Your agent ID" },
+          task_id: { type: "string", description: "The task ID to pause" },
+        },
+        required: ["agent_id", "task_id"],
+      },
+      permissionTier: "write",
+    },
+
+    "cron.resume": {
+      name: "cron.resume",
+      description: "Resume a paused scheduled task by ID",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string", description: "Your agent ID" },
+          task_id: { type: "string", description: "The task ID to resume" },
+        },
+        required: ["agent_id", "task_id"],
+      },
+      permissionTier: "write",
+    },
+
+    "cron.delete": {
+      name: "cron.delete",
+      description: "Delete a scheduled task permanently by ID",
+      parameters: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string", description: "Your agent ID" },
+          task_id: { type: "string", description: "The task ID to delete" },
+        },
+        required: ["agent_id", "task_id"],
+      },
+      permissionTier: "write",
+    },
+
+    "cron.run": {
+      name: "cron.run",
+      description: "Trigger an event-based task immediately. Use with event_name to fire all tasks listening for that event.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_name: { type: "string", description: "The event name to trigger (e.g., 'user-login', 'daily-briefing')" },
+        },
+        required: ["event_name"],
+      },
+      permissionTier: "write",
+    },
   };
 
   // Filter to only requested tools
@@ -731,7 +854,7 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     "message.search", "message.markRead", "message.escalate", "message.getUnread",
     "agent.inbox",
     "agent.create", "agent.spawn", "agent.list",
-    "agent.call", "agent.handoff", "agent.meeting", "agent.wake",
+    "agent.handoff", "agent.meeting", "agent.wake",
     "org.chart", "staff.list", "staff.get",
     "meeting.propose", "meeting.vote", "meeting.get", "meeting.recordMinutes",
     "hire.create", "hire.fire", "hire.getTeam",
@@ -740,6 +863,9 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     "notify.telegram",
     "heartbeat.runNow",
     "task.get",
+    "cron.status", "cron.list", "cron.create", "cron.pause", "cron.resume", "cron.delete", "cron.run",
+    "tool.search",
+    "boardmeeting.run", "boardmeeting.status",
   ]);
 }
 

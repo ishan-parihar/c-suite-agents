@@ -9,14 +9,15 @@ A self-managing team of AI C-suite agents that run your life and business throug
 Strategos implements an **organic operations model** — 8 autonomous C-suite agents with distinct roles, databases, and Kanban boards, coordinated like a real executive team:
 
 ```
-👔 CEO-Strategic (Level 4) — Board Chair
-  └─ ⚙️  COO-Productivity     → manages tasks, schedules, operations
-  └─ 🧠  CPO-Psychologist     → journal analysis, mental patterns
-  └─ 🤝  CRO-Relational       → relationship tracking, reconnects
-  └─ 💰  CFO-Financial        → money tracking, budgeting, forecasting
-  └─ 📝  CMO-Content          → content pipeline, campaigns
-  └─ 🔍  CIO-Intelligence     → signal detection, research, trends
-  └─ 🩺  Physician (Advisory) → health tracking, diet, exercise (reports to COO)
+👤 Board Chair — You (Ishan Parihar)
+  └─ 👔 CEO-Strategic (Level 4) — leads the C-suite
+       ├─ ⚙️  COO-Productivity     → manages tasks, schedules, operations
+       ├─ 🧠  CPO-Psychologist     → journal analysis, mental patterns
+       ├─ 🤝  CRO-Relational       → relationship tracking, reconnects
+       ├─ 💰  CFO-Financial        → money tracking, budgeting, forecasting
+       ├─ 📝  CMO-Content          → content pipeline, campaigns
+       ├─ 🔍  CIO-Intelligence     → signal detection, research, trends
+       └─ 🩺  Physician (Advisory) → health tracking, diet, exercise (reports to COO)
 ```
 
 Each agent has its own **Kanban board**, **LifeOS database access**, **vector memory**, and **autonomy level**. They communicate via threaded async messages, hold board meetings with quorum voting, and can hire/fire auxiliary staff.

@@ -1,4 +1,4 @@
-import { getAllToolDefinitions, type ToolDefinition, type PermissionTier } from "./tool-bridge.js";
+import { buildToolDefinitions, getAllToolDefinitions, type ToolDefinition, type PermissionTier } from "./tool-bridge.js";
 
 export interface ToolSearchResult {
   name: string;
@@ -58,15 +58,23 @@ export class ToolSearch {
   }
 }
 
-let instance: ToolSearch | null = null;
+const instances = new Map<string, ToolSearch>();
 
-function getInstance(): ToolSearch {
-  if (!instance) {
-    instance = new ToolSearch(getAllToolDefinitions());
+/**
+ * Get or create a ToolSearch instance scoped to a specific agent.
+ * Each agent gets its own search index based on the tools available to it.
+ */
+export function getSearchForAgent(agentId: string, scopedToolNames: string[]): ToolSearch {
+  if (!instances.has(agentId)) {
+    const scopedDefs = buildToolDefinitions(scopedToolNames);
+    instances.set(agentId, new ToolSearch(scopedDefs));
   }
-  return instance;
+  return instances.get(agentId)!;
 }
 
+/** @deprecated Use getSearchForAgent() instead. This searches ALL tools, ignoring agent scoping. */
 export function searchTools(query: string, maxResults?: number): ToolSearchResult[] {
-  return getInstance().search(query, maxResults);
+  const allTools = getAllToolDefinitions();
+  const searcher = new ToolSearch(allTools);
+  return searcher.search(query, maxResults);
 }

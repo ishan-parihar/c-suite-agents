@@ -6,8 +6,9 @@ import OpenAI from "openai";
 import { logger } from "../logger.js";
 import { buildSystemPrompt } from "./prompt-builder.js";
 import { isSilentAck, stripHeartbeatToken, hasSubstantiveFinding, currentTimeLine } from "./utils.js";
-import { ContextManager, type ChatMessage, type ToolCall, estimateTokens, type SummarizeFn, type PersistCallbacks } from "./context-manager.js";
-import { buildToolDefinitions, createToolBridge, type ToolExecutor, type ToolResult } from "./tool-bridge.js";
+import { ContextManager, type ChatMessage, type ToolCall, estimateTokens, type SummarizeFn, type PersistCallbacks, splitMessagesByTokenShare } from "./context-manager.js";
+import { resolveContextWindowInfo, type ContextWindowInfo } from "./context-window.js";
+import { buildToolDefinitions, createToolBridge, type ToolExecutor, type ToolResult, type ToolDefinition } from "./tool-bridge.js";
 import { v4 as uuidv4 } from "uuid";
 import { retryAsync, isRetryableError, type RetryOptions } from "./retry.js";
 import {
@@ -21,12 +22,14 @@ import {
 } from "./model-fallback.js";
 import { loadConfig } from "../config/loader.js";
 import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent } from "./provider.js";
+import { SkillRegistry, type Skill } from "./skill-registry.js";
+import { getAgentWorkspace } from "../agents/workspace-manager.js";
 
 // SessionRegistry-compatible interface for persistence wiring
 export interface SessionPersistence {
-  saveMessages: (sessionId: string, messages: Array<{ role: "system" | "user" | "assistant"; content: string; tokenEstimate: number; isSummary?: boolean; compacted?: boolean; timestamp: number }>) => void;
+  saveMessages: (sessionId: string, messages: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string | null; tokenEstimate: number; isSummary?: boolean; compacted?: boolean; timestamp: number; tool_call_id?: string; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> }>) => void;
   saveToolCalls: (sessionId: string, toolCalls: Array<{ id: string; name: string; arguments: string; result?: string; tokenEstimate?: number; compacted?: boolean; timestamp: number }>) => void;
-  loadSessionData: (sessionId: string) => { messages: Array<{ role: string; content: string; tokenEstimate: number; isSummary: boolean; compacted: boolean; timestamp: number }>; toolCalls: Array<{ id: string; name: string; arguments: string; result?: string; tokenEstimate: number; compacted: boolean; timestamp: number }>; metadata: { compactionCount: number; previousSummary?: string; hasRealConversation: boolean } | null } | null;
+  loadSessionData: (sessionId: string) => { messages: Array<{ role: string; content: string | null; tokenEstimate: number; isSummary: boolean; compacted: boolean; timestamp: number; tool_call_id?: string; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> }>; toolCalls: Array<{ id: string; name: string; arguments: string; result?: string; tokenEstimate: number; compacted: boolean; timestamp: number }>; metadata: { compactionCount: number; previousSummary?: string; hasRealConversation: boolean } | null } | null;
   updateSessionMetadata: (sessionId: string, data: { compactionCount?: number; previousSummary?: string; hasRealConversation?: boolean }) => void;
 }
 
@@ -82,16 +85,26 @@ export class NativeAgentRuntime {
   private config: NativeAgentRuntimeConfig;
   private toolExecutor: ToolExecutor | null = null;
   private toolDefinitions: ReturnType<typeof buildToolDefinitions> = [];
+  private mcpToolDefinitions: ToolDefinition[] = [];
   private agentToolScope: Map<string, string[]> = new Map();
   private agentSessions = new Map<string, string>();
   private failoverState: FailoverState | null = null;
+  private contextWindowInfo: ContextWindowInfo;
+  private skillRegistries = new Map<string, SkillRegistry>();
 
   constructor(config?: Partial<NativeAgentRuntimeConfig>) {
     this.config = { ...DEFAULT_RUNTIME_CONFIG, ...config };
+
+    this.contextWindowInfo = resolveContextWindowInfo(
+      this.config.llm.model,
+      this.config.llm.contextTokens,
+    );
+
     this.contextManager = new ContextManager({
       maxMessages: this.config.maxMessages,
       maxContextTokens: this.config.maxContextTokens,
-      modelContextTokens: this.config.llm.contextTokens,
+      modelContextTokens: this.contextWindowInfo.contextTokens,
+      contextWindowInfo: this.contextWindowInfo,
     });
 
     this.failoverState = this.buildFailoverChain();
@@ -109,7 +122,7 @@ export class NativeAgentRuntime {
       provider: this.config.llm.provider,
       model: this.config.llm.model,
       baseUrl: currentModel?.baseUrl ?? this.config.llm.baseUrl,
-      contextTokens: this.config.llm.contextTokens || this.config.maxContextTokens,
+      contextTokens: this.contextWindowInfo.contextTokens,
       failoverModels: this.failoverState?.chain.length ?? 1,
     }, "Native agent runtime initialized");
   }
@@ -195,21 +208,30 @@ export class NativeAgentRuntime {
     }
   }
 
-  setToolExecutor(executor: ToolExecutor, toolNames: string[]) {
+  setToolExecutor(executor: ToolExecutor, toolNames: string[], mcpDefs?: ToolDefinition[]) {
     this.toolExecutor = executor;
-    this.toolDefinitions = buildToolDefinitions(toolNames);
-    logger.info({ toolCount: toolNames.length }, "Tool executor configured");
+    if (mcpDefs && mcpDefs.length > 0) {
+      this.mcpToolDefinitions = mcpDefs;
+      this.toolDefinitions = buildToolDefinitions(toolNames);
+    } else {
+      this.toolDefinitions = buildToolDefinitions(toolNames);
+      this.mcpToolDefinitions = [];
+    }
+    const totalCount = this.toolDefinitions.length + this.mcpToolDefinitions.length;
+    logger.info({ nativeCount: this.toolDefinitions.length, mcpCount: this.mcpToolDefinitions.length, totalCount }, "Tool executor configured");
   }
 
   setAgentToolScope(agentId: string, toolNames: string[]) {
     this.agentToolScope.set(agentId, toolNames);
   }
 
-  private getScopedToolDefinitions(agentId: string | undefined): ReturnType<typeof buildToolDefinitions> {
-    if (!agentId) return this.toolDefinitions;
+  private getScopedToolDefinitions(agentId: string | undefined): ToolDefinition[] {
+    if (!agentId) return [...this.toolDefinitions, ...this.mcpToolDefinitions];
     const scoped = this.agentToolScope.get(agentId);
-    if (!scoped || scoped.length === 0) return this.toolDefinitions;
-    return buildToolDefinitions(scoped);
+    if (!scoped || scoped.length === 0) return [...this.toolDefinitions, ...this.mcpToolDefinitions];
+    const nativeDefs = buildToolDefinitions(scoped);
+    const mcpDefs = this.mcpToolDefinitions.filter(d => scoped.includes(d.name));
+    return [...nativeDefs, ...mcpDefs];
   }
 
   /**
@@ -226,6 +248,8 @@ export class NativeAgentRuntime {
           isSummary: m.isSummary,
           compacted: m.compacted,
           timestamp: m.timestamp,
+          tool_call_id: m.tool_call_id,
+          tool_calls: m.tool_calls,
         })));
         registry.saveToolCalls(sessionId, toolCalls.map(tc => ({
           id: tc.id,
@@ -246,7 +270,7 @@ export class NativeAgentRuntime {
         const data = registry.loadSessionData(sessionId);
         if (!data || data.messages.length === 0) return null;
         return {
-          messages: data.messages.map(m => ({ ...m, role: m.role as "system" | "user" | "assistant" })),
+          messages: data.messages.map(m => ({ ...m, role: m.role as "system" | "user" | "assistant" | "tool" })),
           toolCalls: data.toolCalls,
           metadata: data.metadata ?? { compactionCount: 0, hasRealConversation: false },
         };
@@ -288,16 +312,46 @@ export class NativeAgentRuntime {
     return sessionId;
   }
 
+  restoreSession(agentId: string, sessionId: string, options?: {
+    mode?: "full" | "heartbeat" | "message" | "minimal";
+  }): boolean {
+    const systemPrompt = buildSystemPrompt({
+      agentId,
+      mode: options?.mode || "full",
+    });
+
+    const created = this.contextManager.createSession(agentId, sessionId, systemPrompt, {
+      modelContextTokens: this.config.llm.contextTokens,
+    });
+
+    if (created) {
+      this.agentSessions.set(agentId, sessionId);
+      logger.info({ sessionId, agentId }, "Session restored from persisted state");
+      return true;
+    }
+
+    logger.warn({ sessionId, agentId }, "Session restoration failed — creating fresh session");
+    const newSessionId = this.createSession(agentId, options);
+    this.agentSessions.set(agentId, newSessionId);
+    return false;
+  }
+
   async sendMessage(sessionId: string, message: string, agentId?: string): Promise<AgentExecutionResult> {
     const session = this.contextManager.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    // Always use session's agentId — ignore caller-provided agentId to prevent spoofing
+    const resolvedAgentId = session.agentId;
+
+    const skillsBlock = await this.buildSkillsBlock(resolvedAgentId, message);
+    if (skillsBlock && !session.systemPrompt.includes("## Available Skills")) {
+      session.systemPrompt = session.systemPrompt + "\n\n" + skillsBlock;
+    }
+
     this.contextManager.addUserMessage(sessionId, message);
 
     let toolCallsExecuted = 0;
     let finalText = "";
-    let totalInputTokens = 0;
+    let firstRoundInputTokens = 0;
     let totalOutputTokens = 0;
     let totalReasoningTokens = 0;
 
@@ -307,7 +361,9 @@ export class NativeAgentRuntime {
       const response = await this.callLLMWithRetry(messages, undefined, session.agentId);
 
       if (response.usage) {
-        totalInputTokens += response.usage.prompt_tokens || 0;
+        if (round === 0) {
+          firstRoundInputTokens = response.usage.prompt_tokens || 0;
+        }
         totalOutputTokens += response.usage.completion_tokens || 0;
         totalReasoningTokens += ((response.usage as Record<string, unknown>)["completion_tokens_details"] as Record<string, unknown> | undefined)?.["reasoning_tokens"] as number | undefined || 0;
       }
@@ -318,6 +374,8 @@ export class NativeAgentRuntime {
         .join("\n");
 
       if (response.toolCalls && response.toolCalls.length > 0 && this.toolExecutor) {
+        this.contextManager.recordAssistantToolCalls(sessionId, textContent, response.toolCalls);
+
         const toolResults: Array<{ id: string; name: string; args: string; result: string }> = [];
 
         for (const tc of response.toolCalls) {
@@ -377,6 +435,40 @@ export class NativeAgentRuntime {
       break;
     }
 
+    // Empty-response retry: if tool calls ran but produced no text summary,
+    // make one extra LLM round to extract findings as text.
+    if (!finalText && toolCallsExecuted > 0) {
+      logger.warn(
+        { sessionId, agentId: session.agentId, toolCallsExecuted },
+        "Tool loop exhausted without text response — requesting summary",
+      );
+
+      const summaryMessages = this.contextManager.getMessagesForLLM(sessionId);
+      const summaryResponse = await this.callLLMWithRetry(
+        summaryMessages,
+        undefined,
+        session.agentId,
+      );
+
+      if (summaryResponse.usage) {
+        totalOutputTokens += summaryResponse.usage.completion_tokens || 0;
+        totalReasoningTokens += ((summaryResponse.usage as Record<string, unknown>)["completion_tokens_details"] as Record<string, unknown> | undefined)?.["reasoning_tokens"] as number | undefined || 0;
+      }
+
+      finalText = summaryResponse.content
+        .filter(c => c.type === "text")
+        .map(c => c.text)
+        .join("\n");
+
+      if (!finalText) {
+        finalText = `Checked domain — ${toolCallsExecuted} tool calls executed. Review Kanban and memory for details.`;
+        logger.warn(
+          { sessionId, agentId: session.agentId, toolCallsExecuted },
+          "Summary round also returned empty — using fallback text",
+        );
+      }
+    }
+
     if (finalText) {
       this.contextManager.addAssistantMessage(sessionId, finalText);
     }
@@ -390,7 +482,7 @@ export class NativeAgentRuntime {
       silentAck,
       substantive,
       toolCalls: toolCallsExecuted,
-      inputTokens: totalInputTokens,
+      inputTokens: firstRoundInputTokens,
       outputTokens: totalOutputTokens,
     }, "Agent response complete");
 
@@ -398,8 +490,8 @@ export class NativeAgentRuntime {
       sessionId,
       text: finalText,
       tokens: {
-        total: totalInputTokens + totalOutputTokens,
-        input: totalInputTokens,
+        total: firstRoundInputTokens + totalOutputTokens,
+        input: firstRoundInputTokens,
         output: totalOutputTokens,
         reasoning: totalReasoningTokens,
       },
@@ -448,18 +540,114 @@ export class NativeAgentRuntime {
     return this.contextManager;
   }
 
+  // ── Skill Discovery and Injection ──────────────────────────────────
+
+  private getOrCreateRegistry(agentId: string): SkillRegistry {
+    const existing = this.skillRegistries.get(agentId);
+    if (existing) return existing;
+
+    const registry = new SkillRegistry();
+    this.skillRegistries.set(agentId, registry);
+    return registry;
+  }
+
+  private async buildSkillsBlock(agentId: string, message: string): Promise<string | null> {
+    const workspaceDir = getAgentWorkspace(agentId);
+    const registry = this.getOrCreateRegistry(agentId);
+
+    const skills = await registry.discover(workspaceDir);
+    if (skills.length === 0) return null;
+
+    const relevant = registry.findRelevant(message, 3);
+    if (relevant.length === 0) return null;
+
+    const lines: string[] = [
+      "## Available Skills",
+      "",
+      "The following skills are relevant to the current task. Use them as your operational playbook:",
+      "",
+    ];
+
+    for (const skill of relevant) {
+      lines.push(`### ${skill.name}`);
+      lines.push("");
+      if (skill.description) {
+        lines.push(skill.description);
+        lines.push("");
+      }
+      lines.push(skill.content);
+      lines.push("");
+    }
+
+    logger.info({ agentId, skillCount: relevant.length, totalSkills: skills.length }, "Skills injected into system prompt");
+    return lines.join("\n");
+  }
+
   // ── Compaction Summarization ─────────────────────────────────────────
+
+  /** Max tokens before staging kicks in (aligned with context-manager) */
+  private static readonly SUMMARY_STAGE_THRESHOLD = 16_000;
 
   /**
    * Summarization callback for ContextManager compaction.
-   * Uses the LLM to summarize old messages into a structured summary.
+   * Uses LLM-based staged summarization: split → summarize → merge.
+   * Preserves all opaque identifiers (UUIDs, hashes, IDs, URLs, file paths).
    */
   private async compactionSummarizeFn(
     messages: ChatMessage[],
     previousSummary?: string,
     customInstructions?: string,
   ): Promise<string> {
-    const promptParts: string[] = [
+    const totalTokens = messages.reduce(
+      (sum, m) => sum + (m.tokenEstimate ?? estimateTokens(m.content)),
+      0,
+    );
+
+    if (totalTokens <= NativeAgentRuntime.SUMMARY_STAGE_THRESHOLD) {
+      return this.summarizeChunk(messages, previousSummary, customInstructions);
+    }
+
+    const numChunks = Math.max(
+      2,
+      Math.ceil(totalTokens / NativeAgentRuntime.SUMMARY_STAGE_THRESHOLD),
+    );
+    const chunks = splitMessagesByTokenShare(messages, numChunks);
+
+    const chunkSummaries: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkInstructions = [
+        `Preserve ALL opaque identifiers exactly as written — UUIDs, hashes, IDs, API keys, hostnames, IPs, ports, URLs, file names. Do NOT summarize or paraphrase these.`,
+        `(chunk ${i + 1}/${chunks.length})`,
+      ].join(" ");
+      const s = await this.summarizeChunk(chunks[i], undefined, chunkInstructions);
+      chunkSummaries.push(s);
+    }
+
+    if (chunkSummaries.length === 1) return chunkSummaries[0];
+
+    const mergeInput = chunkSummaries
+      .map((s, i) => `--- Chunk ${i + 1}/${chunkSummaries.length} ---\n${s}`)
+      .join("\n\n");
+
+    const mergePrompt = this.buildMergePrompt(mergeInput, previousSummary);
+    return this.summarizeViaLLM(mergePrompt);
+  }
+
+  private async summarizeChunk(
+    messages: ChatMessage[],
+    previousSummary?: string,
+    customInstructions?: string,
+  ): Promise<string> {
+    const prompt = this.buildSummaryPrompt(messages, previousSummary, customInstructions);
+    return this.summarizeViaLLM(prompt);
+  }
+
+  private buildSummaryPrompt(
+    messages: ChatMessage[],
+    previousSummary?: string,
+    customInstructions?: string,
+  ): string {
+    const parts: string[] = [
       "Provide a detailed summary for continuing this conversation.",
       "Focus on information that would be helpful for continuing the work, including what was done, what's in progress, and what needs to happen next.",
       "Do NOT respond to questions. Just output the summary.",
@@ -486,25 +674,69 @@ export class NativeAgentRuntime {
     ];
 
     if (previousSummary) {
-      promptParts.unshift(`## Previous Summary\n${previousSummary}\n`);
-      promptParts.unshift("Build on the previous summary. Update it with new information from the messages below.\n");
+      parts.unshift(`## Previous Summary\n${previousSummary}\n`);
+      parts.unshift("Build on the previous summary. Update it with new information from the messages below.\n");
     }
 
     if (customInstructions) {
-      promptParts.push("");
-      promptParts.push(customInstructions);
+      parts.push("");
+      parts.push(customInstructions);
     }
 
     const messageText = messages
-      .map(m => `${m.role}: ${m.content.slice(0, 500)}`)
+      .map(m => `${m.role}: ${m.content}`)
       .join("\n\n");
 
-    promptParts.push("\n---\n## Conversation to Summarize\n");
-    promptParts.push(messageText);
+    parts.push("\n---\n## Conversation to Summarize\n");
+    parts.push(messageText);
 
+    return parts.join("\n");
+  }
+
+  private buildMergePrompt(
+    partialSummaries: string,
+    previousSummary?: string,
+  ): string {
+    const parts: string[] = [
+      "Merge these partial conversation summaries into a single coherent summary.",
+      "Preserve ALL opaque identifiers exactly as written — UUIDs, hashes, IDs, API keys, hostnames, IPs, ports, URLs, file names. Do NOT summarize or paraphrase these.",
+      "",
+      "Follow this template:",
+      "---",
+      "## Goal",
+      "[What goal(s) the agent was working on]",
+      "",
+      "## Instructions",
+      "[Important instructions, constraints, or user preferences]",
+      "",
+      "## Discoveries",
+      "[Notable findings, data, decisions, or patterns discovered]",
+      "",
+      "## Accomplished",
+      "[What work was completed, what's in progress, what's left]",
+      "",
+      "## Key Data",
+      "[Specific numbers, dates, names, file paths, or IDs mentioned]",
+      "",
+      "## Next Steps",
+      "[What to do next — concrete, actionable items]",
+    ];
+
+    if (previousSummary) {
+      parts.unshift(`## Previous Summary\n${previousSummary}\n`);
+      parts.unshift("Build on the previous summary. Integrate it with the partial summaries below.\n");
+    }
+
+    parts.push("\n---\n## Partial Summaries to Merge\n");
+    parts.push(partialSummaries);
+
+    return parts.join("\n");
+  }
+
+  private async summarizeViaLLM(prompt: string): Promise<string> {
     const summaryMessages: ChatMessage[] = [
       { role: "system", content: "You are a conversation summarizer. Provide structured summaries for agent continuation.", timestamp: Date.now() },
-      { role: "user", content: promptParts.join("\n"), timestamp: Date.now() },
+      { role: "user", content: prompt, timestamp: Date.now() },
     ];
 
     const response = await this.callLLMWithRetry(summaryMessages, {
@@ -659,10 +891,15 @@ export class NativeAgentRuntime {
     const currentModel = this.failoverState ? getCurrentModel(this.failoverState) : null;
     const model = currentModel?.model ?? this.config.llm.model;
 
-    const llmMessages = messages.map(m => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const llmMessages = messages.map(m => {
+      if (m.role === "tool") {
+        return { role: "tool" as const, tool_call_id: m.tool_call_id, content: m.content };
+      }
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        return { role: "assistant" as const, content: m.content ?? null, tool_calls: m.tool_calls };
+      }
+      return { role: m.role, content: m.content };
+    });
 
     const params: Record<string, unknown> = {
       model,
@@ -759,45 +996,175 @@ export class NativeAgentRuntime {
     }
 
     this.contextManager.addUserMessage(sessionId, message);
-    const messages = this.contextManager.getMessagesForLLM(sessionId);
 
-    const currentModel = this.failoverState ? getCurrentModel(this.failoverState) : null;
-    const model = currentModel?.model ?? this.config.llm.model;
+    const maxRounds = this.config.llm.maxToolRounds || 10;
+    let round = 0;
 
-    const llmMessages = messages.map(m => ({ role: m.role, content: m.content }));
-    const fingerprint = createPromptFingerprint(llmMessages);
+    while (round < maxRounds) {
+      round++;
+      const messages = this.contextManager.getMessagesForLLM(sessionId);
 
-    const tools = this.getScopedToolDefinitions(agentId);
-    const toolDefs = tools.length > 0
-      ? tools.map(t => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.parameters },
-        }))
-      : undefined;
+      const currentModel = this.failoverState ? getCurrentModel(this.failoverState) : null;
+      const model = currentModel?.model ?? this.config.llm.model;
 
-    let timeoutMs = this.config.llm.timeoutMs ?? 120000;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      for await (const event of this.provider.stream({
-        model,
-        messages: llmMessages,
-        tools: toolDefs,
-        temperature: this.config.llm.temperature,
-        maxTokens: this.config.llm.maxTokens,
-        abortSignal: controller.signal,
-      })) {
-        if (event.type === "usage" && this.promptCacheTracker) {
-          const cacheRead = (event.usage as Record<string, unknown>)?.["cache_read_input_tokens"] as number | undefined;
-          if (cacheRead !== undefined) {
-            this.promptCacheTracker.record(fingerprint, cacheRead);
-          }
+      const llmMessages = messages.map(m => {
+        if (m.role === "tool") {
+          return { role: "tool" as const, tool_call_id: m.tool_call_id, content: m.content };
         }
-        yield event;
+        if (m.tool_calls && m.tool_calls.length > 0) {
+          return { role: "assistant" as const, content: m.content ?? null, tool_calls: m.tool_calls };
+        }
+        return { role: m.role, content: m.content };
+      });
+      const fingerprint = createPromptFingerprint(llmMessages);
+
+      const tools = this.getScopedToolDefinitions(agentId);
+      const toolDefs = tools.length > 0
+        ? tools.map(t => ({
+            type: "function",
+            function: { name: t.name, description: t.description, parameters: t.parameters },
+          }))
+        : undefined;
+
+      let timeoutMs = this.config.llm.timeoutMs ?? 120000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      // Accumulate tool calls from the stream
+      const toolCallAccum: Map<string, { id: string; name: string; inputChunks: string[] }> = new Map();
+      let streamHadToolCalls = false;
+
+      try {
+        for await (const event of this.provider.stream({
+          model,
+          messages: llmMessages,
+          tools: toolDefs,
+          temperature: this.config.llm.temperature,
+          maxTokens: this.config.llm.maxTokens,
+          abortSignal: controller.signal,
+        })) {
+          // Accumulate tool_call chunks
+          if (event.type === "tool_use") {
+            streamHadToolCalls = true;
+            const existing = toolCallAccum.get(event.id);
+            if (existing) {
+              if (event.input) {
+                existing.inputChunks.push(event.input);
+              }
+            } else {
+              toolCallAccum.set(event.id, {
+                id: event.id,
+                name: event.name,
+                inputChunks: event.input ? [event.input] : [],
+              });
+            }
+          }
+
+          // Track cache reads on usage events
+          if (event.type === "usage" && this.promptCacheTracker) {
+            const cacheRead = (event.usage as Record<string, unknown>)?.["cache_read_input_tokens"] as number | undefined;
+            if (cacheRead !== undefined) {
+              this.promptCacheTracker.record(fingerprint, cacheRead);
+            }
+          }
+
+          yield event;
+        }
+      } finally {
+        clearTimeout(timeoutId);
       }
-    } finally {
-      clearTimeout(timeoutId);
+
+      // If no tool calls in the stream, we're done
+      if (!streamHadToolCalls || toolCallAccum.size === 0) {
+        break;
+      }
+
+      // Execute accumulated tool calls
+      if (!this.toolExecutor) {
+        logger.warn({ sessionId, agentId }, "Tool executor not available — skipping tool calls in stream");
+        break;
+      }
+
+      const toolResults: Array<{ id: string; name: string; args: string; result: string }> = [];
+
+      for (const [callId, callInfo] of toolCallAccum) {
+        const argsStr = callInfo.inputChunks.join("");
+        let args: Record<string, unknown>;
+
+        try {
+          args = JSON.parse(argsStr);
+        } catch (parseErr: unknown) {
+          const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+          logger.warn(
+            { tool: callInfo.name, round, error: msg, raw: argsStr.slice(0, 200) },
+            "Failed to parse tool arguments in stream",
+          );
+          toolResults.push({
+            id: callId,
+            name: callInfo.name,
+            args: argsStr,
+            result: `Error: Failed to parse arguments: ${msg}`,
+          });
+          continue;
+        }
+
+        logger.info({ tool: callInfo.name, round, agentId: session.agentId }, "Tool call (stream)");
+
+        // Ensure agent_id is set if not provided
+        if (!args["agent_id"]) {
+          args["agent_id"] = session.agentId;
+        }
+
+        try {
+          const result = await this.toolExecutor(callInfo.name, args);
+          toolResults.push({
+            id: callId,
+            name: callInfo.name,
+            args: argsStr,
+            result: result.success ? result.content : `Error: ${result.error}`,
+          });
+        } catch (execErr: unknown) {
+          const errMsg = execErr instanceof Error ? execErr.message : String(execErr);
+          logger.error({ tool: callInfo.name, round, error: errMsg }, "Tool execution failed in stream");
+          toolResults.push({
+            id: callId,
+            name: callInfo.name,
+            args: argsStr,
+            result: `Error: Tool execution failed: ${errMsg}`,
+          });
+        }
+      }
+
+      // Record assistant tool_calls message before recording tool results
+      const assistantToolCalls = Array.from(toolCallAccum.values()).map(tc => ({
+        id: tc.id,
+        type: "function" as const,
+        function: { name: tc.name, arguments: tc.inputChunks.join("") },
+      }));
+      if (assistantToolCalls.length > 0) {
+        this.contextManager.recordAssistantToolCalls(sessionId, null, assistantToolCalls);
+      }
+
+      // Record tool results in context so they're available for the next stream round
+      for (const tr of toolResults) {
+        this.contextManager.recordToolCall(sessionId, {
+          id: tr.id,
+          name: tr.name,
+          arguments: tr.args,
+          result: tr.result,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Yield tool results as synthetic text events for the caller
+      for (const tr of toolResults) {
+        yield {
+          type: "text" as const,
+          delta: `\n[Tool: ${tr.name}] ${tr.result.slice(0, 500)}${tr.result.length > 500 ? "..." : ""}\n`,
+        };
+      }
+
+      // Continue the loop — next iteration will stream with tool results in context
     }
   }
 }

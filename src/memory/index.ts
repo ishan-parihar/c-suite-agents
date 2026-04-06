@@ -61,7 +61,7 @@ export class MemoryFacade {
   }
 
   async search(query: MemoryQuery): Promise<MemoryEntry[]> {
-    return this.retriever.search(query);
+    return this.retriever.hybridSearch(query);
   }
 
   async searchByTag(scope: MemoryScope, agentId: string, tag: string, topK = 20): Promise<MemoryEntry[]> {

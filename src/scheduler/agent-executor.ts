@@ -3,7 +3,7 @@
 // Agents respond via direct LLM calls with tool calling support
 
 import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
+import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { AgentContextManager } from "../organic/context.js";
 import { Kanban } from "../kanban/sqlite.js";
@@ -13,6 +13,7 @@ import { sendTelegramMessage } from "../integrations/telegram.js";
 import { getMemoryFacade } from "../memory/index.js";
 import { getSessionRegistry } from "./session-registry.js";
 import { SystemEventQueue, buildSystemEventPrompt, currentTimeLine, stripHeartbeatToken } from "./system-events.js";
+import { resolveHeartbeatConfig } from "./heartbeat.js";
 import { autoStore } from "../memory/auto.js";
 import {
   NativeAgentRuntime,
@@ -24,18 +25,8 @@ import { RecoveryRegistry, attemptRecovery, FailureScenario, type RecoveryEvent 
 import { PolicyEngine, LaneContext, getPrebuiltPolicies } from "../runtime/policy.js";
 import { discoverInstructionFiles, formatInstructionFiles } from "../runtime/instruction-files.js";
 import { getHookRegistry, HookType } from "../runtime/hooks.js";
-import { searchTools } from "../runtime/tool-search.js";
-
-const AGENT_ID_MAP: Record<string, string> = {
-  "ceo-strategic": "ceo-strategic",
-  "coo-productivity": "coo-productivity",
-  "cfo-financial": "cfo-financial",
-  "cmo-content": "cmo-content",
-  "cro-relational": "cro-relational",
-  "physician-health": "physician-health",
-  "cpo-psychologist": "cpo-psychologist",
-  "cio-intelligence": "cio-intelligence",
-};
+import { getAgentHealthRegistry } from "./agent-health.js";
+import { getBehavioralProfile, formatBehavioralPrompt, recordInteractionOutcome } from "../memory/behavioral-profile.js";
 
 export interface AgentExecutorConfig {
   checkIntervalMs: number;
@@ -174,7 +165,7 @@ export class AgentExecutor {
         // Memory injection
         const memoryInjection = await this.getMemoryInjection(agentId, pendingText);
 
-        const wakeSummary = contextManager.formatWakeContext(wakeCtx);
+        const wakeSummary = await contextManager.formatWakeContext(wakeCtx);
 
         const messages = validResponses.map((msg: any) => {
           const fromStaff = getStaffById(msg.from);
@@ -235,33 +226,35 @@ export class AgentExecutor {
   private async runProactiveDomainWork() {
     const messaging = await getMessagingSystem();
 
-    logger.info("Proactive domain heartbeat — checking all agents (native runtime)");
+    const { agentConfigs } = resolveHeartbeatConfig();
+    const heartbeatAgents = getCoreStaffIds().filter(
+      (id) => agentConfigs.get(id)?.enabled ?? false,
+    );
+
+    if (heartbeatAgents.length === 0) {
+      logger.debug("proactive:skipped (no agents have heartbeat enabled)");
+      return;
+    }
+
+    logger.info(
+      { agents: heartbeatAgents },
+      "proactive:domain heartbeat — selective mode",
+    );
 
     const stats = SystemEventQueue.stats();
     if (stats.total > 0) {
       logger.info(stats, "heartbeat:system_events.pending");
     }
 
-    // Run non-CEO agents first, then CEO last
-    const allAgents = getCoreStaffIds();
-    const nonCeoAgents = allAgents.filter(id => id !== "ceo-strategic");
-    const ceoAgent = allAgents.find(id => id === "ceo-strategic");
-
-    // Phase 1: Non-CEO agents
-    for (const agentId of nonCeoAgents) {
+    for (const agentId of heartbeatAgents) {
       if (!this.running) return;
       await this.runAgentHeartbeat(agentId, messaging);
-    }
-
-    // Phase 2: CEO
-    if (ceoAgent && this.running) {
-      await this.runAgentHeartbeat(ceoAgent, messaging);
     }
   }
 
   private async runAgentHeartbeat(agentId: string, messaging: any): Promise<void> {
     const staff = getStaffById(agentId);
-    if (!staff || staff.autonomyLevel < 2) return;
+    if (!staff) return;
 
     try {
       const board = await this.kanban.getBoard(agentId);
@@ -286,14 +279,10 @@ export class AgentExecutor {
       // Instruction file injection (discovered once per agent, cached)
       const instructionFiles = await this.discoverAndCacheInstructionFiles(agentId);
 
-      // Evaluate policy engine for this agent's operational state
-      await this.evaluatePolicies(agentId);
-
       // Pending system events
       const pendingEvents = SystemEventQueue.peekLatest(agentId);
 
       // Build heartbeat task prompt
-      const isCeo = agentId === "ceo-strategic";
       const lines: string[] = [];
       lines.push(currentTimeLine());
       lines.push("");
@@ -312,6 +301,12 @@ export class AgentExecutor {
         lines.push("");
       }
 
+      const behavioralPrompt = await formatBehavioralPrompt(await getBehavioralProfile(agentId));
+      if (behavioralPrompt) {
+        lines.push(behavioralPrompt);
+        lines.push("");
+      }
+
       lines.push(`## Domain Check — ${staff.name}`);
       lines.push("");
       lines.push(`### Kanban`);
@@ -324,33 +319,20 @@ export class AgentExecutor {
       lines.push(`### Inbox`);
       lines.push(inboxStatus);
 
-      if (isCeo && inbox.unread_count > 0) {
-        lines.push("");
-        lines.push("⚠️ READ AGENT REPORTS FIRST before doing anything else.");
-        lines.push("1. Use `agent.inbox({ agent_id: \"ceo-strategic\" })` to see all unread messages");
-        lines.push("2. For each report, use `message.getThread` or `message.getThreads` to read the full content");
-        lines.push("3. Synthesize: what's blocked, what's overdue, what needs attention");
-        lines.push("4. If any agent reported something critical, escalate to user via notify.telegram");
-        lines.push("5. Store your synthesis in memory");
-      }
-
       lines.push("");
       lines.push("## What to do:");
-      lines.push(`1. ${isCeo ? "READ YOUR INBOX for agent reports first, then" : "Query your databases for anything needing attention"}`);
+      lines.push("1. Query your databases for anything needing attention");
       lines.push("2. Check your Kanban for blocked or stale cards");
       lines.push("3. If something needs action, take it (update cards, send messages to other agents)");
       lines.push("4. Store important findings in your memory");
       lines.push("5. If nothing needs attention, reply HEARTBEAT_OK");
-
-      if (!isCeo) {
-        lines.push("");
-        lines.push("### IMPORTANT — Anti-Passivity Rules");
-        lines.push("- Each heartbeat is a FRESH check. The state may have changed since last time.");
-        lines.push("- Do NOT say 'same as before', 'nothing changed', or 'this is repetitive.'");
-        lines.push("- Actually run the tool calls — query databases, check inbox, review Kanban.");
-        lines.push("- If you find something actionable, report it with SPECIFIC data (numbers, dates, names).");
-        lines.push("- If genuinely nothing needs attention after checking, reply: HEARTBEAT_OK");
-      }
+      lines.push("");
+      lines.push("### IMPORTANT — Anti-Passivity Rules");
+      lines.push("- Each heartbeat is a FRESH check. The state may have changed since last time.");
+      lines.push("- Do NOT say 'same as before', 'nothing changed', or 'this is repetitive.'");
+      lines.push("- Actually run the tool calls — query databases, check inbox, review Kanban.");
+      lines.push("- If you find something actionable, report it with SPECIFIC data (numbers, dates, names).");
+      lines.push("- If genuinely nothing needs attention after checking, reply: HEARTBEAT_OK");
 
       const taskPrompt = lines.join("\n");
 
@@ -390,31 +372,10 @@ export class AgentExecutor {
       if (cleanText && cleanText.trim().length > 10) {
         const hasUrgentFinding = this.shouldEscalateToUser(cleanText);
 
-        // CEO: may proactively notify user via Telegram
-        if (isCeo && hasUrgentFinding) {
+        // All agents: send urgent findings directly to user via Telegram
+        if (hasUrgentFinding) {
           await sendTelegramMessage(`${staff.avatar} **${staff.name}** (${staff.title}):\n\n${cleanText.slice(0, 4000)}`);
-          logger.info({ agentId, textLength: cleanText.length }, "CEO proactive finding sent to user via Telegram");
-        }
-
-        // Non-CEO: report findings to CEO
-        if (!isCeo && this.shouldReportToCeo(cleanText)) {
-          await messaging.send({
-            from: agentId,
-            to: "ceo-strategic",
-            content: `[Internal Report] ${cleanText}`,
-            priority: "P3",
-            requires_response: false,
-            subject: `${staff.name} — domain update`,
-            tags: ["proactive-report", "internal"],
-          });
-          logger.info({ agentId }, "Agent reported findings internally to CEO");
-        }
-
-        // NEW: Non-CEO agents with substantive findings ALSO send directly to user via Telegram
-        // This makes agents more autonomous — they don't just report to CEO
-        if (!isCeo && result.hasSubstantiveFinding && cleanText.trim().length > 50) {
-          await sendTelegramMessage(`${staff.avatar} **${staff.name}** (${staff.title}):\n\n${cleanText.slice(0, 4000)}`);
-          logger.info({ agentId, textLength: cleanText.length }, "Non-CEO agent sent finding directly to user via Telegram");
+          logger.info({ agentId, textLength: cleanText.length }, "Agent urgent finding sent to user via Telegram");
         }
 
         // Store proactive work as memory
@@ -475,14 +436,6 @@ export class AgentExecutor {
     const lower = text.toLowerCase();
     const urgentSignals = ["critical risk", "system down", "emergency", "security breach", "data loss"];
     return urgentSignals.some(signal => lower.includes(signal));
-  }
-
-  private shouldReportToCeo(text: string): boolean {
-    const lower = text.toLowerCase().trim();
-    if (text.trim().length < 20) return false;
-    const allClearOnly = /^all\s*clear[\s.!]*$/i.test(lower) || /^nothing\s+(new|to\s+report|here)/i.test(lower);
-    if (allClearOnly) return false;
-    return true;
   }
 
   recordUserActivity() {

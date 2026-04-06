@@ -7,6 +7,7 @@ import { getHiringSystem } from "./hiring.js";
 import { getStaffById } from "../staff/core-staff.js";
 import { Kanban, type KanbanBoard } from "../kanban/sqlite.js";
 import { Memory } from "../memory/lancedb.js";
+import { getBehavioralProfile, formatBehavioralPrompt } from "../memory/behavioral-profile.js";
 
 export interface AgentWakeContext {
   agent_id: string;
@@ -148,7 +149,7 @@ export class AgentContextManager {
   }
 
   // Format wake context as system prompt injection
-  formatWakeContext(context: AgentWakeContext): string {
+  async formatWakeContext(context: AgentWakeContext): Promise<string> {
     const lines: string[] = [];
     
     lines.push(`## 🧠 Context for ${context.agent_id}`);
@@ -205,6 +206,12 @@ export class AgentContextManager {
       if (context.agent_id === "ceo-strategic") {
         lines.push("These are reports from other agents about their domain checks. Read them before responding to the user.");
       }
+      lines.push("");
+    }
+
+    const behavioralPrompt = await formatBehavioralPrompt(await getBehavioralProfile(context.agent_id));
+    if (behavioralPrompt) {
+      lines.push(behavioralPrompt);
       lines.push("");
     }
 

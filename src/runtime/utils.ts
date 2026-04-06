@@ -116,3 +116,74 @@ export function hasSubstantiveFinding(text: string): boolean {
   ];
   return substantivePatterns.some(p => lower.match(p));
 }
+
+/**
+ * Determine if a session contains a real conversation (not just heartbeat noise).
+ * Returns false if ALL messages are silent acks, tool metadata only, or very short.
+ * Returns true if ANY message contains substantive content.
+ */
+export function isRealConversation(messages: Array<{ role: string; content: string }>): boolean {
+  if (messages.length === 0) return false;
+
+  // Patterns that indicate heartbeat-only / monitoring noise
+  const heartbeatOnlyPatterns = [
+    /^heartbeat[_\s]?ok$/i,
+    /^heartbeat ok$/i,
+    /^all\s*clear[\s.!]*$/i,
+    /^nothing\s+(needs?\s+)?attention/i,
+    /^no\s+action\s+needed/i,
+    /^same\s+(as\s+)?before/i,
+    /^just\s+(checking|monitoring|watching)/i,
+    /^domain\s+check\s+clear/i,
+    /^nothing\s+to\s+report/i,
+    /^no\s+issues?\s+found/i,
+    /^nothing\s+new/i,
+    /^all\s+good/i,
+  ];
+
+  // Patterns that indicate a REAL conversation
+  const substantivePatterns = [
+    // Questions
+    /\?/,
+    // Analysis words
+    /because|therefore|indicates|suggests|implies|means\s+that|consequently/i,
+    // Data points (numbers with context)
+    /\d+\s*(tasks?|cards?|items?|projects?|risks?|changes?|errors?|warnings?|files?|lines?|users?)/i,
+    // Recommendations
+    /should\s+(be|do|have|check)|consider\s+(using|changing|adding)|recommen\w*/i,
+    // Actions taken
+    /updated|fixed|created|sent|deleted|modified|resolved|deployed|merged/i,
+    // Findings / observations
+    /found\s+\d+|detected|noticed|observed|identified/i,
+    // Status changes
+    /changed|improved|degraded|broke|working|failed|succeeded/i,
+    // Substantive content indicators
+    /here\s+(is|are|['']s)|let\s+me|I'?ll|we\s+(should|need|must|can)/i,
+  ];
+
+  let allHeartbeatOrShort = true;
+
+  for (const msg of messages) {
+    const content = msg.content?.trim() ?? "";
+    if (!content) continue;
+
+    const lower = content.toLowerCase();
+
+    // Check if this message matches heartbeat-only patterns
+    const isHeartbeatOnly = heartbeatOnlyPatterns.some(p => p.test(content));
+    const isVeryShort = content.length < 10;
+
+    // Check if this message has substantive content
+    const isSubstantive = substantivePatterns.some(p => p.test(lower));
+
+    // Also use existing detection functions
+    const isSilent = isSilentAck(content);
+
+    if (isSubstantive || (!isHeartbeatOnly && !isVeryShort && !isSilent)) {
+      allHeartbeatOrShort = false;
+      return true;
+    }
+  }
+
+  return false;
+}

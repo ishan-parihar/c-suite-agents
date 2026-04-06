@@ -1,7 +1,7 @@
 // Message Processor - Polls for messages and triggers agent responses
 
 import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
+import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
 import { AgentContextManager } from "../organic/context.js";
@@ -10,21 +10,11 @@ import { Memory } from "../memory/lancedb.js";
 import { getSessionRegistry } from "./session-registry.js";
 import { autoStore, autoRecall } from "../memory/auto.js";
 
-const AGENT_ID_MAP: Record<string, string> = {
-  "ceo-strategic": "ceo-strategic",
-  "coo-productivity": "coo-productivity",
-  "cfo-financial": "cfo-financial",
-  "cmo-content": "cmo-content",
-  "cro-relational": "cro-relational",
-  "physician-health": "cpso-health",
-  "cpo-psychologist": "cpo-psychologist",
-  "cio-intelligence": "cio-intelligence",
-};
-
 export class MessageProcessor {
   private intervalMs: number;
   private running = false;
   private timerId: ReturnType<typeof setInterval> | null = null;
+  private activeConversations = new Map<string, { thread_id: string; round: number; initiated_by: string; started_at: number }>();
 
   constructor(
     private kanban: Kanban,
@@ -63,6 +53,8 @@ export class MessageProcessor {
 
   private async processAllAgents() {
     if (!this.running) return;
+
+    this.cleanupStaleConversations();
 
     const messaging = await getMessagingSystem();
     const contextManager = new AgentContextManager(this.kanban, this.memory);
@@ -103,6 +95,30 @@ export class MessageProcessor {
     let sessionId = await sessionRegistry.getOrCreate(agentId, {});
     const runtime = getNativeRuntime();
 
+    // Check for conversation-tagged threads
+    for (const msg of validResponses) {
+      const tags = msg.tags || [];
+      if (tags.includes("conversation")) {
+        const convKey = `${msg.thread_id}`;
+        const existing = this.activeConversations.get(convKey);
+
+        if (!existing) {
+          // New conversation started
+          this.activeConversations.set(convKey, {
+            thread_id: msg.thread_id,
+            round: 1,
+            initiated_by: msg.from,
+            started_at: Date.now(),
+          });
+        } else if (existing.round >= 5) {
+          // Max rounds reached — inject conclusion reminder
+          msg.content = `[This conversation has reached the maximum of 5 rounds. Please provide a clear conclusion and end the conversation.]\n\n${msg.content}`;
+        } else {
+          existing.round++;
+        }
+      }
+    }
+
     // Process each valid pending response
     for (const msg of validResponses) {
       try {
@@ -127,6 +143,33 @@ export class MessageProcessor {
           content: result.text,
           requires_response: false
         });
+
+        // Check if this is a conversation conclusion
+        const convKey = `${msg.thread_id}`;
+        const conv = this.activeConversations.get(convKey);
+        if (conv && result.text) {
+          const hasConclusion = /CONCLUSION[:\s]|To conclude|In summary|Final decision|Here's the conclusion/i.test(result.text);
+
+          if (hasConclusion || conv.round >= 5) {
+            this.activeConversations.delete(convKey);
+
+            // If initiating agent is the current active agent, deliver conclusion to user
+            if (conv.initiated_by === agentId) {
+              try {
+                const { sendTelegramMessage } = await import("../integrations/telegram.js");
+                const { getStaffById } = await import("../staff/core-staff.js");
+                const staff = getStaffById(agentId);
+                if (staff) {
+                  const prefix = `${staff.avatar} **${staff.name}** (${staff.title}):\n\n`;
+                  await sendTelegramMessage(`${prefix}${result.text.slice(0, 4000)}`);
+                  logger.info({ agentId, threadId: msg.thread_id }, "Conversation conclusion delivered to user");
+                }
+              } catch (err: any) {
+                logger.warn({ agentId, err: err.message }, "Failed to deliver conversation conclusion to user");
+              }
+            }
+          }
+        }
 
         // AUTO STORE: Save the conversation turn automatically
         await autoStore({
@@ -186,6 +229,15 @@ export class MessageProcessor {
     lines.push(`Respond naturally and conversationally. This is a message from a colleague, not a user command.`);
 
     return lines.join('\n');
+  }
+
+  private cleanupStaleConversations() {
+    const oneHourAgo = Date.now() - 3600000;
+    for (const [key, conv] of this.activeConversations) {
+      if (conv.started_at < oneHourAgo) {
+        this.activeConversations.delete(key);
+      }
+    }
   }
 }
 
