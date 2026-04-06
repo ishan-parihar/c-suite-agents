@@ -7,6 +7,8 @@ import { createFsReadTool } from "./tools/fs-read.js";
 import { createFsWriteTool } from "./tools/fs-write.js";
 import { createFsEditTool } from "./tools/fs-edit.js";
 import { createBashTool } from "./tools/bash-exec.js";
+import { ErrorBus } from "./error-emitter.js";
+import { ToolExecutionError } from "./error-types.js";
 
 export type PermissionTier = "read" | "write" | "danger";
 
@@ -982,6 +984,14 @@ export function createToolBridge(executor: (name: string, args: Record<string, u
       return { success: true, content: typeof result === "string" ? result : JSON.stringify(result) };
     } catch (err: any) {
       logger.error({ tool: name, err: err.message }, "Tool execution failed");
+      ErrorBus.emit({
+        type: "tool:failed",
+        severity: "error",
+        component: "tool-executor",
+        error: err,
+        message: `Tool ${name} failed: ${err.message}`,
+        context: { toolName: name, toolType: "native" },
+      });
       return { success: false, content: "", error: err.message };
     }
   };

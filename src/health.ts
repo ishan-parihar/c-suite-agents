@@ -35,6 +35,8 @@ export type HealthSummary = {
   componentsByName: Record<string, ComponentHealth>;
 };
 
+import { ErrorBus } from "./runtime/error-emitter.js";
+
 type ComponentRegistry = Map<string, ComponentHealth>;
 
 // ── Global state ──
@@ -78,6 +80,14 @@ export function markDegraded(name: string, reason: string) {
   c.reason = reason;
   c.checkedAt = Date.now();
   c.consecutiveFailures++;
+  ErrorBus.emit({
+    type: "health:changed",
+    severity: "warn",
+    component: name,
+    error: null,
+    message: `Health status changed: ${name} → degraded`,
+    context: { reason, status: "degraded" },
+  });
 }
 
 export function markError(name: string, reason: string) {
@@ -87,6 +97,14 @@ export function markError(name: string, reason: string) {
   c.reason = reason;
   c.checkedAt = Date.now();
   c.consecutiveFailures++;
+  ErrorBus.emit({
+    type: "health:changed",
+    severity: "error",
+    component: name,
+    error: null,
+    message: `Health status changed: ${name} → error`,
+    context: { reason, status: "error" },
+  });
 }
 
 export function markStale(name: string, reason: string) {
@@ -96,6 +114,14 @@ export function markStale(name: string, reason: string) {
   c.reason = reason;
   c.checkedAt = Date.now();
   c.consecutiveFailures++;
+  ErrorBus.emit({
+    type: "health:changed",
+    severity: "warn",
+    component: name,
+    error: null,
+    message: `Health status changed: ${name} → stale`,
+    context: { reason, status: "stale" },
+  });
 }
 
 export function markStopped(name: string) {
@@ -104,6 +130,14 @@ export function markStopped(name: string) {
   c.status = "stopped";
   c.reason = undefined;
   c.checkedAt = Date.now();
+  ErrorBus.emit({
+    type: "health:changed",
+    severity: "warn",
+    component: name,
+    error: null,
+    message: `Health status changed: ${name} → stopped`,
+    context: { reason: undefined, status: "stopped" },
+  });
 }
 
 // ── Evaluation ──

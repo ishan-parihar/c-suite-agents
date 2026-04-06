@@ -38,6 +38,12 @@ import {
   getComponent,
 } from "./health.js";
 import { discoverAndLoadPlugins, listPlugins, getPluginHealth } from "./runtime/plugin-registry.js";
+import { ErrorBus } from "./runtime/error-emitter.js";
+import { ErrorAggregator } from "./runtime/error-aggregator.js";
+import { AlertManagerInstance as AlertManager } from "./runtime/alert-manager.js";
+import { SelfHealer } from "./runtime/self-healer.js";
+import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor.js";
+import { CronErrorHandler } from "./scheduler/cron-error-handler.js";
 
 // Load config early (defaults < .env < ~/.strategos/config.json)
 const config = loadConfig();
@@ -169,6 +175,14 @@ async function main() {
     markHealthy("runtime");
     logger.info("Native agent runtime initialized");
 
+    // ── ERROR OBSERVABILITY: Initialize self-healing system ──
+    SelfHealer.start();
+    ErrorAggregator.start();
+    AlertManager.start();
+    HeartbeatMonitor.start();
+    CronErrorHandler.start();
+    logger.info("Error observability and self-healing system initialized");
+
     // ── PLUGIN SYSTEM: Discover and load plugins ──
     const plugins = await discoverAndLoadPlugins();
     const pluginHealth = getPluginHealth();
@@ -293,7 +307,10 @@ async function main() {
         let addedCount = 0;
 
         for (const tool of serverConn.tools) {
-          if (!filterSet || filterSet.has(tool.name)) {
+          // Config stores unprefixed tool names (e.g. "goal.list"), but
+          // tool.name is prefixed (e.g. "lifeos__goal.list"). Compare against
+          // tool.toolName to match the config schema.
+          if (!filterSet || filterSet.has(tool.toolName)) {
             scopedTools.push(tool.name);
             addedCount++;
           }
@@ -312,8 +329,24 @@ async function main() {
         }
       }
 
+      const nativeCount = scopedTools.filter(t => nativeToolNames.includes(t)).length;
+      const mcpCount = scopedTools.length - nativeCount;
+
       agentToolScopes[agentId] = scopedTools;
       nativeRuntime.setAgentToolScope(agentId, scopedTools);
+
+      logger.info(
+        { agentId, native: nativeCount, mcp: mcpCount, total: scopedTools.length },
+        "Per-agent tool scope applied"
+      );
+    }
+
+    for (const agentId of coreStaffIds) {
+      if (!agentToolScopes[agentId]) {
+        logger.info({ agentId, total: allToolNames.length }, "Agent has no toolScoping config — received all tools");
+        agentToolScopes[agentId] = allToolNames;
+        nativeRuntime.setAgentToolScope(agentId, allToolNames);
+      }
     }
 
     // Log detailed per-agent tool scope (measurement baseline)
@@ -503,6 +536,13 @@ Keep it tight. No data dumps. Tell the user what it MEANS, not what happened.`,
           flushChatState();
         } catch { /* ignore */ }
 
+        // Stop error observability modules
+        HeartbeatMonitor.stop();
+        CronErrorHandler.stop();
+        AlertManager.stop();
+        ErrorAggregator.stop();
+        SelfHealer.stop();
+
         // Stop schedulers first (prevent new work)
         getMessageProcessor()?.stop();
         getAgentExecutor()?.stop();
@@ -560,11 +600,25 @@ Keep it tight. No data dumps. Tell the user what it MEANS, not what happened.`,
     process.on("unhandledRejection", (err: any) => {
       logger.error({ err: err?.message || err }, "Unhandled rejection — marking degraded");
       markDegraded("runtime", `unhandledRejection: ${err?.message || err}`);
+      ErrorBus.emit({
+        type: "error:detected",
+        severity: "critical",
+        component: "runtime",
+        error: err,
+        message: `Unhandled rejection: ${err?.message || err}`,
+      });
     });
 
     process.on("uncaughtException", (err: Error) => {
       logger.error({ err: err.message }, "Uncaught exception — marking degraded");
       markDegraded("runtime", `uncaughtException: ${err.message}`);
+      ErrorBus.emit({
+        type: "error:detected",
+        severity: "critical",
+        component: "runtime",
+        error: err,
+        message: `Uncaught exception: ${err.message}`,
+      });
     });
   } catch (err: any) {
     logger.error({ err: err.message }, "Fatal during startup");

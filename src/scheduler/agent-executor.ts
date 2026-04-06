@@ -27,6 +27,7 @@ import { discoverInstructionFiles, formatInstructionFiles } from "../runtime/ins
 import { getHookRegistry, HookType } from "../runtime/hooks.js";
 import { getAgentHealthRegistry } from "./agent-health.js";
 import { getBehavioralProfile, formatBehavioralPrompt, recordInteractionOutcome } from "../memory/behavioral-profile.js";
+import { ErrorBus } from "../runtime/error-emitter.js";
 
 export interface AgentExecutorConfig {
   checkIntervalMs: number;
@@ -409,6 +410,14 @@ export class AgentExecutor {
       const errMsg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : '';
       logger.error({ agentId, err: errMsg, stack }, "Proactive domain work failed");
+      ErrorBus.emit({
+        type: "agent:error",
+        severity: "error",
+        component: "agent-executor",
+        error: err,
+        message: `Agent ${agentId} execution error: ${errMsg}`,
+        agentId,
+      });
     }
   }
 
@@ -509,8 +518,15 @@ export class AgentExecutor {
             break;
         }
       }
-    } catch {
-      // Policy evaluation is non-critical — log and continue
+    } catch (err: any) {
+      logger.warn({ err: err.message }, "Policy evaluation failed — non-critical, continuing");
+      ErrorBus.emit({
+        type: "error:detected",
+        severity: "warn",
+        component: "policy-engine",
+        error: err,
+        message: `Policy evaluation failed: ${err.message}`,
+      });
     }
   }
 
