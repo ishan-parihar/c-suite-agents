@@ -3,7 +3,7 @@
 // pushes task results to SystemEventQueue for heartbeat injection.
 
 import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
+import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
 import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { Memory } from "../memory/lancedb.js";
@@ -14,10 +14,11 @@ import { v4 as uuidv4 } from "uuid";
 import { CronExpressionParser } from "cron-parser";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import { getSessionRegistry } from "./session-registry.js";
 import { SystemEventQueue, currentTimeLine } from "./system-events.js";
 import { autoStore } from "../memory/auto.js";
+import * as os from "node:os";
 
 export type ScheduleType =
   | "interval"
@@ -60,27 +61,30 @@ function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 }
 
-const AGENT_ID_MAP: Record<string, string> = {
-  "ceo-strategic": "ceo-strategic",
-  "coo-productivity": "coo-productivity",
-  "cfo-financial": "cfo-financial",
-  "cmo-content": "cmo-content",
-  "cro-relational": "cro-relational",
-  "physician-health": "cpso-health",
-  "cpo-psychologist": "cpo-psychologist",
-  "cio-intelligence": "cio-intelligence",
-};
+export interface CronJobConfig {
+  id: string;
+  agentId: string;
+  cronExpression: string;
+  instructions: string;
+  enabled: boolean;
+  lastRun?: Date;
+  lastResult?: string;
+}
 
 export class AgentScheduler {
   private db: any;
   private dbPath: string;
   private running = false;
-  private checkIntervalMs: number = 60000; // Check every minute
+  private checkIntervalMs: number = 60000;
   private tasks: Map<string, ScheduledTask> = new Map();
+
+  private cronJobs: Map<string, CronJobConfig & { nextRun: number }> = new Map();
+  private cronJobsPath: string;
 
   private constructor(dbPath: string) {
     this.dbPath = dbPath;
     this.db = null;
+    this.cronJobsPath = join(os.homedir(), ".strategos", "crons.json");
   }
 
   static async init(dbPath: string = "scheduler.db"): Promise<AgentScheduler> {
@@ -145,6 +149,7 @@ export class AgentScheduler {
 
     await this.persist();
     await this.loadTasks();
+    await this.loadCronJobs();
     logger.info({ dbPath: this.dbPath, taskCount: this.tasks.size }, "Agent scheduler initialized");
   }
 
@@ -168,6 +173,7 @@ export class AgentScheduler {
   async close(): Promise<void> {
     this.stop();
     await this.persist();
+    await this.persistCronJobs();
   }
 
   private async loadTasks() {
@@ -345,6 +351,164 @@ export class AgentScheduler {
     return Array.from(this.tasks.values()).filter(t => t.enabled && t.status === "active");
   }
 
+  private async loadCronJobs() {
+    try {
+      const raw = await fs.readFile(this.cronJobsPath, "utf-8");
+      const jobs: CronJobConfig[] = JSON.parse(raw);
+      for (const job of jobs) {
+        const nextRun = this.computeNextCron(job.cronExpression);
+        this.cronJobs.set(job.id, { ...job, nextRun, lastRun: job.lastRun ? new Date(job.lastRun) : undefined });
+      }
+      logger.info({ count: jobs.length }, "Cron jobs loaded");
+    } catch {
+      logger.info("No cron jobs found, starting fresh");
+    }
+  }
+
+  private async persistCronJobs() {
+    const dir = dirname(this.cronJobsPath);
+    await fs.mkdir(dir, { recursive: true });
+    const serializable: CronJobConfig[] = Array.from(this.cronJobs.values()).map(j => ({
+      id: j.id,
+      agentId: j.agentId,
+      cronExpression: j.cronExpression,
+      instructions: j.instructions,
+      enabled: j.enabled,
+      lastRun: j.lastRun,
+      lastResult: j.lastResult,
+    }));
+    const tmpPath = `${this.cronJobsPath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(serializable, null, 2));
+    await fs.rename(tmpPath, this.cronJobsPath);
+  }
+
+  async registerCron(config: CronJobConfig): Promise<void> {
+    try {
+      CronExpressionParser.parse(config.cronExpression);
+    } catch (err: any) {
+      throw new Error(`Invalid cron expression "${config.cronExpression}": ${err.message}`);
+    }
+
+    const nextRun = this.computeNextCron(config.cronExpression);
+    this.cronJobs.set(config.id, {
+      ...config,
+      nextRun,
+      lastRun: config.lastRun ? new Date(config.lastRun) : undefined,
+    });
+    await this.persistCronJobs();
+
+    const staff = getStaffById(config.agentId);
+    logger.info({ cronId: config.id, agentId: config.agentId, agentName: staff?.name, cronExpression: config.cronExpression }, "Cron job registered");
+  }
+
+  async removeCron(id: string): Promise<boolean> {
+    const existed = this.cronJobs.delete(id);
+    if (existed) {
+      await this.persistCronJobs();
+      logger.info({ cronId: id }, "Cron job removed");
+    }
+    return existed;
+  }
+
+  listCrons(agentId?: string): CronJobConfig[] {
+    const jobs = Array.from(this.cronJobs.values());
+    if (agentId) {
+      return jobs.filter(j => j.agentId === agentId);
+    }
+    return jobs;
+  }
+
+  async enableCron(id: string): Promise<boolean> {
+    const job = this.cronJobs.get(id);
+    if (!job) return false;
+    job.enabled = true;
+    job.nextRun = this.computeNextCron(job.cronExpression);
+    await this.persistCronJobs();
+    logger.info({ cronId: id }, "Cron job enabled");
+    return true;
+  }
+
+  async disableCron(id: string): Promise<boolean> {
+    const job = this.cronJobs.get(id);
+    if (!job) return false;
+    job.enabled = false;
+    await this.persistCronJobs();
+    logger.info({ cronId: id }, "Cron job disabled");
+    return true;
+  }
+
+  private async checkAndRunCrons() {
+    const now = Date.now();
+    for (const job of this.cronJobs.values()) {
+      if (!job.enabled) continue;
+      if (job.nextRun > now) continue;
+
+      logger.info({ cronId: job.id, agentId: job.agentId }, "Cron job firing");
+      try {
+        await this.executeCronJob(job);
+        job.lastRun = new Date();
+        job.nextRun = this.computeNextCron(job.cronExpression);
+        await this.persistCronJobs();
+      } catch (err: any) {
+        logger.error({ cronId: job.id, err: err.message }, "Cron job execution failed");
+        job.lastResult = `Error: ${err.message}`;
+        await this.persistCronJobs();
+      }
+    }
+  }
+
+  private async executeCronJob(job: CronJobConfig & { nextRun: number }) {
+    const staff = getStaffById(job.agentId);
+    const nativeAgentId = AGENT_ID_MAP[job.agentId] || job.agentId;
+    const timeLine = currentTimeLine();
+
+    // Use SessionRegistry for persistent sessions (same pattern as executeTask)
+    const sessionRegistry = getSessionRegistry();
+    const sessionId = await sessionRegistry.getOrCreate(job.agentId, {
+      title: `cron:${job.id}`
+    });
+
+    // Restore session in runtime's ContextManager so sendMessage can find it
+    const runtime = getNativeRuntime();
+    runtime.restoreSession(nativeAgentId, sessionId);
+
+    const prompt = `## Scheduled Cron Task
+
+## You are ${staff?.avatar} ${staff?.name} (${staff?.title})
+
+${timeLine}
+
+### Instructions:
+${job.instructions}
+
+Execute these instructions and report results.`;
+
+    const result = await runtime.sendMessage(sessionId, prompt, nativeAgentId);
+    await sessionRegistry.touch(sessionId);
+
+    if (result.text && result.text.trim().length > 0) {
+      const memory = await this.getMemoryInstance();
+      await memory.upsertEvent({
+        agent_id: job.agentId,
+        type: "log",
+        content: `[Cron: ${job.id}]\n${result.text.slice(0, 1000)}`,
+        importance: 0.5,
+        tags: ["cron-job", job.id]
+      });
+
+      // Push result to system event queue for heartbeat injection
+      SystemEventQueue.enqueue({
+        agentId: job.agentId,
+        text: `[Cron: ${job.id}]\n${result.text.slice(0, 500)}`,
+        contextKey: `cron:${job.id}`,
+        priority: "P3",
+      });
+
+      job.lastResult = result.text.slice(0, 500);
+      logger.info({ cronId: job.id, agentId: job.agentId }, "Cron job completed");
+    }
+  }
+
   async start() {
     if (this.running) {
       logger.warn("Scheduler already running");
@@ -372,6 +536,7 @@ export class AgentScheduler {
       if (!this.running) return;
       try {
         await this.checkAndRunTasks();
+        await this.checkAndRunCrons();
       } catch (err: any) {
         logger.error({ err: err.message }, "Scheduler loop error");
       }
@@ -437,6 +602,10 @@ export class AgentScheduler {
       title: `cron:${task.id} ${task.name}`
     });
 
+    // Restore session in runtime's ContextManager so sendMessage can find it
+    const runtime = getNativeRuntime();
+    runtime.restoreSession(nativeAgentId, sessionId);
+
     // Build task-specific prompt with time injection (OpenClaw pattern)
     const timeLine = currentTimeLine();
 
@@ -464,7 +633,7 @@ ${timeLine}
       case "call_agent":
         const targetAgent = task.action_params.to_agent as string;
         const message = task.action_params.message as string;
-        prompt += `You need to communicate with ${targetAgent}. Here's your message:\n\n${message}\n\nUse your agent.call tool to send this.`;
+        prompt += `You need to communicate with ${targetAgent}. Here's your message:\n\n${message}\n\nUse your message.send tool to send this.`;
         break;
       case "telegram_notify":
         const notifyText = task.action_params.text as string;
@@ -487,7 +656,6 @@ ${timeLine}
     }
 
     // Send message with agent parameter so the runtime loads the native system prompt
-    const runtime = getNativeRuntime();
     const result = await runtime.sendMessage(sessionId, prompt, nativeAgentId);
     await sessionRegistry.touch(sessionId);
 
@@ -520,20 +688,8 @@ ${timeLine}
       });
 
       // If task has notify flag, only CEO can send to Telegram
-      if (task.action_params.notify_user && task.agent_id === "ceo-strategic") {
+      if (task.action_params.notify_user) {
         await sendTelegramMessage(`${staff?.avatar} **${staff?.name}** — *${task.name}*\n\n${result.text.slice(0, 4000)}`);
-      } else if (task.action_params.notify_user && task.agent_id !== "ceo-strategic") {
-        // Non-CEO: report to CEO internally instead
-        const messaging = await getMessagingSystem();
-        await messaging.send({
-          from: task.agent_id,
-          to: "ceo-strategic",
-          content: `[Scheduled Task Result] ${task.name}:\n${result.text.slice(0, 500)}`,
-          priority: "P3",
-          requires_response: false,
-          subject: `Scheduled: ${task.name}`,
-          tags: ["scheduled-task-result", "internal"]
-        });
       }
     }
   }

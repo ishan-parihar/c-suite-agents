@@ -145,19 +145,24 @@ export class Kanban {
     return result;
   }
 
-  async ensureBoard(agentId: string, name: string) {
+  async ensureBoard(agentId: string, name: string, columns?: string[]) {
     await validateAgentIdentity(agentId);
     const boardRow = this.queryOneObject<{ id: string }>("SELECT id FROM boards WHERE agent_id=?", [agentId]);
     if (boardRow) return boardRow.id;
 
     const boardId = uuidv4();
-    const statuses: [CardStatus, number][] = [["Backlog",1],["Todo",2],["In Progress",3],["Blocked",4],["Review",5],["Done",6]];
+    const defaultColumns: CardStatus[] = ["Backlog","Todo","In Progress","Blocked","Review","Done"];
+    const cols = columns || defaultColumns;
 
-    const trx = this.db.transaction(() => {
+    this.db.run("BEGIN");
+    try {
       this.db.run("INSERT INTO boards (id, agent_id, name) VALUES (?,?,?)", [boardId, agentId, name]);
-      for (const [n, ord] of statuses) this.db.run("INSERT INTO columns (id, board_id, name, ord) VALUES (?,?,?,?)", [uuidv4(), boardId, n, ord]);
-    });
-    trx();
+      for (let i = 0; i < cols.length; i++) this.db.run("INSERT INTO columns (id, board_id, name, ord) VALUES (?,?,?,?)", [uuidv4(), boardId, cols[i], i + 1]);
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
     await this.persist();
     return boardId;
   }
@@ -173,11 +178,15 @@ export class Kanban {
     const id = uuidv4();
     const now = new Date().toISOString();
 
-    const trx = this.db.transaction(() => {
+    this.db.run("BEGIN");
+    try {
       this.db.run("INSERT INTO cards (id, board_id, column_id, title, description, priority, due, tags, assignee_agent_id, project_id, last_update) VALUES (?,?,?,?,?,?,?,?,?,?,?)", [id, boardId, columnId, title, description, priority, due, JSON.stringify(tags), agentId, projectId || null, now]);
       this.db.run("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)", [uuidv4(), id, now, "create", JSON.stringify({ title })]);
-    });
-    trx();
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
     await this.persist();
     return id;
   }
@@ -196,11 +205,15 @@ export class Kanban {
     if (!column) throw new Error(`Column '${status}' not found`);
     const now = new Date().toISOString();
 
-    const trx = this.db.transaction(() => {
+    this.db.run("BEGIN");
+    try {
       this.db.run("UPDATE cards SET column_id=?, last_update=? WHERE id=?", [column.id, now, cardId]);
       this.db.run("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)", [uuidv4(), cardId, now, "move", JSON.stringify({ to: status })]);
-    });
-    trx();
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
     await this.persist();
   }
 
@@ -297,13 +310,17 @@ export class Kanban {
     }
 
     const now = new Date().toISOString();
-    const trx = this.db.transaction(() => {
+    this.db.run("BEGIN");
+    try {
       this.db.run("UPDATE cards SET board_id=?, column_id=?, assignee_agent_id=?, last_update=? WHERE id=?",
         [toBoard.id, newColumn.id, toAgentId, now, cardId]);
       this.db.run("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)",
         [uuidv4(), cardId, now, "reassign", JSON.stringify({ from: fromAgentId, to: toAgentId })]);
-    });
-    trx();
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
     await this.persist();
     logger.info({ cardId, from: fromAgentId, to: toAgentId }, "Card reassigned");
   }

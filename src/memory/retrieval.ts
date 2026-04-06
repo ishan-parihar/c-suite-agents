@@ -28,6 +28,47 @@ export class MemoryRetriever {
     return allResults;
   }
 
+  async searchKeyword(query: MemoryQuery): Promise<MemoryEntry[]> {
+    const allResults: MemoryEntry[] = [];
+
+    for (const scope of query.scopes) {
+      const scopeResults = await this.store.searchKeyword(scope, query.query, query.agent_id);
+      allResults.push(...scopeResults.slice(0, 10));
+    }
+
+    if (query.agent_ids && query.agent_ids.length > 0) {
+      const allowed = new Set(query.agent_ids);
+      return allResults.filter(r => allowed.has(r.agent_id));
+    }
+
+    return allResults;
+  }
+
+  async hybridSearch(query: MemoryQuery): Promise<MemoryEntry[]> {
+    const [vectorResults, keywordResults] = await Promise.all([
+      this.search(query),
+      this.searchKeyword(query),
+    ]);
+
+    const seen = new Set<string>();
+    const merged: MemoryEntry[] = [];
+
+    for (const r of vectorResults) {
+      if (!seen.has(r.id)) {
+        seen.add(r.id);
+        merged.push(r);
+      }
+    }
+    for (const r of keywordResults) {
+      if (!seen.has(r.id)) {
+        seen.add(r.id);
+        merged.push(r);
+      }
+    }
+
+    return merged.slice(0, 15);
+  }
+
   async searchByTag(
     scope: MemoryScope,
     agentId: string,

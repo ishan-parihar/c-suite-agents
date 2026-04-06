@@ -5,9 +5,16 @@ import { createHash } from "crypto";
 
 // ── Interfaces ───────────────────────────────────────────────────────
 
+export interface CompletionMessage {
+  role: string;
+  content: string | null;
+  tool_call_id?: string;
+  tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+}
+
 export interface CompletionRequest {
   model: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: CompletionMessage[];
   tools?: Array<{
     type: string;
     function: {
@@ -103,11 +110,11 @@ export class PromptCacheTracker {
  * Used to detect when the prompt context changed enough to break cache.
  */
 export function createPromptFingerprint(
-  messages: Array<{ role: string; content: string }>,
+  messages: Array<{ role: string; content: string | null }>,
   messageCount: number = 3,
 ): string {
   const relevant = messages.slice(0, messageCount);
-  const raw = relevant.map((m) => `${m.role}:${m.content}`).join("\n");
+  const raw = relevant.map((m) => `${m.role}:${m.content ?? ""}`).join("\n");
   return createHash("sha256").update(raw).digest("hex").slice(0, 16);
 }
 
@@ -189,9 +196,18 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   private buildBody(request: CompletionRequest, streaming: boolean): Record<string, unknown> {
+    const messages = request.messages.map(m => {
+      if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+        if (!m.content || m.content.trim().length === 0) {
+          return { ...m, content: null };
+        }
+      }
+      return m;
+    });
+
     const body: Record<string, unknown> = {
       model: request.model,
-      messages: request.messages,
+      messages,
       stream: streaming,
     };
 

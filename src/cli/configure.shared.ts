@@ -69,10 +69,9 @@ export function getSectionHint(
 
     case "agents": {
       const agents = config.agents as Record<string, unknown> | undefined;
-      const autonomy = agents?.autonomy ?? agents?.autonomyLevel;
       const maxConcurrent = agents?.maxConcurrent ?? agents?.max_concurrent;
-      if (autonomy !== undefined || maxConcurrent !== undefined) {
-        return `autonomy=${autonomy ?? "?"}, maxConcurrent=${maxConcurrent ?? "?"}`;
+      if (maxConcurrent !== undefined) {
+        return `maxConcurrent=${maxConcurrent ?? "?"}`;
       }
       return "not configured";
     }

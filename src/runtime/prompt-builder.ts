@@ -4,9 +4,13 @@
 // Instruction file content (CLAUDE.md, .cursorrules, etc.) is discovered by
 // the caller and injected via the instructionFiles option.
 
-import { loadBootstrapFiles, buildWorkspaceContext, CORE_FILES } from "../agents/workspace-manager.js";
+import { loadBootstrapFiles, buildWorkspaceContext, CORE_FILES, AGENTS_DIR } from "../agents/workspace-manager.js";
 import { getStaffById } from "../staff/core-staff.js";
 import { currentTimeLine } from "./utils.js";
+import { estimateTokens } from "./context-manager.js";
+import { logger } from "../logger.js";
+import * as fs from "fs";
+import * as path from "path";
 
 // Anti-prompt-injection instruction injected into every system prompt.
 // Must appear early (high-attention zone) so the LLM processes it before any user data.
@@ -24,6 +28,33 @@ export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- SYSTEM_PROMPT_CACHE_BOUNDARY
 // Subagents only need essential context, not the full workspace.
 export const MINIMAL_BOOTSTRAP_ALLOWLIST = ["AGENTS.md", "TOOLS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
 
+/**
+ * Essential tool names required for heartbeat checks.
+ * Heartbeat mode only needs these 4 tools — everything else is excluded
+ * to save 2-4K tokens per heartbeat call.
+ */
+export const HEARTBEAT_TOOL_NAMES = [
+  "memory.search",
+  "kanban.list",
+  "kanban.get",
+  "activity.log",
+];
+
+/**
+ * Load HEARTBEAT.md content for an agent's workspace.
+ * Returns the file content if it exists, empty string otherwise.
+ */
+function loadHeartbeatInstructions(agentId: string): string {
+  try {
+    const agentDir = path.join(AGENTS_DIR, agentId);
+    const heartbeatPath = path.join(agentDir, CORE_FILES.HEARTBEAT);
+    const content = fs.readFileSync(heartbeatPath, "utf-8");
+    return content.trim();
+  } catch {
+    return "";
+  }
+}
+
 export interface PromptComponents {
   systemBase: string;
   workspaceContext: string;
@@ -40,6 +71,8 @@ export interface PromptBuildOptions {
   mode?: "full" | "heartbeat" | "message" | "minimal";
   /** Pre-formatted instruction file content from discoverInstructionFiles + formatInstructionFiles */
   instructionFiles?: string;
+  /** Pre-formatted relevant skill content to inject into the system prompt */
+  skills?: string;
 }
 
 /**
@@ -95,10 +128,13 @@ export function filterBootstrapFiles(agentId: string, sessionType: "main" | "sub
  * 5. Task-specific instructions (the actual prompt delta)
  *
  * Mode behavior:
- * - "full": identity + full workspace + org + memory + task
- * - "heartbeat": identity + memory + task (no workspace, no org)
- * - "message": identity + SOUL + IDENTITY + AGENTS + memory + task
- * - "minimal": identity + memory + task (no workspace, no org)
+ * - "full": identity + full workspace + org + memory + task + instruction files
+ * - "heartbeat": identity + HEARTBEAT.md instructions + time line only (~600-800 tokens)
+ * - "message": identity + filtered workspace (SOUL/IDENTITY/AGENTS) + memory + task
+ * - "minimal": identity + time line only (for subagent contexts)
+ *
+ * Token savings: heartbeat mode skips workspace (~1.5K), org (~300), memory (variable),
+ * and instruction files (~500-1K), saving 2-4K tokens vs full mode.
  */
 export function buildSystemPrompt(options: PromptBuildOptions): string {
   const {
@@ -108,6 +144,7 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
     includeWorkspace = true,
     mode = "full",
     instructionFiles,
+    skills,
   } = options;
 
   const staff = getStaffById(agentId);
@@ -122,7 +159,21 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
   // ── CACHE BOUNDARY: stable content ends here ──
   parts.push(SYSTEM_PROMPT_CACHE_BOUNDARY.trim());
 
-  // ── 2. WORKSPACE CONTEXT (mode-dependent) ──
+  // ── 2. HEARTBEAT INSTRUCTIONS (heartbeat mode only) ──
+  if (mode === "heartbeat") {
+    const heartbeatContent = loadHeartbeatInstructions(agentId);
+    if (heartbeatContent) {
+      parts.push(`## Heartbeat Instructions\n\n${heartbeatContent}`);
+    }
+    parts.push(currentTimeLine());
+  }
+
+  // ── 3. TIME LINE (minimal mode only — identity already covers heartbeat) ──
+  if (mode === "minimal") {
+    parts.push(currentTimeLine());
+  }
+
+  // ── 4. WORKSPACE CONTEXT (full and message modes only) ──
   if (includeWorkspace && mode === "full") {
     const workspaceCtx = buildWorkspaceContext(agentId);
     if (workspaceCtx) {
@@ -131,36 +182,50 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
   }
 
   if (includeWorkspace && mode === "message") {
-    // Message mode: only load SOUL.md + IDENTITY.md + AGENTS.md
     const filteredCtx = filterBootstrapFiles(agentId, "subagent");
     if (filteredCtx) {
       parts.push(filteredCtx);
     }
   }
 
-  // heartbeat and minimal: skip workspace context entirely
-
-  // ── 3. ORGANIZATIONAL CONTEXT (full mode only) ──
+  // ── 5. ORGANIZATIONAL CONTEXT (full mode only) ──
   if (mode === "full") {
     parts.push(buildOrgBlock());
   }
 
-  // ── 4. MEMORY CONTEXT (relevant past findings) ──
+  // ── 6. MEMORY CONTEXT (when injected) ──
   if (memoryInjection) {
     parts.push(`<memory_context>\n${memoryInjection}\n</memory_context>`);
   }
 
-  // ── 5. TASK / DELTA (what to do right now) ──
+  // ── 7. TASK / DELTA (what to do right now) ──
   if (taskPrompt) {
     parts.push(`<user_message>\n${taskPrompt}\n</user_message>`);
   }
 
-  // ── 6. INSTRUCTION FILES (project-scoped context injected by caller) ──
-  if (instructionFiles) {
+  // ── 8. INSTRUCTION FILES (full and message modes) ──
+  if (instructionFiles && (mode === "full" || mode === "message")) {
     parts.push(instructionFiles);
   }
 
-  return parts.join("\n\n");
+  // ── 9. SKILLS (when available) ──
+  if (skills) {
+    parts.push(skills);
+  }
+
+  const result = parts.join("\n\n");
+
+  // ── Log token savings for non-full modes ──
+  if (mode !== "full") {
+    const fullTokens = estimateTokens(result) + estimateTokens(buildWorkspaceContext(agentId) || "") + estimateTokens(buildOrgBlock());
+    const actualTokens = estimateTokens(result);
+    const saved = fullTokens - actualTokens;
+    if (saved > 0) {
+      logger.info({ agentId, mode, actualTokens, savedTokens: saved }, "System prompt built (token savings)");
+    }
+  }
+
+  return result;
 }
 
 function buildIdentityBlock(agentId: string, staff: any, mode: string): string {
@@ -174,7 +239,6 @@ function buildIdentityBlock(agentId: string, staff: any, mode: string): string {
   if (staff) {
     lines.push(`## Your Identity`);
     lines.push(`You are ${staff.name}, the ${staff.title}.`);
-    lines.push(`- Autonomy Level: ${staff.autonomyLevel}/4`);
     lines.push(`- Board Seat: ${staff.boardSeat ? "Yes" : "No"}`);
     if (staff.reportsTo) {
       const boss = getStaffById(staff.reportsTo);

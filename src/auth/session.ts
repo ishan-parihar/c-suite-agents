@@ -20,7 +20,6 @@ export interface AuthContext {
   agentId: string;
   staff: CoreStaffRole | undefined;
   isHiredAgent: boolean;
-  autonomyLevel: number;
 }
 
 export class SessionManager {
@@ -156,7 +155,6 @@ export async function buildAuthContext(session: AgentSession): Promise<AuthConte
     agentId: session.agentId,
     staff,
     isHiredAgent,
-    autonomyLevel: staff?.autonomyLevel || (isHiredAgent ? 2 : 1)
   };
 }
 
@@ -172,8 +170,8 @@ export async function verifyAgentOwnership(requestedAgentId: string, authContext
     return { authorized: true };
   }
 
-  // Level 4 (CEO) can access all staff agents
-  if (authContext.autonomyLevel >= 4 && authContext.staff?.boardSeat) {
+  // CEO can access all staff agents
+  if (authContext.staff?.id === "ceo-strategic" && authContext.staff?.boardSeat) {
     const targetStaff = getStaffById(requestedAgentId);
     if (targetStaff) {
       return { authorized: true };

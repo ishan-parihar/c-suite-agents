@@ -11,6 +11,8 @@
 // - Identifier preservation in summaries
 
 import { logger } from "../logger.js";
+import type { ContextWindowInfo } from "./context-window.js";
+import { isRealConversation } from "./utils.js";
 
 // ── Token Estimation ──────────────────────────────────────────────
 // OpenClaw: CHARS_PER_TOKEN = 4 with SAFETY_MARGIN = 1.2 (20% buffer)
@@ -20,6 +22,8 @@ const IDENTIFIER_PRESERVATION = "Preserve all opaque identifiers exactly as writ
 
 // ── Compaction Constants ──────────────────────────────────────────
 // OpenCode: PRUNE_PROTECT = 40_000, PRUNE_MINIMUM = 20_000
+const DEFAULT_PROTECTION_WINDOW_TOKENS = 40_000; // tokens to keep recent
+const DEFAULT_MIN_FREE_TOKENS = 20_000; // min tokens freed to trigger prune
 const TOOL_RESULT_PRUNE_PROTECT = 40_000; // tokens to keep recent
 const TOOL_RESULT_PRUNE_MINIMUM = 20_000; // min tokens freed to trigger prune
 const TOOL_RESULT_PRUNE_LOOKBACK = 2; // user turns to protect
@@ -36,7 +40,7 @@ const MIN_CHUNK_RATIO = 0.15;
 const DEFAULT_CONTEXT_TOKENS = 32_000;
 
 // LRU eviction: max sessions before cleanup
-const MAX_SESSIONS_LRU = 50;
+const MAX_SESSIONS_LRU = 100;
 
 // ── Staged Summarization Constants ────────────────────────────────
 const SUMMARIZATION_OVERHEAD_TOKENS = 4096; // Reserve for summary prompt/template overhead
@@ -45,12 +49,14 @@ const MAX_SUMMARY_CHUNK_TOKENS = 16000; // Max tokens per chunk to stay safe
 // ── Types ─────────────────────────────────────────────────────────
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
   timestamp: number;
   tokenEstimate?: number;
-  isSummary?: boolean; // marks a summary message (not a real user message)
-  compacted?: boolean; // marks messages that were compacted (for pruning)
+  isSummary?: boolean;
+  compacted?: boolean;
+  tool_call_id?: string;
+  tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
 }
 
 export interface ToolCall {
@@ -92,6 +98,7 @@ export interface ContextManagerConfig {
   modelContextTokens?: number; // model-specific context (overrides maxContextTokens)
   trimStrategy: "oldest_first" | "compress_middle";
   maxSessions?: number; // LRU limit
+  contextWindowInfo?: ContextWindowInfo; // resolved model-aware context info
 }
 
 export interface CompactionConfig {
@@ -125,17 +132,20 @@ export type SummarizeFn = (
 
 export type PersistCallbacks = {
   onSave: (sessionId: string, messages: ChatMessage[], toolCalls: ToolCall[], metadata: { compactionCount: number; previousSummary?: string; hasRealConversation: boolean }) => void;
-  onLoad: (sessionId: string) => { messages: Array<{ role: "system" | "user" | "assistant"; content: string; tokenEstimate: number; isSummary: boolean; compacted: boolean; timestamp: number }>; toolCalls: Array<{ id: string; name: string; arguments: string; result?: string; tokenEstimate: number; compacted: boolean; timestamp: number }>; metadata: { compactionCount: number; previousSummary?: string; hasRealConversation: boolean } } | null;
+  onLoad: (sessionId: string) => { messages: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string | null; tokenEstimate: number; isSummary: boolean; compacted: boolean; timestamp: number; tool_call_id?: string; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> }>; toolCalls: Array<{ id: string; name: string; arguments: string; result?: string; tokenEstimate: number; compacted: boolean; timestamp: number }>; metadata: { compactionCount: number; previousSummary?: string; hasRealConversation: boolean } } | null;
 };
 
 export class ContextManager {
   private sessions: Map<string, AgentSession> = new Map();
+  private sessionAccessOrder: string[] = [];
   private config: ContextManagerConfig;
   private summarizeFn: SummarizeFn | null = null;
   private persist: PersistCallbacks | null = null;
+  private contextWindowInfo: ContextWindowInfo | null = null;
 
   constructor(config?: Partial<ContextManagerConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.contextWindowInfo = config?.contextWindowInfo ?? null;
   }
 
   setSummarizeFn(fn: SummarizeFn): void {
@@ -172,6 +182,8 @@ export class ContextManager {
           tokenEstimate: m.tokenEstimate,
           isSummary: m.isSummary,
           compacted: m.compacted,
+          tool_call_id: m.tool_call_id,
+          tool_calls: m.tool_calls,
         }));
         const tcs: ToolCall[] = loaded.toolCalls.map(tc => ({
           id: tc.id,
@@ -200,7 +212,7 @@ export class ContextManager {
         };
         this.sessions.set(sessionId, session);
         logger.info({ sessionId, agentId, messages: msgs.length, tokens: totalTokens }, "Session restored from persistence");
-        this.evictOldestIfNecessary(sessionId);
+        this.touchSession(sessionId);
         return session;
       }
     }
@@ -228,12 +240,16 @@ export class ContextManager {
     };
     this.sessions.set(sessionId, session);
     logger.info({ sessionId, agentId, tokens: estimatedTokens }, "Session created");
-    this.evictOldestIfNecessary(sessionId);
+    this.touchSession(sessionId);
     return session;
   }
 
   getSession(sessionId: string): AgentSession | undefined {
-    return this.sessions.get(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      this.touchSession(sessionId);
+    }
+    return session;
   }
 
   // ── Message Management ───────────────────────────────────────────
@@ -282,6 +298,33 @@ export class ContextManager {
     this.trimIfNeeded(session);
   }
 
+  /**
+   * Record an assistant message that contains tool_calls.
+   * If textContent is empty/null, content is stored as null (required by OpenAI-compatible backends).
+   */
+  recordAssistantToolCalls(sessionId: string, textContent: string | null | undefined, toolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }>): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    const content = (textContent && textContent.trim().length > 0) ? textContent : null;
+    const tokens = content ? estimateTokens(content) : 0;
+
+    const msg: ChatMessage = {
+      role: "assistant",
+      content,
+      timestamp: Date.now(),
+      tokenEstimate: tokens,
+      tool_calls: toolCalls,
+    };
+
+    session.messages.push(msg);
+    session.totalTokens += tokens;
+    session.lastUsed = Date.now();
+
+    this.trimIfNeeded(session);
+    this.triggerSave(sessionId);
+  }
+
   recordToolCall(sessionId: string, toolCall: ToolCall): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
@@ -293,8 +336,9 @@ export class ContextManager {
 
     if (toolCall.result) {
       const resultMsg: ChatMessage = {
-        role: "user",
-        content: `[Tool: ${toolCall.name}]\n${toolCall.result}`,
+        role: "tool",
+        content: toolCall.result,
+        tool_call_id: toolCall.id,
         timestamp: Date.now(),
         tokenEstimate: resultTokens,
       };
@@ -304,7 +348,6 @@ export class ContextManager {
 
     session.lastUsed = Date.now();
 
-    // Prune old tool results if context is getting crowded
     this.pruneToolResults(session);
     this.trimIfNeeded(session);
   }
@@ -313,6 +356,7 @@ export class ContextManager {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
+    this.touchSession(sessionId);
     return [...session.messages];
   }
 
@@ -344,6 +388,15 @@ export class ContextManager {
       logger.debug({ sessionId, messages: session.messages.length }, "Skipping compaction — heartbeat-only session");
       return;
     }
+
+    // Scan all messages for substantive content before compaction
+    if (!isRealConversation(session.messages)) {
+      logger.debug({ sessionId }, "Skipping compaction — heartbeat-only session");
+      return;
+    }
+
+    // Prune old tool results before compaction
+    this.pruneToolResults(session);
 
     const systemMsg = session.messages[0];
     const recentMessages = session.messages.slice(-keepRecent);
@@ -568,68 +621,83 @@ export class ContextManager {
 
   /**
    * Prunes old tool results to reclaim context space.
-   * Protects the most recent TOOL_RESULT_PRUNE_PROTECT tokens.
-   * Only prunes if we can free TOOL_RESULT_PRUNE_MINIMUM tokens.
-   * Never prunes results from protected tool types.
+   * Walks backwards through messages, protecting the most recent
+   * protectionWindowTokens. Beyond that window, tool results are
+   * replaced with a placeholder. Only prunes if minFreeTokens or
+   * more would be freed.
+   *
+   * @returns Number of tokens freed (0 if no pruning performed)
    */
-  private pruneToolResults(session: AgentSession): void {
-    // Only prune when context is getting crowded (>70%)
-    if (session.totalTokens < this.effectiveMaxTokens() * 0.7) return;
+  pruneToolResults(
+    session: AgentSession,
+    protectionWindowTokens: number = DEFAULT_PROTECTION_WINDOW_TOKENS,
+    minFreeTokens: number = DEFAULT_MIN_FREE_TOKENS,
+  ): number {
+    let cumulativeTokens = 0;
+    let inPruneZone = false;
+    const toPrune: { index: number; toolName: string; originalLength: number; tokens: number }[] = [];
 
-    // Two-phase prune: protect recent turns, then collect prunable tool results.
-    let protectedTokens = 0;
-    let prunableTokens = 0;
-    let userTurns = 0;
-    const pruneIndex: number[] = [];
-
+    // Walk backwards from most recent message
     for (let i = session.messages.length - 1; i >= 1; i--) {
       const msg = session.messages[i];
+      const msgTokens = msg.tokenEstimate || 0;
+      cumulativeTokens += msgTokens;
 
-      // Track user turns for protection window
-      if (msg.role === "user") userTurns++;
-
-      // Phase 1: Protect the most recent N user turns
-      if (userTurns <= TOOL_RESULT_PRUNE_LOOKBACK) {
-        protectedTokens += (msg.tokenEstimate || 0);
+      if (!inPruneZone) {
+        // Still within the protection window
+        if (cumulativeTokens >= protectionWindowTokens) {
+          inPruneZone = true;
+        }
         continue;
       }
 
-      // Phase 2: Beyond protection window — evaluate for pruning
-      // Stop if we've already protected enough
-      if (protectedTokens > TOOL_RESULT_PRUNE_PROTECT) break;
+      // Beyond protection window — identify prunable tool results
+      if (msg.role === "tool") {
+        // Extract tool name from the toolCalls array using tool_call_id
+        const toolName = msg.tool_call_id
+          ? session.toolCalls.find(tc => tc.id === msg.tool_call_id)?.name ?? "unknown"
+          : "unknown";
 
-      // Check if this is a tool result message
-      if (msg.role === "user" && msg.content.startsWith("[Tool: ")) {
-        const toolName = msg.content.match(/^\[Tool: ([^\]]+)\]/)?.[1];
         // Never prune protected tool types
-        if (toolName && PRUNE_PROTECTED_TOOLS.includes(toolName)) continue;
-        // Don't prune already-compacted messages
+        if (PRUNE_PROTECTED_TOOLS.includes(toolName)) continue;
+        // Skip already-compacted messages
         if (msg.compacted) continue;
 
-        pruneIndex.push(i);
-        prunableTokens += (msg.tokenEstimate || 0);
+        toPrune.push({ index: i, toolName, originalLength: msg.content?.length ?? 0, tokens: msgTokens });
       }
     }
 
-    // Only prune if we can free enough tokens (check prunableTokens, NOT protectedTokens)
-    if (prunableTokens < TOOL_RESULT_PRUNE_MINIMUM || pruneIndex.length === 0) return;
+    // Calculate total potential savings
+    const potentialFreed = toPrune.reduce((sum, item) => sum + item.tokens, 0);
 
-    let freedTokens = 0;
-    for (const idx of [...pruneIndex].sort((a: number, b: number) => b - a)) {
-      const msg = session.messages[idx];
-      if (msg && msg.role === "user" && msg.content.startsWith("[Tool: ")) {
-        const toolName = msg.content.match(/^\[Tool: ([^\]]+)\]/)?.[1];
-        if (toolName && PRUNE_PROTECTED_TOOLS.includes(toolName)) continue;
+    // Only prune if we free enough tokens
+    if (potentialFreed < minFreeTokens || toPrune.length === 0) return 0;
 
-        freedTokens += (msg.tokenEstimate || 0);
-        session.messages.splice(idx, 1);
-      }
+    // Perform pruning — replace content with placeholder
+    let actualFreed = 0;
+    for (const item of toPrune) {
+      const msg = session.messages[item.index];
+      if (!msg) continue;
+
+      const oldTokens = msg.tokenEstimate || 0;
+      const originalLength = item.originalLength;
+      const placeholder = `[Tool output pruned to save context — ${item.toolName} returned ${originalLength} chars]`;
+
+      msg.content = placeholder;
+      msg.tokenEstimate = estimateTokens(placeholder);
+      actualFreed += (oldTokens - msg.tokenEstimate);
     }
 
-    if (freedTokens > 0) {
-      session.totalTokens -= freedTokens;
-      logger.info({ sessionId: session.sessionId, pruned: pruneIndex.length, freedTokens }, "Tool results pruned");
+    session.totalTokens -= actualFreed;
+
+    if (actualFreed > 0) {
+      logger.info(
+        { sessionId: session.sessionId, pruned: toPrune.length, freedTokens: actualFreed, potentialTokens: potentialFreed },
+        "Tool results pruned",
+      );
     }
+
+    return actualFreed;
   }
 
   // ── Trimming ─────────────────────────────────────────────────────
@@ -686,6 +754,10 @@ export class ContextManager {
 
   deleteSession(sessionId: string): void {
     this.sessions.delete(sessionId);
+    const idx = this.sessionAccessOrder.indexOf(sessionId);
+    if (idx !== -1) {
+      this.sessionAccessOrder.splice(idx, 1);
+    }
     logger.info({ sessionId }, "Session deleted");
   }
 
@@ -724,7 +796,7 @@ export class ContextManager {
       { newSessionId, parentSessionId: sessionId, branchName, messages: forkedMessages.length },
       "Session forked",
     );
-    this.evictOldestIfNecessary(newSessionId);
+    this.touchSession(newSessionId);
     return newSessionId;
   }
 
@@ -735,29 +807,26 @@ export class ContextManager {
 
   // ── LRU Eviction ─────────────────────────────────────────────────
 
-  private evictOldestIfNecessary(newSessionId?: string): void {
-    const maxSessions = this.config.maxSessions ?? MAX_SESSIONS_LRU;
-    if (this.sessions.size <= maxSessions) return;
-
-    // Find the least recently used session (excluding the new one)
-    let oldestId: string | null = null;
-    let oldestTime = Infinity;
-
-    for (const [id, session] of this.sessions) {
-      if (id === newSessionId) continue;
-      if (session.lastUsed < oldestTime) {
-        oldestTime = session.lastUsed;
-        oldestId = id;
-      }
+  private touchSession(sessionId: string): void {
+    const existingIdx = this.sessionAccessOrder.indexOf(sessionId);
+    if (existingIdx !== -1) {
+      this.sessionAccessOrder.splice(existingIdx, 1);
     }
+    this.sessionAccessOrder.push(sessionId);
 
-    if (oldestId) {
-      const session = this.sessions.get(oldestId);
-      logger.warn(
-        { sessionId: oldestId, agentId: session?.agentId, age: Date.now() - oldestTime },
-        "Evicting LRU session",
-      );
-      this.sessions.delete(oldestId);
+    const maxSessions = this.config.maxSessions ?? MAX_SESSIONS_LRU;
+    if (this.sessions.size > maxSessions) {
+      this.evictOldest();
+    }
+  }
+
+  private evictOldest(): void {
+    const oldestId = this.sessionAccessOrder.shift();
+    if (!oldestId) return;
+
+    const evicted = this.sessions.delete(oldestId);
+    if (evicted) {
+      logger.debug({ sessionId: oldestId }, "Evicting LRU session");
     }
   }
 

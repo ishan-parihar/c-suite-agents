@@ -13,7 +13,6 @@ import { Kanban } from "../kanban/sqlite.js";
 import type { StrategosRuntime, ToolExecutor } from "../types.js";
 import { v4 as uuidv4 } from "uuid";
 import { CORE_STAFF_ROLES, getCoreStaffIds, getOrgChart, getStaffById, getDirectReports } from "../staff/core-staff.js";
-import { getAllDatabases } from "../lifeos/client.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { getReportsAndSessions } from "./tools-reports.js";
 import { getMeetingGovernance } from "../organic/meetings.js";
@@ -21,6 +20,7 @@ import { getHiringSystem } from "../organic/hiring.js";
 import { AgentContextManager } from "../organic/context.js";
 import { sendTelegramMessage } from "../integrations/telegram.js";
 import { createServer } from "http";
+import { startBoardMeeting, runFullBoardMeeting, getActiveMeeting } from "../organic/board-meeting.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 const ok = (text: string): ToolResult => ({ content: [{ type: "text" as const, text }] });
@@ -31,7 +31,7 @@ async function initializeCoreStaff(kanban: Kanban, memory: Memory) {
   logger.info("Initializing core staff...");
   for (const [id, role] of Object.entries(CORE_STAFF_ROLES)) {
     try {
-      await kanban.ensureBoard(id, role.name);
+      await kanban.ensureBoard(id, role.name, role.kanbanColumns);
       await memory.ensureAgent(id);
       logger.info({ id, role: role.title }, "Core staff initialized");
     } catch (err: any) {
@@ -51,6 +51,9 @@ export async function startStrategos(): Promise<StrategosRuntime> {
   const contextManager = new AgentContextManager(kanban, memory);
 
   await initializeCoreStaff(kanban, memory);
+
+  // Import scheduler (needed by cron tools in createSessionServer below)
+  const { getAgentScheduler } = await import("../scheduler/agent-scheduler.js");
 
   // Start HTTP server for MCP (SSE transport — compatible with OpenCode remote MCP)
   const MCP_PORT = parseInt(process.env.MCP_PORT || "3001", 10);
@@ -108,23 +111,6 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     sessionServer.registerTool("agent.list", { description: "List all active agents", inputSchema: z.object({}) }, agentList);
 
     // === AGENT COMMUNICATION TOOLS ===
-    const agentCall = async (args: any): Promise<ToolResult> => {
-      const { from_agent, to_agent, message, priority = "P3", requires_response = false } = withCallerIdentity(args);
-      if (!to_agent) return ok("❌ Error: to_agent is required");
-      const staff = getStaffById(to_agent);
-      if (!staff) return ok(`❌ Agent "${to_agent}" not found. Use org.chart to see available agents.`);
-      try {
-        await messaging.send({ from: from_agent, to: to_agent, content: message, priority, requires_response, subject: message.slice(0, 50), tags: ["agent-call"] });
-        logger.info({ from: from_agent, to: to_agent, priority }, "Agent call made");
-        return ok(`✅ Message sent to **${staff.avatar} ${staff.name}**\n\nPriority: ${priority}\nResponse required: ${requires_response ? "Yes" : "No"}`);
-      } catch (err: any) {
-        logger.error({ err: err.message }, "Failed to call agent");
-        return ok(`❌ Failed to contact ${to_agent}: internal error`);
-      }
-    };
-    sessionToolImpls["agent.call"] = agentCall;
-    sessionServer.registerTool("agent.call", { description: "Call another agent (send message, optional response)", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID"), to_agent: z.string().describe("Agent to call"), message: z.string().describe("Message content"), priority: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("P1=critical, P4=low"), requires_response: z.boolean().optional().describe("Whether response is required") }) }, agentCall);
-
     const agentHandoff = async (args: any): Promise<ToolResult> => {
       const { from_agent, to_agent, context, conversation_id } = withCallerIdentity(args);
       if (!to_agent || !context) return ok("❌ Error: to_agent and context are required");
@@ -171,7 +157,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     // === CONTEXT & RECALL TOOLS ===
     const agentWake = async (args: any): Promise<ToolResult> => {
       const context = await contextManager.getWakeContext(args.agent_id);
-      const formatted = contextManager.formatWakeContext(context);
+      const formatted = await contextManager.formatWakeContext(context);
       return ok(formatted);
     };
     sessionToolImpls["agent.wake"] = agentWake;
@@ -230,7 +216,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     const staffGet = async (args: any): Promise<ToolResult> => {
       const staff = getStaffById(args.id);
       if (!staff) return ok(`Staff "${args.id}" not found`);
-      return ok(`${staff.avatar} **${staff.name}** — ${staff.title}\n\nAutonomy: Level ${staff.autonomyLevel}\nBoard Seat: ${staff.boardSeat ? "Yes" : "No"}\nReports To: ${staff.reportsTo || "CEO"}\n\nDatabases:\n${staff.databases.join("\n")}\n\nKanban Columns:\n${staff.kanbanColumns.join(" → ")}`);
+      return ok(`${staff.avatar} **${staff.name}** — ${staff.title}\n\nBoard Seat: ${staff.boardSeat ? "Yes" : "No"}\nReports To: ${staff.reportsTo || "CEO"}\n\nDatabases:\n${staff.databases.join("\n")}\n\nKanban Columns:\n${staff.kanbanColumns.join(" → ")}`);
     };
     sessionToolImpls["staff.get"] = staffGet;
     sessionServer.registerTool("staff.get", { description: "Get staff details", inputSchema: z.object({ id: z.string() }) }, staffGet);
@@ -269,12 +255,18 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     const boardMoveCard = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
+      // Validate status against the agent's actual board columns
+      const board = await kanban.getBoard(resolved.agent_id);
+      if (board && !board.columns.some(c => c.name === args.status)) {
+        const available = board.columns.map(c => c.name).join(", ");
+        return ok(`❌ Invalid column "${args.status}". Available columns: ${available}`);
+      }
       await kanban.moveCard(resolved.agent_id, args.card_id, args.status);
       logger.info({ card_id: args.card_id, status: args.status }, "Card moved");
       return ok("ok");
     };
     sessionToolImpls["board.moveCard"] = boardMoveCard;
-    sessionServer.registerTool("board.moveCard", { description: "Move card", inputSchema: z.object({ card_id: z.string(), status: z.enum(["Backlog","Todo","In Progress","Blocked","Review","Done"]) }) }, boardMoveCard);
+    sessionServer.registerTool("board.moveCard", { description: "Move card", inputSchema: z.object({ card_id: z.string(), status: z.string().describe("Target column name (must match agent's board columns)") }) }, boardMoveCard);
 
     const boardGet = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
@@ -377,15 +369,37 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     sessionServer.registerTool("message.escalate", { description: "Escalate thread to superior", inputSchema: z.object({ thread_id: z.string(), from: z.string(), to: z.string(), reason: z.string() }) }, messageEscalate);
 
     const agentInbox = async (args: any): Promise<ToolResult> => {
-      const { agent_id, include_read = false } = args;
+      const { agent_id, include_read = false, include_content = false } = args;
       const context = await messaging.getActiveContext(agent_id);
-      const unreadMessages = await messaging.getUnreadMessages(agent_id, 20);
+      const unreadMessages = include_content
+        ? await messaging.getUnreadMessages(agent_id, 20)
+        : [];
       const lines: string[] = [`📬 **Inbox for ${agent_id}**\n`];
       lines.push(`Unread: ${context.unread_count} | Pending Responses: ${context.pending_responses.length}\n`);
-      if (unreadMessages.length > 0) {
+      if (include_content && unreadMessages.length > 0) {
         lines.push(`**📥 Unread Messages (${unreadMessages.length}):**`);
-        for (const msg of unreadMessages.slice(0, 10)) { const fromStaff = getStaffById(msg.from); const fromName = fromStaff ? `${fromStaff.avatar} ${fromStaff.name}` : msg.from; const ts = new Date(msg.created_at).toISOString().slice(0, 16); const preview = msg.content.length > 120 ? msg.content.slice(0, 120) + "..." : msg.content; lines.push(`- [${msg.priority}] ${fromName} at ${ts}: ${preview}`); }
-        if (unreadMessages.length > 10) lines.push(`- ... and ${unreadMessages.length - 10} more (use message.getUnread for full content)`);
+        for (const msg of unreadMessages.slice(0, 10)) {
+          const fromStaff = getStaffById(msg.from);
+          const fromName = fromStaff ? `${fromStaff.avatar} ${fromStaff.name}` : msg.from;
+          const ts = new Date(msg.created_at).toISOString().slice(0, 16);
+          lines.push(`---`);
+          lines.push(`**[${msg.priority}] ${fromName} at ${ts}:**`);
+          lines.push(`${msg.content}`);
+          lines.push("");
+        }
+        if (unreadMessages.length > 10) lines.push(`- ... and ${unreadMessages.length - 10} more`);
+        lines.push("");
+      } else if (!include_content && context.unread_count > 0) {
+        const previewMessages = await messaging.getUnreadMessages(agent_id, 10);
+        lines.push(`**📥 Unread Messages (${context.unread_count}):**`);
+        for (const msg of previewMessages.slice(0, 10)) {
+          const fromStaff = getStaffById(msg.from);
+          const fromName = fromStaff ? `${fromStaff.avatar} ${fromStaff.name}` : msg.from;
+          const ts = new Date(msg.created_at).toISOString().slice(0, 16);
+          const preview = msg.content.length > 120 ? msg.content.slice(0, 120) + "..." : msg.content;
+          lines.push(`- [${msg.priority}] ${fromName} at ${ts}: ${preview}`);
+        }
+        if (context.unread_count > 10) lines.push(`- ... and ${context.unread_count - 10} more (use include_content=true for full messages)`);
         lines.push("");
       }
       if (context.pending_responses.length > 0) { lines.push(`**⏳ Requires Response:**`); for (const msg of context.pending_responses) { const fromStaff = getStaffById(msg.from); const fromName = fromStaff ? `${fromStaff.avatar} ${fromStaff.name}` : msg.from; lines.push(`- [${msg.priority}] From ${fromName}: ${msg.content.slice(0, 80)}...`); } lines.push(""); }
@@ -394,7 +408,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       return ok(lines.join("\n"));
     };
     sessionToolImpls["agent.inbox"] = agentInbox;
-    sessionServer.registerTool("agent.inbox", { description: "View agent's message inbox - unread messages, pending responses, and active threads", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to check inbox for"), include_read: z.boolean().optional().default(false) }) }, agentInbox);
+    sessionServer.registerTool("agent.inbox", { description: "View agent's message inbox - unread messages, pending responses, and active threads", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to check inbox for"), include_read: z.boolean().optional().default(false), include_content: z.boolean().optional().default(false).describe("When true, return full message content instead of previews") }) }, agentInbox);
 
     const messageGetUnread = async (args: any): Promise<ToolResult> => {
       const { agent_id, limit = 20 } = args;
@@ -502,6 +516,90 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     sessionToolImpls["hire.getTeam"] = hireGetTeam;
     sessionServer.registerTool("hire.getTeam", { description: "Get manager's team", inputSchema: z.object({ manager_id: z.string() }) }, hireGetTeam);
 
+    // === TEAM HEALTH ===
+    const agentStatus = async (args: { agent_id: string }): Promise<ToolResult> => {
+      const { getAgentHealthRegistry } = await import("../scheduler/agent-health.js");
+      const { getStaffById } = await import("../staff/core-staff.js");
+      const health = getAgentHealthRegistry().getStatus(args.agent_id);
+      const staff = getStaffById(args.agent_id);
+      if (!health) return ok(`No health data for ${args.agent_id}`);
+      const statusEmoji: Record<string, string> = { healthy: "🟢", degraded: "🟡", silent: "⚫", error: "🔴" };
+      const emoji = statusEmoji[health.status] || "⚪";
+      const lines = [
+        `${emoji} **${staff?.name || args.agent_id}** — ${staff?.title || ""}`,
+        `Status: **${health.status}**`,
+        `Last heartbeat: ${health.lastHeartbeat > 0 ? new Date(health.lastHeartbeat).toLocaleTimeString() : "never"}`,
+        `Last response: ${health.lastResponse > 0 ? new Date(health.lastResponse).toLocaleTimeString() : "never"}`,
+        `Pending messages: ${health.pendingMessages}`,
+        `Consecutive failures: ${health.consecutiveFailures}`,
+        `Errors (24h): ${health.errorCount24h}`,
+      ];
+      return ok(lines.join("\n"));
+    };
+    sessionToolImpls["agent.status"] = agentStatus;
+    sessionServer.registerTool("agent.status", { description: "Get agent health and workload status", inputSchema: z.object({ agent_id: z.string() }) }, agentStatus);
+
+    const orgHealth = async (): Promise<ToolResult> => {
+      const { getAgentHealthRegistry } = await import("../scheduler/agent-health.js");
+      const team = getAgentHealthRegistry().getTeamStatus();
+      const statusEmoji: Record<string, string> = { healthy: "🟢", degraded: "🟡", silent: "⚫", error: "🔴" };
+      const silent = getAgentHealthRegistry().getSilentAgents();
+      const lines = ["🏢 **Team Health Overview**\n"];
+      for (const h of team) {
+        const emoji = statusEmoji[h.status] || "⚪";
+        lines.push(`${emoji} **${h.name}** — ${h.status} | PM: ${h.pendingMessages} | F: ${h.consecutiveFailures}`);
+      }
+      if (silent.length > 0) {
+        lines.push(`\n⚠️ **Silent agents**: ${silent.join(", ")}`);
+      }
+      return ok(lines.join("\n"));
+    };
+    sessionToolImpls["org.health"] = orgHealth;
+    sessionServer.registerTool("org.health", { description: "Get team-wide health overview with silent agent detection" }, orgHealth);
+
+    // === BOARD MEETING TOOLS ===
+    const boardmeetingRun = async (args: any): Promise<ToolResult> => {
+      // CEO-only enforcement: runtime identity check
+      if (callerAgentId && callerAgentId !== "ceo-strategic") {
+        return ok("❌ Access denied: boardmeeting.run is restricted to the CEO agent.");
+      }
+      try {
+        const meeting = await runFullBoardMeeting(args.objective);
+        const turns = meeting.turns.length;
+        const reportPreview = meeting.report ? meeting.report.slice(0, 500) : "No report generated.";
+        return ok(`✅ Board meeting completed: ${meeting.id}\nTurns: ${turns}\nStatus: ${meeting.status}${args.objective ? `\nObjective: ${args.objective}` : ""}\n\n${reportPreview}${meeting.report && meeting.report.length > 500 ? "\n\n[...report truncated]" : ""}`);
+      } catch (err: any) {
+        logger.error({ err: err.message }, "Failed to run board meeting");
+        return ok(`❌ Failed to run board meeting: ${err.message}`);
+      }
+    };
+    sessionToolImpls["boardmeeting.run"] = boardmeetingRun;
+    sessionServer.registerTool("boardmeeting.run", {
+      description: "Trigger an immediate board meeting. CEO-only tool.",
+      inputSchema: z.object({ objective: z.string().optional().describe("Optional meeting objective/focus") })
+    }, boardmeetingRun);
+
+    const boardmeetingStatus = async (): Promise<ToolResult> => {
+      const meeting = getActiveMeeting();
+      if (!meeting) return ok("No active board meeting.");
+      const statusLines = [
+        `🏛 **Board Meeting Status**`,
+        `ID: ${meeting.id}`,
+        `Date: ${meeting.date}`,
+        `Status: ${meeting.status}`,
+        meeting.objective ? `Objective: ${meeting.objective}` : "",
+        `Turns completed: ${meeting.turns.length}`,
+        meeting.started_at ? `Started: ${new Date(meeting.started_at).toISOString()}` : "",
+        meeting.concluded_at ? `Concluded: ${new Date(meeting.concluded_at).toISOString()}` : "",
+      ].filter(Boolean);
+      return ok(statusLines.join("\n"));
+    };
+    sessionToolImpls["boardmeeting.status"] = boardmeetingStatus;
+    sessionServer.registerTool("boardmeeting.status", {
+      description: "Get current board meeting state if active",
+      inputSchema: z.object({})
+    }, boardmeetingStatus);
+
     // === HEARTBEAT & NOTIFY ===
     const heartbeatRun = async (): Promise<ToolResult> => { logger.info("Heartbeat"); return ok("Audit started"); };
     sessionToolImpls["heartbeat.runNow"] = heartbeatRun;
@@ -598,6 +696,119 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     };
     sessionToolImpls["memory.stats"] = memoryStats;
     sessionServer.registerTool("memory.stats", { description: "Show memory statistics — total entries per scope, per-agent breakdown. Use to monitor memory growth.", inputSchema: z.object({}) }, memoryStats);
+
+    // === CRON / SCHEDULING TOOLS ===
+
+    const cronStatus = async (args: any): Promise<ToolResult> => {
+      const resolved = withCallerIdentity(args);
+      const scheduler = await getAgentScheduler();
+      const tasks = await scheduler.getTasksForAgent(resolved.agent_id);
+      const active = tasks.filter(t => t.enabled && t.status === "active");
+      const paused = tasks.filter(t => !t.enabled || t.status === "paused");
+      const lines: string[] = [`⏱ **Scheduled Tasks for ${resolved.agent_id}**\n`];
+      lines.push(`Active: ${active.length} | Paused: ${paused.length} | Total: ${tasks.length}`);
+      if (active.length > 0) {
+        lines.push("\n**Active Tasks:**");
+        for (const t of active.slice(0, 10)) {
+          const nextRun = t.next_run > 0 ? new Date(t.next_run).toLocaleString() : "event-driven";
+          const schedType = t.schedule_type === "cron" ? `cron: ${t.cron_expression}` : t.schedule_type === "interval" ? `every ${t.interval_seconds}s` : t.schedule_type === "once" ? `once: ${new Date(t.trigger_time || 0).toLocaleString()}` : `on_event: ${t.event_name}`;
+          lines.push(`• **${t.name}** (${t.action}) — ${schedType} — next: ${nextRun} — runs: ${t.run_count}`);
+        }
+      }
+      if (paused.length > 0) {
+        lines.push(`\n**Paused/Completed:** ${paused.map(t => t.name).join(", ")}`);
+      }
+      return ok(lines.join("\n"));
+    };
+    sessionToolImpls["cron.status"] = cronStatus;
+    sessionServer.registerTool("cron.status", { description: "Check your scheduled tasks status", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID") }) }, cronStatus);
+
+    const cronList = async (args: any): Promise<ToolResult> => {
+      const resolved = withCallerIdentity(args);
+      const scheduler = await getAgentScheduler();
+      const tasks = await scheduler.getTasksForAgent(resolved.agent_id, args.includeDisabled || false);
+      if (tasks.length === 0) return ok("No scheduled tasks found.");
+      const lines: string[] = [`📋 **Scheduled Tasks** (${tasks.length})\n`];
+      for (const t of tasks) {
+        const status = t.enabled ? (t.status === "active" ? "🟢" : "🟡") : "🔴";
+        const nextRun = t.next_run > 0 ? new Date(t.next_run).toLocaleString() : "—";
+        lines.push(`${status} **${t.name}** — ${t.action} — next: ${nextRun} — runs: ${t.run_count}, fails: ${t.fail_count}`);
+        lines.push(`   ID: \`${t.id}\``);
+      }
+      return ok(lines.join("\n"));
+    };
+    sessionToolImpls["cron.list"] = cronList;
+    sessionServer.registerTool("cron.list", { description: "List your scheduled tasks", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), includeDisabled: z.boolean().optional() }) }, cronList);
+
+    const cronCreate = async (args: any): Promise<ToolResult> => {
+      const resolved = withCallerIdentity(args);
+      const scheduler = await getAgentScheduler();
+      const task = await scheduler.createTask({
+        agent_id: resolved.agent_id,
+        name: resolved.name,
+        description: resolved.description,
+        schedule_type: resolved.schedule_type,
+        cron_expression: resolved.cron_expression,
+        interval_seconds: resolved.interval_seconds,
+        trigger_time: resolved.trigger_time,
+        event_name: resolved.event_name,
+        action: resolved.action,
+        action_params: resolved.action_params || {},
+      });
+      const nextRun = task.next_run > 0 ? new Date(task.next_run).toLocaleString() : "event-driven";
+      return ok(`✅ **Task Created: ${task.name}**\n\nID: \`${task.id}\`\nAction: ${task.action}\nSchedule: ${task.schedule_type} — next: ${nextRun}\nDescription: ${task.description}`);
+    };
+    sessionToolImpls["cron.create"] = cronCreate;
+    sessionServer.registerTool("cron.create", {
+      description: "Create a scheduled task (cron, interval, once, or event-triggered)",
+      inputSchema: z.object({
+        agent_id: z.string().describe("Your agent ID"),
+        name: z.string().describe("Task name"),
+        description: z.string().describe("Task description"),
+        schedule_type: z.enum(["interval", "cron", "once", "on_event"]),
+        cron_expression: z.string().optional().describe("Cron expression (for schedule_type='cron')"),
+        interval_seconds: z.number().optional().describe("Interval in seconds (for schedule_type='interval')"),
+        trigger_time: z.number().optional().describe("Unix timestamp ms (for schedule_type='once')"),
+        event_name: z.string().optional().describe("Event name (for schedule_type='on_event')"),
+        action: z.enum(["query_database", "check_kanban", "send_report", "call_agent", "custom_prompt", "telegram_notify"]),
+        action_params: z.record(z.unknown()).optional().describe("Action-specific parameters"),
+      }),
+    }, cronCreate);
+
+    const cronPause = async (args: any): Promise<ToolResult> => {
+      const resolved = withCallerIdentity(args);
+      const scheduler = await getAgentScheduler();
+      const result = await scheduler.pauseTask(resolved.task_id);
+      return result ? ok(`⏸ Task paused: ${resolved.task_id}`) : ok("Task not found");
+    };
+    sessionToolImpls["cron.pause"] = cronPause;
+    sessionServer.registerTool("cron.pause", { description: "Pause a scheduled task", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string() }) }, cronPause);
+
+    const cronResume = async (args: any): Promise<ToolResult> => {
+      const resolved = withCallerIdentity(args);
+      const scheduler = await getAgentScheduler();
+      const result = await scheduler.resumeTask(resolved.task_id);
+      return result ? ok(`▶️ Task resumed: ${resolved.task_id}`) : ok("Task not found");
+    };
+    sessionToolImpls["cron.resume"] = cronResume;
+    sessionServer.registerTool("cron.resume", { description: "Resume a paused task", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string() }) }, cronResume);
+
+    const cronDelete = async (args: any): Promise<ToolResult> => {
+      const resolved = withCallerIdentity(args);
+      const scheduler = await getAgentScheduler();
+      const result = await scheduler.deleteTask(resolved.task_id);
+      return result ? ok(`🗑 Task deleted: ${resolved.task_id}`) : ok("Task not found");
+    };
+    sessionToolImpls["cron.delete"] = cronDelete;
+    sessionServer.registerTool("cron.delete", { description: "Delete a scheduled task permanently", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), task_id: z.string() }) }, cronDelete);
+
+    const cronRun = async (args: any): Promise<ToolResult> => {
+      const scheduler = await getAgentScheduler();
+      const count = await scheduler.triggerTask(args.event_name);
+      return ok(count > 0 ? `⚡ Event '${args.event_name}' triggered ${count} task(s)` : `No tasks listening for event '${args.event_name}'`);
+    };
+    sessionToolImpls["cron.run"] = cronRun;
+    sessionServer.registerTool("cron.run", { description: "Trigger event-based tasks immediately", inputSchema: z.object({ event_name: z.string() }) }, cronRun);
 
     return { server: sessionServer, toolImpls: sessionToolImpls };
   }

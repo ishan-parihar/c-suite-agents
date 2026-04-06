@@ -59,6 +59,14 @@
         "NOTION_API_KEY": "your-notion-api-key"
       },
       "enabled": true
+    },
+    "gog-cli-mcp": {
+      "type": "local",
+      "command": ["node", "/path/to/gog-cli-mcp/dist/index.js"],
+      "env": {
+        "GOG_MCP_CONFIG": "/path/to/gog-cli-mcp/config.json"
+      },
+      "enabled": true
     }
   },
 

@@ -10,9 +10,27 @@ const TABLES: Record<MemoryScope, string> = {
   company: "memory_company",
 };
 
+const STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "shall", "can", "need", "dare", "ought",
+  "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+  "as", "into", "through", "during", "before", "after", "above", "below",
+  "between", "out", "off", "over", "under", "again", "further", "then",
+  "once", "here", "there", "when", "where", "why", "how", "all", "each",
+  "both", "few", "more", "most", "other", "some", "such", "no", "nor",
+  "not", "only", "own", "same", "so", "than", "too", "very", "just",
+  "because", "but", "and", "or", "if", "while", "about", "it", "its",
+  "this", "that", "these", "those", "i", "me", "my", "myself", "we",
+  "our", "ours", "you", "your", "he", "him", "his", "she", "her",
+  "they", "them", "their", "what", "which", "who", "whom",
+]);
+
 export class MemoryStore {
   private db!: Connection;
   private tables: Map<MemoryScope, Table> = new Map();
+  private keywordIndex: Map<MemoryScope, Map<string, Set<string>>> = new Map();
+  private indexBuilt: Map<MemoryScope, boolean> = new Map();
 
   static async init(dir: string): Promise<MemoryStore> {
     const store = new MemoryStore();
@@ -85,6 +103,97 @@ export class MemoryStore {
     }]);
 
     logger.debug({ id: entry.id, scope, agent_id: entry.agent_id }, "Memory inserted");
+    this.updateKeywordIndex(scope, entry);
+  }
+
+  private extractWords(text: string): Set<string> {
+    const words = new Set<string>();
+    const tokens = text.toLowerCase().split(/[\s,_\-./\\|:;!?()[\]{}"'`~@#$%^&*+=<>]+/);
+    for (const t of tokens) {
+      if (t.length >= 2 && !STOP_WORDS.has(t)) {
+        words.add(t);
+      }
+    }
+    return words;
+  }
+
+  private updateKeywordIndex(scope: MemoryScope, entry: MemoryEntry) {
+    let index = this.keywordIndex.get(scope);
+    if (!index) {
+      index = new Map();
+      this.keywordIndex.set(scope, index);
+    }
+    const words = new Set<string>();
+    this.extractWords(entry.content).forEach(w => words.add(w));
+    for (const tag of entry.tags) {
+      this.extractWords(tag).forEach(w => words.add(w));
+    }
+    this.extractWords(entry.type).forEach(w => words.add(w));
+    index.set(entry.id, words);
+    this.indexBuilt.set(scope, true);
+  }
+
+  async buildIndexFromStore(scope: MemoryScope) {
+    const entries = await this.getAll(scope);
+    const index = new Map<string, Set<string>>();
+    for (const entry of entries) {
+      const words = new Set<string>();
+      this.extractWords(entry.content).forEach(w => words.add(w));
+      for (const tag of entry.tags) {
+        this.extractWords(tag).forEach(w => words.add(w));
+      }
+      this.extractWords(entry.type).forEach(w => words.add(w));
+      index.set(entry.id, words);
+    }
+    this.keywordIndex.set(scope, index);
+    this.indexBuilt.set(scope, true);
+    logger.debug({ scope, entries: entries.length }, "Keyword index built");
+  }
+
+  async searchKeyword(scope: MemoryScope, query: string, _agentId?: string): Promise<MemoryEntry[]> {
+    if (!this.indexBuilt.get(scope)) {
+      await this.buildIndexFromStore(scope);
+    }
+
+    const queryWords = this.extractWords(query);
+    if (queryWords.size === 0) return [];
+
+    const index = this.keywordIndex.get(scope);
+    if (!index) return [];
+
+    const allEntries = await this.getAll(scope);
+    const filtered = _agentId ? allEntries.filter(e => e.agent_id === _agentId) : allEntries;
+
+    const results: Array<{ entry: MemoryEntry; matchCount: number }> = [];
+
+    for (const entry of filtered) {
+      const entryWords = index.get(entry.id);
+      if (!entryWords) continue;
+
+      let matchCount = 0;
+      for (const qw of queryWords) {
+        if (entryWords.has(qw)) matchCount++;
+      }
+
+      if (matchCount > 0) {
+        results.push({ entry, matchCount });
+      } else {
+        const lowerContent = entry.content.toLowerCase();
+        const lowerTags = entry.tags.map(t => t.toLowerCase()).join(" ");
+        const lowerType = entry.type.toLowerCase();
+        const fullText = `${lowerContent} ${lowerTags} ${lowerType}`;
+        for (const qw of queryWords) {
+          if (fullText.includes(qw)) {
+            matchCount++;
+            results.push({ entry, matchCount });
+            break;
+          }
+        }
+      }
+    }
+
+    results.sort((a, b) => b.matchCount - a.matchCount);
+    return results.map(r => r.entry);
   }
 
   async search(scope: MemoryScope, vector: number[], query: MemoryQuery): Promise<MemoryEntry[]> {

@@ -156,10 +156,8 @@ export interface RecoveryEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Stub recovery step implementations
+// Recovery step implementations
 // ---------------------------------------------------------------------------
-// These are placeholder implementations. Wire each to real subsystem logic
-// (e.g., reconnecting to LanceDB, restarting an agent, switching LLM models).
 
 async function stubReconnectSubsystem(
   ctx: RecoveryContext,
@@ -215,12 +213,32 @@ async function stubDrainAndReplayQueue(
   };
 }
 
-async function stubAlertOperator(
+async function reconnectTelegram(
+  _ctx: RecoveryContext,
+): Promise<RecoveryStepResult> {
+  try {
+    const { sendTelegramMessage } = await import("../integrations/telegram.js");
+    const ok = await sendTelegramMessage("🔧 **System check** — connectivity test.", "info");
+    if (ok) {
+      return { success: true, message: "Telegram reconnection successful — test message delivered" };
+    }
+    return { success: false, message: "Telegram reconnection failed — test message not delivered" };
+  } catch (err: any) {
+    return { success: false, message: `Telegram reconnection failed: ${err.message}`, error: err };
+  }
+}
+
+async function alertOperatorViaLog(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
+  const { logger } = await import("../logger.js");
+  logger.error(
+    { scenario: ctx.scenario, agentId: ctx.agentId, error: ctx.error },
+    "recovery:operator_alert — recovery exhausted, alerting via log",
+  );
   return {
-    success: false,
-    message: `[STUB] AlertOperator for ${ctx.scenario} — implement Telegram alert`,
+    success: true,
+    message: `Operator alert logged for ${ctx.scenario}`,
   };
 }
 
@@ -451,11 +469,11 @@ export class RecoveryRegistry {
       },
       {
         scenario: FailureScenario.TelegramNotificationFailure,
-        steps: [stubReconnectSubsystem, stubAlertOperator],
-        maxAttempts: 1,
+        steps: [reconnectTelegram, alertOperatorViaLog],
+        maxAttempts: 2,
         escalationPolicy: "LogAndContinue",
         description:
-          "Telegram notification failed — reconnect bot and alert via fallback.",
+          "Telegram notification failed — attempt reconnection via test message, then log alert.",
       },
     ];
 

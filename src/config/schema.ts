@@ -122,9 +122,29 @@ export const StrategosConfigSchema = z.object({
     heartbeatInterval: z.string().optional(),
     directToUser: z.boolean().default(true),
     toolScoping: z.record(z.string(), z.object({
+      nativeTools: z.array(z.string()).optional(),
       mcpServers: z.array(z.string()),
+      mcpServerTools: z.record(z.string(), z.array(z.string())).optional(),
     }).strict()).optional(),
+    // ── Heartbeat configuration (role-based, per-agent) ──────────────
+    heartbeat: z.object({
+      mode: z.enum(["selective", "all"]).default("selective"),
+      defaultAgent: z.string().default("ceo-strategic"),
+      agents: z.record(z.string(), z.object({
+        enabled: z.boolean().default(false),
+        intervalMs: z.number().int().positive().optional(),
+      }).strict()).optional().default({}),
+    }).strict().optional(),
   }).strict().optional(),
+
+  // ── Board Meeting ──────────────────────────────────────────────────
+  boardMeeting: z.object({
+    enabled: z.boolean().default(true),
+    cronExpression: z.string().default("30 11 * * *"),  // 5 PM IST
+    maxTurns: z.number().int().min(2).max(15).default(12),
+    perTurnTimeoutMs: z.number().int().default(90000),
+    totalMeetingTimeoutMs: z.number().int().default(900000),  // 15 minutes
+  }).optional(),
 
   // ── File paths ───────────────────────────────────────────────────────
   paths: z.object({
