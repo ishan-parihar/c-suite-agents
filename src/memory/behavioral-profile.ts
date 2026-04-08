@@ -56,7 +56,7 @@ export async function getBehavioralProfile(agentId: string): Promise<BehavioralP
       if (profile.agentId === agentId) return profile;
     }
   } catch { /* corrupt entry, use default */ }
-  return { ...DEFAULT_PROFILE, agentId };
+  return { ...DEFAULT_PROFILE, agentId, corrections: [] };
 }
 
 export async function recordInteractionOutcome(outcome: InteractionOutcome): Promise<void> {
@@ -123,7 +123,7 @@ export async function formatBehavioralPrompt(profile: BehavioralProfile): Promis
     lines.push("- Your user appreciates **thorough explanations**. Provide context.");
   }
 
-  const topCorrections = profile.corrections
+  const topCorrections = [...profile.corrections]
     .sort((a, b) => b.count - a.count)
     .slice(0, 3);
   if (topCorrections.length > 0) {

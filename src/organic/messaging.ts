@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { getEmbeddingService } from "../memory/embeddings.js";
 import { validateAgentIdentity } from "../auth/session.js";
 import { EventEmitter } from "node:events";
+import { ErrorBus } from "../runtime/error-emitter.js";
 
 export type MessagePriority = "P1" | "P2" | "P3" | "P4";
 
@@ -64,6 +65,7 @@ const MAX_MESSAGE_LENGTH = 10000;
 export class MessagingSystem extends EventEmitter {
   private db: any;
   private dbPath: string;
+  private persistLock = Promise.resolve();
 
   private constructor(dbPath: string) {
     super();
@@ -156,25 +158,45 @@ export class MessagingSystem extends EventEmitter {
     if (!this.db) return;
     const data = this.db.export();
     const tmpPath = `${this.dbPath}.tmp`;
-    await fs.writeFile(tmpPath, Buffer.from(data));
-    await fs.rename(tmpPath, this.dbPath);
+    const currentLock = this.persistLock;
+    this.persistLock = currentLock.then(async () => {
+      await fs.writeFile(tmpPath, Buffer.from(data));
+      await fs.rename(tmpPath, this.dbPath);
+    }).catch(async (err) => {
+      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+      throw err;
+    }).finally(() => {
+      this.persistLock = Promise.resolve();
+    });
+    await this.persistLock;
+  }
+
+  private sanitizeParams(params?: unknown[]): unknown[] {
+    if (!params) return [];
+    return params.map(p => p === undefined ? null : p);
   }
 
   private queryAllArrays(sql: string, params?: unknown[]): unknown[][] {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const results: unknown[][] = [];
-    while (stmt.step()) results.push(stmt.get() as unknown[]);
-    stmt.free();
-    return results;
+    try {
+      if (params) stmt.bind(this.sanitizeParams(params));
+      const results: unknown[][] = [];
+      while (stmt.step()) results.push(stmt.get() as unknown[]);
+      return results;
+    } finally {
+      stmt.free();
+    }
   }
 
   private queryOneRow(sql: string, params?: unknown[]): any {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const result = stmt.step() ? stmt.get() : null;
-    stmt.free();
-    return result;
+    try {
+      if (params) stmt.bind(this.sanitizeParams(params));
+      const result = stmt.step() ? stmt.get() : null;
+      return result;
+    } finally {
+      stmt.free();
+    }
   }
 
   async close(): Promise<void> {
@@ -229,6 +251,15 @@ export class MessagingSystem extends EventEmitter {
       this.db.run("COMMIT");
     } catch (err) {
       this.db.run("ROLLBACK");
+      ErrorBus.emit({
+        type: "message:failed",
+        severity: "error",
+        component: "messaging",
+        error: err instanceof Error ? err : new Error(String(err)),
+        message: `Message send failed: ${err instanceof Error ? err.message : String(err)}`,
+        agentId: from,
+        context: { to, thread_id, operation: "send" },
+      });
       throw err;
     }
 
@@ -277,6 +308,15 @@ export class MessagingSystem extends EventEmitter {
       this.db.run("COMMIT");
     } catch (err) {
       this.db.run("ROLLBACK");
+      ErrorBus.emit({
+        type: "message:failed",
+        severity: "error",
+        component: "messaging",
+        error: err instanceof Error ? err : new Error(String(err)),
+        message: `Message reply failed: ${err instanceof Error ? err.message : String(err)}`,
+        agentId: from,
+        context: { thread_id, operation: "reply" },
+      });
       throw err;
     }
 

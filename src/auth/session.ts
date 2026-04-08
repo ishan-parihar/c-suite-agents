@@ -104,14 +104,23 @@ export class SessionManager {
 }
 
 let sessionManager: SessionManager | null = null;
+let sessionCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
 export function getSessionManager(): SessionManager {
   if (!sessionManager) {
     sessionManager = new SessionManager();
-    // Cleanup expired sessions every hour
-    setInterval(() => sessionManager?.cleanupExpired(), 60 * 60 * 1000);
+    sessionCleanupTimer = setInterval(() => sessionManager?.cleanupExpired(), 60 * 60 * 1000);
+    if (sessionCleanupTimer && typeof sessionCleanupTimer.unref === "function") sessionCleanupTimer.unref();
   }
   return sessionManager;
+}
+
+export function stopSessionManager(): void {
+  if (sessionCleanupTimer) {
+    clearInterval(sessionCleanupTimer);
+    sessionCleanupTimer = null;
+  }
+  sessionManager = null;
 }
 
 export async function validateAgentIdentity(agentId: string): Promise<void> {

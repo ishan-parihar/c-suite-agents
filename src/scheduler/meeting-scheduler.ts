@@ -35,6 +35,7 @@ export class MeetingScheduler {
       }
 
       this.meetingTimer = setTimeout(loop, this.intervalMs);
+      if (this.meetingTimer && typeof this.meetingTimer.unref === "function") this.meetingTimer.unref();
     };
 
     loop();

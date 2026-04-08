@@ -24,6 +24,8 @@ import { loadConfig } from "../config/loader.js";
 import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent } from "./provider.js";
 import { SkillRegistry, type Skill } from "./skill-registry.js";
 import { getAgentWorkspace } from "../agents/workspace-manager.js";
+import { detectToolCallLoop, recordToolCall, recordToolCallOutcome, DEFAULT_LOOP_DETECTION_CONFIG, type ToolLoopDetectionConfig, type ToolCallRecord } from "./tool-loop-detection.js";
+import { truncateToolResult } from "./tool-result-truncation.js";
 
 // SessionRegistry-compatible interface for persistence wiring
 export interface SessionPersistence {
@@ -91,9 +93,11 @@ export class NativeAgentRuntime {
   private failoverState: FailoverState | null = null;
   private contextWindowInfo: ContextWindowInfo;
   private skillRegistries = new Map<string, SkillRegistry>();
+  private loopDetectionConfig: ToolLoopDetectionConfig;
 
   constructor(config?: Partial<NativeAgentRuntimeConfig>) {
     this.config = { ...DEFAULT_RUNTIME_CONFIG, ...config };
+    this.loopDetectionConfig = (this.config.llm as unknown as Record<string, unknown>).loopDetection as ToolLoopDetectionConfig | undefined ?? DEFAULT_LOOP_DETECTION_CONFIG;
 
     this.contextWindowInfo = resolveContextWindowInfo(
       this.config.llm.model,
@@ -354,6 +358,7 @@ export class NativeAgentRuntime {
     let firstRoundInputTokens = 0;
     let totalOutputTokens = 0;
     let totalReasoningTokens = 0;
+    let toolCallHistory: ToolCallRecord[] = [];
 
     for (let round = 0; round < (this.config.llm.maxToolRounds || 10); round++) {
       const messages = this.contextManager.getMessagesForLLM(sessionId);
@@ -402,10 +407,53 @@ export class NativeAgentRuntime {
           }
 
           logger.info({ tool: tc.function.name, round, agentId: session.agentId }, "Tool call");
-          const result = await this.toolExecutor(tc.function.name, args);
 
+          // Ensure agent_id is injected before tool execution
           if (!(args as Record<string, unknown>)["agent_id"]) {
             (args as Record<string, unknown>)["agent_id"] = session.agentId;
+          }
+
+          // Record tool call for loop detection
+          toolCallHistory = recordToolCall(toolCallHistory, tc.function.name, args, tc.id);
+
+          // Check for tool call loops before execution
+          const loopCheck = detectToolCallLoop(toolCallHistory, tc.function.name, args, this.loopDetectionConfig);
+          if (loopCheck.stuck && loopCheck.level === "critical") {
+            logger.error(
+              { tool: tc.function.name, round, agentId: session.agentId, message: loopCheck.message },
+              "Tool call loop detected — blocking execution",
+            );
+            toolResults.push({
+              id: tc.id,
+              name: tc.function.name,
+              args: argsStr,
+              result: `BLOCKED: ${loopCheck.message}`,
+            });
+            toolCallsExecuted++;
+            toolCallHistory = recordToolCallOutcome(toolCallHistory, tc.function.name, args, `BLOCKED: ${loopCheck.message}`, undefined, tc.id);
+            continue;
+          }
+
+          const result = await this.toolExecutor(tc.function.name, args);
+
+          // Record outcome for loop detection
+          toolCallHistory = recordToolCallOutcome(
+            toolCallHistory,
+            tc.function.name,
+            args,
+            result.success ? result.content : result.error ?? "Unknown error",
+            undefined,
+            tc.id,
+          );
+
+          // Inject warning for non-critical loops
+          if (loopCheck.stuck && loopCheck.level === "warning") {
+            const warningText = `⚠️ Loop Warning: ${loopCheck.message} Please stop repeating the same tool calls and try a different approach.`;
+            logger.warn(
+              { tool: tc.function.name, round, agentId: session.agentId, message: loopCheck.message },
+              "Tool call loop warning — injecting message to agent",
+            );
+            this.contextManager.addUserMessage(sessionId, warningText);
           }
 
           toolResults.push({
@@ -419,11 +467,15 @@ export class NativeAgentRuntime {
         }
 
         for (const tr of toolResults) {
+          const { content: truncatedResult, truncated, originalLength } = truncateToolResult(tr.result);
+          if (truncated) {
+            logger.warn({ tool: tr.name, originalLength, truncatedLength: truncatedResult.length }, "Tool result truncated for context safety");
+          }
           this.contextManager.recordToolCall(sessionId, {
             id: tr.id,
             name: tr.name,
             arguments: tr.args,
-            result: tr.result,
+            result: truncatedResult,
             timestamp: Date.now(),
           });
         }
@@ -461,7 +513,7 @@ export class NativeAgentRuntime {
         .join("\n");
 
       if (!finalText) {
-        finalText = `Checked domain — ${toolCallsExecuted} tool calls executed. Review Kanban and memory for details.`;
+        finalText = `The agent completed ${toolCallsExecuted} tool operations but could not generate a summary. This may indicate context overflow or a complex multi-step task. Check the Kanban board for task status and review the agent's memory for detailed findings.`;
         logger.warn(
           { sessionId, agentId: session.agentId, toolCallsExecuted },
           "Summary round also returned empty — using fallback text",
@@ -999,6 +1051,7 @@ export class NativeAgentRuntime {
 
     const maxRounds = this.config.llm.maxToolRounds || 10;
     let round = 0;
+    let toolCallHistory: ToolCallRecord[] = [];
 
     while (round < maxRounds) {
       round++;
@@ -1115,8 +1168,45 @@ export class NativeAgentRuntime {
           args["agent_id"] = session.agentId;
         }
 
+        toolCallHistory = recordToolCall(toolCallHistory, callInfo.name, args, callId);
+
+        const loopCheck = detectToolCallLoop(toolCallHistory, callInfo.name, args, this.loopDetectionConfig);
+        if (loopCheck.stuck && loopCheck.level === "critical") {
+          logger.error(
+            { tool: callInfo.name, round, agentId: session.agentId, message: loopCheck.message },
+            "Tool call loop detected in stream — blocking execution",
+          );
+          const blockedResult = `BLOCKED: ${loopCheck.message}`;
+          toolResults.push({
+            id: callId,
+            name: callInfo.name,
+            args: argsStr,
+            result: blockedResult,
+          });
+          toolCallHistory = recordToolCallOutcome(toolCallHistory, callInfo.name, args, blockedResult, undefined, callId);
+          continue;
+        }
+
         try {
           const result = await this.toolExecutor(callInfo.name, args);
+          toolCallHistory = recordToolCallOutcome(
+            toolCallHistory,
+            callInfo.name,
+            args,
+            result.success ? result.content : result.error ?? "Unknown error",
+            undefined,
+            callId,
+          );
+
+          if (loopCheck.stuck && loopCheck.level === "warning") {
+            const warningText = `⚠️ Loop Warning: ${loopCheck.message} Please stop repeating the same tool calls and try a different approach.`;
+            logger.warn(
+              { tool: callInfo.name, round, agentId: session.agentId, message: loopCheck.message },
+              "Tool call loop warning in stream — injecting message to agent",
+            );
+            this.contextManager.addUserMessage(sessionId, warningText);
+          }
+
           toolResults.push({
             id: callId,
             name: callInfo.name,
@@ -1126,6 +1216,14 @@ export class NativeAgentRuntime {
         } catch (execErr: unknown) {
           const errMsg = execErr instanceof Error ? execErr.message : String(execErr);
           logger.error({ tool: callInfo.name, round, error: errMsg }, "Tool execution failed in stream");
+          toolCallHistory = recordToolCallOutcome(
+            toolCallHistory,
+            callInfo.name,
+            args,
+            `Error: Tool execution failed: ${errMsg}`,
+            undefined,
+            callId,
+          );
           toolResults.push({
             id: callId,
             name: callInfo.name,

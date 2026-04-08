@@ -120,29 +120,38 @@ export class Kanban {
   /** sql.js has no .all() — iterate with .step() to collect all rows. */
   private queryAll(sql: string, params?: unknown[]): unknown[][] {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const results: unknown[][] = [];
-    while (stmt.step()) results.push(stmt.get() as unknown[]);
-    stmt.free();
-    return results;
+    try {
+      if (params) stmt.bind(params);
+      const results: unknown[][] = [];
+      while (stmt.step()) results.push(stmt.get() as unknown[]);
+      return results;
+    } finally {
+      stmt.free();
+    }
   }
 
   /** sql.js has no .get([params]) — use bind → step → getAsObject. */
   private queryOneObject<T>(sql: string, params?: unknown[]): T | undefined {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const result = stmt.step() ? (stmt.getAsObject() as T) : undefined;
-    stmt.free();
-    return result;
+    try {
+      if (params) stmt.bind(params);
+      const result = stmt.step() ? (stmt.getAsObject() as T) : undefined;
+      return result;
+    } finally {
+      stmt.free();
+    }
   }
 
   /** sql.js has no .get([params]) — returns array-indexed row for mapCardPartial. */
   private queryOneArray(sql: string, params?: unknown[]): unknown[] | undefined {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const result = stmt.step() ? (stmt.get() as unknown[]) : undefined;
-    stmt.free();
-    return result;
+    try {
+      if (params) stmt.bind(params);
+      const result = stmt.step() ? (stmt.get() as unknown[]) : undefined;
+      return result;
+    } finally {
+      stmt.free();
+    }
   }
 
   async ensureBoard(agentId: string, name: string, columns?: string[]) {
@@ -172,9 +181,13 @@ export class Kanban {
     const board = this.queryOneObject<{ id: string }>("SELECT id FROM boards WHERE agent_id=?", [agentId]);
     if (!board) throw new Error("Board not found");
     const boardId = board.id;
-    const column = this.queryOneObject<{ id: string }>("SELECT id FROM columns WHERE board_id=? AND name=?", [boardId, "Backlog"]);
+    // Try Backlog first, then fall back to the first column by ordinal
+    let column = this.queryOneObject<{ id: string }>("SELECT id FROM columns WHERE board_id=? AND name=?", [boardId, "Backlog"]);
+    if (!column?.id) {
+      column = this.queryOneObject<{ id: string }>("SELECT id FROM columns WHERE board_id=? ORDER BY ord LIMIT 1", [boardId]);
+    }
     const columnId = column?.id;
-    if (!columnId) throw new Error("Backlog column not found");
+    if (!columnId) throw new Error("No columns found on board");
     const id = uuidv4();
     const now = new Date().toISOString();
 

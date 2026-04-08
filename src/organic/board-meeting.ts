@@ -309,34 +309,45 @@ export class BoardMeetingEngine {
     if (!this.db) return;
     const data = this.db.export();
     const tmpPath = `${this.dbPath}.tmp`;
-    await fs.writeFile(tmpPath, Buffer.from(data));
-    await fs.rename(tmpPath, this.dbPath);
+    try {
+      await fs.writeFile(tmpPath, Buffer.from(data));
+      await fs.rename(tmpPath, this.dbPath);
+    } catch (err) {
+      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+      throw err;
+    }
   }
 
   private queryOneRow(sql: string, params?: unknown[]): Record<string, unknown> | null {
     const stmt = this.db.prepare(sql);
-    if (params && params.length > 0) {
-      const safe = params.map(p => p === undefined ? null : p);
-      stmt.bind(safe);
+    try {
+      if (params && params.length > 0) {
+        const safe = params.map(p => p === undefined ? null : p);
+        stmt.bind(safe);
+      }
+      const result = stmt.step() ? (stmt.get() as Record<string, unknown>) : null;
+      return result;
+    } finally {
+      stmt.free();
     }
-    const result = stmt.step() ? (stmt.get() as Record<string, unknown>) : null;
-    stmt.free();
-    return result;
   }
 
   private queryAllArrays(sql: string, params?: unknown[]): unknown[][] {
     const stmt = this.db.prepare(sql);
-    if (params && params.length > 0) {
-      const safe = params.map(p => p === undefined ? null : p);
-      stmt.bind(safe);
+    try {
+      if (params && params.length > 0) {
+        const safe = params.map(p => p === undefined ? null : p);
+        stmt.bind(safe);
+      }
+      const results: unknown[][] = [];
+      while (stmt.step()) {
+        const row = stmt.get() as Record<string, unknown>;
+        results.push(Object.values(row));
+      }
+      return results;
+    } finally {
+      stmt.free();
     }
-    const results: unknown[][] = [];
-    while (stmt.step()) {
-      const row = stmt.get() as Record<string, unknown>;
-      results.push(Object.values(row));
-    }
-    stmt.free();
-    return results;
   }
 
   private async archiveOldMeetings(): Promise<void> {
@@ -352,12 +363,12 @@ export class BoardMeetingEngine {
     }
   }
 
-  compact(): void {
+  async compact(): Promise<void> {
     try {
       const data = this.db.export();
-      const SQL = require("sql.js");
-      this.db = new SQL.Database(data);
-      this.persist();
+      const SQL = await initSqlJs({ locateFile: (f: string) => `node_modules/sql.js/dist/${f}` });
+      this.db = new SQL.Database(new Uint8Array(data));
+      await this.persist();
       logger.info("Board meeting database compacted");
     } catch (err: any) {
       logger.error({ err: err.message }, "Failed to compact board meeting database");
@@ -605,7 +616,7 @@ export class BoardMeetingEngine {
     );
     await this.persist();
 
-    this.compact();
+    await this.compact();
 
     this.activeMeeting = this.loadMeeting(meetingId);
 

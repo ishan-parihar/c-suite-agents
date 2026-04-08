@@ -38,7 +38,7 @@ interface McpRemoteConfig {
 type McpServerConfig = McpLocalConfig | McpRemoteConfig;
 
 const CONNECTION_TIMEOUT_MS = 10_000;
-const TOOL_CALL_TIMEOUT_MS = 30_000;
+const TOOL_CALL_TIMEOUT_MS = 120_000;
 const SLOW_START_TIMEOUT_MS = 30_000;
 const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000;
 const INITIAL_RECONNECT_DELAY_MS = 2000;
@@ -146,7 +146,7 @@ async function connectLocal(
       reconnectTimer = setTimeout(async () => {
         if (disposed) return;
         try {
-          const newConn = await connectLocal(config, serverName, onReconnect, 0);
+          const newConn = await connectLocal(config, serverName, onReconnect, reconnectAttempt + 1);
           if (newConn) {
             logger.info({ server: serverName }, "MCP server reconnected");
             ErrorBus.emit({
@@ -272,7 +272,7 @@ async function connectRemote(
         reconnectTimer = setTimeout(async () => {
           if (disposed) return;
           try {
-            const newConn = await connectRemote(config, serverName, onReconnect, 0);
+            const newConn = await connectRemote(config, serverName, onReconnect, reconnectAttempt + 1);
             if (newConn) {
               logger.info({ server: serverName }, "Remote MCP server reconnected");
               ErrorBus.emit({

@@ -1,7 +1,8 @@
 import readline from "node:readline";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, writeFileSync, existsSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, chmodSync, renameSync } from "node:fs";
+import * as crypto from "node:crypto";
 import { StrategosConfigSchema } from "../config/schema.js";
 import { loadConfig } from "../config/loader.js";
 import {
@@ -828,7 +829,9 @@ async function writeConfigWithMetadata(rawConfig: Record<string, unknown>): Prom
 
   // Write config
   const json = JSON.stringify(rawConfig, null, 2);
-  writeFileSync(CONFIG_FILE, json, "utf-8");
+  const tmpConfigPath = `${CONFIG_FILE}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+  writeFileSync(tmpConfigPath, json, "utf-8");
+  renameSync(tmpConfigPath, CONFIG_FILE);
   chmodSync(CONFIG_FILE, 0o600);
   console.log(`\n${success(`Config written to: ${CONFIG_FILE}`)}`);
 }

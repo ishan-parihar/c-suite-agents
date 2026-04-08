@@ -284,6 +284,7 @@ export class MemoryStore {
       if (row._rowid !== undefined) {
         await table.delete(`_rowid = ${row._rowid}`);
       }
+      this.keywordIndex.get(scope)?.delete(row.id);
     }
     return toDelete.length;
   }
@@ -299,6 +300,7 @@ export class MemoryStore {
       if (row._rowid !== undefined) {
         await table.delete(`_rowid = ${row._rowid}`);
       }
+      this.keywordIndex.get(scope)?.delete(row.id);
     }
     return toDelete.length;
   }
@@ -316,6 +318,7 @@ export class MemoryStore {
         if (row._rowid !== undefined) {
           await table.delete(`_rowid = ${row._rowid}`);
         }
+        this.keywordIndex.get(scope)?.delete(row.id);
         deleted++;
       }
     }
@@ -343,6 +346,7 @@ export class MemoryStore {
         if (row._rowid !== undefined) {
           await table.delete(`_rowid = ${row._rowid}`);
         }
+        this.keywordIndex.get(scope)?.delete(row.id);
         updated++;
       } else if (Math.abs(decayed - (row.importance || 0)) > 0.005) {
         if (row._rowid !== undefined) {
@@ -406,5 +410,6 @@ export class MemoryStore {
 
   close() {
     this.tables.clear();
+    this.db.close();
   }
 }

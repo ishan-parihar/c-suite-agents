@@ -1,4 +1,5 @@
-import { writeFileSync, chmodSync } from "node:fs";
+import { writeFileSync, chmodSync, renameSync } from "node:fs";
+import * as crypto from "node:crypto";
 import { CONFIGURE_SECTIONS, type WizardSection, promptSection } from "./configure.shared.js";
 import { SECTION_HANDLERS } from "./configure.sections.js";
 import { readConfigSnapshot, summarizeConfig } from "./config-snapshot.js";
@@ -39,7 +40,9 @@ function persistConfig(config: Record<string, unknown>, configPath: string): boo
   }
 
   const json = JSON.stringify(config, null, 2);
-  writeFileSync(configPath, json, "utf-8");
+  const tmpConfigPath = `${configPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+  writeFileSync(tmpConfigPath, json, "utf-8");
+  renameSync(tmpConfigPath, configPath);
   chmodSync(configPath, 0o600);
   return true;
 }

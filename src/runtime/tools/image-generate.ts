@@ -2,6 +2,7 @@
 // Standalone implementation — no cross-dependencies with other tools
 
 import { promises as fs } from "node:fs";
+import { writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import OpenAI from "openai";
@@ -110,7 +111,14 @@ export function createImageGenerateTool(): AnyAgentTool | null {
           const filename = `generated_${timestamp}_${i}.png`;
           const filepath = join(mediaDir, filename);
 
-          await fs.writeFile(filepath, Buffer.from(img.b64_json, "base64"));
+          const tmpPath = `${filepath}.tmp`;
+          try {
+            writeFileSync(tmpPath, Buffer.from(img.b64_json, "base64"));
+            renameSync(tmpPath, filepath);
+          } catch (writeErr) {
+            try { unlinkSync(tmpPath); } catch { }
+            throw writeErr;
+          }
           savedPaths.push(filepath);
           logger.info({ filepath, size }, "image.generate saved");
         }

@@ -54,11 +54,14 @@ export class MeetingGovernance {
 
   private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const results: Record<string, unknown>[] = [];
-    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
-    stmt.free();
-    return results;
+    try {
+      if (params) stmt.bind(params);
+      const results: Record<string, unknown>[] = [];
+      while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+      return results;
+    } finally {
+      stmt.free();
+    }
   }
 
   private async initDB() {
@@ -109,21 +112,24 @@ export class MeetingGovernance {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run([
-      proposal.id,
-      proposal.proposer,
-      proposal.title,
-      proposal.reason,
-      proposal.urgency,
-      proposal.status,
-      JSON.stringify(proposal.votes),
-      proposal.required_votes,
-      proposal.voting_deadline,
-      proposal.scheduled_time || null,
-      JSON.stringify(proposal.attendees || []),
-      proposal.created_at
-    ]);
-    stmt.free();
+    try {
+      stmt.run([
+        proposal.id,
+        proposal.proposer,
+        proposal.title,
+        proposal.reason,
+        proposal.urgency,
+        proposal.status,
+        JSON.stringify(proposal.votes),
+        proposal.required_votes,
+        proposal.voting_deadline,
+        proposal.scheduled_time || null,
+        JSON.stringify(proposal.attendees || []),
+        proposal.created_at
+      ]);
+    } finally {
+      stmt.free();
+    }
   }
 
   private async loadProposals() {
@@ -162,15 +168,18 @@ export class MeetingGovernance {
       VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run([
-      minutes.meeting_id,
-      JSON.stringify(minutes.decisions),
-      JSON.stringify(minutes.action_items),
-      JSON.stringify(minutes.attendees),
-      minutes.recorded_at,
-      minutes.recorded_by
-    ]);
-    stmt.free();
+    try {
+      stmt.run([
+        minutes.meeting_id,
+        JSON.stringify(minutes.decisions),
+        JSON.stringify(minutes.action_items),
+        JSON.stringify(minutes.attendees),
+        minutes.recorded_at,
+        minutes.recorded_by
+      ]);
+    } finally {
+      stmt.free();
+    }
   }
 
   private async loadMinutes() {

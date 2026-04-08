@@ -245,6 +245,7 @@ export class ErrorAggregatorClass {
 
     // Start periodic sweep
     this.sweepTimer = setInterval(() => this.sweep(), this.opts.windowMs);
+    if (this.sweepTimer && typeof this.sweepTimer.unref === "function") this.sweepTimer.unref();
 
     logger.info(
       { windowMs: this.opts.windowMs, alertThreshold: this.opts.alertThreshold },

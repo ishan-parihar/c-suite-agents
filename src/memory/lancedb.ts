@@ -1,4 +1,4 @@
-import { connect, type Table } from "@lancedb/lancedb";
+import { connect, type Connection, type Table } from "@lancedb/lancedb";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
 import { validateAgentIdentity } from "../auth/session.js";
@@ -37,18 +37,23 @@ export type MemoryEvent = {
 export class Memory {
   private keywordIndex: Map<string, Set<string>> = new Map();
   private indexBuilt = false;
+  private conn: Connection;
+  private events?: Table;
 
-  private constructor(private dir: string, private events?: Table) {}
+  private constructor(_dir: string, conn: Connection, events?: Table) {
+    this.conn = conn;
+    this.events = events;
+  }
 
   static async init(dir: string) {
-    const db = await connect(dir);
+    const conn = await connect(dir);
     let events: Table | undefined;
     try {
-      events = await db.openTable("events");
+      events = await conn.openTable("events");
     } catch {
       const embedder = getEmbeddingService();
       const vector = await embedder.embed("init");
-      events = await db.createTable("events", [
+      events = await conn.createTable("events", [
         {
           id: uuidv4(),
           ts: new Date().toISOString(),
@@ -61,7 +66,7 @@ export class Memory {
         },
       ]);
     }
-    return new Memory(dir, events);
+    return new Memory(dir, conn, events);
   }
 
   async ensureAgent(agentId: string) {
@@ -214,6 +219,7 @@ export class Memory {
   }
 
   close() {
+    this.conn.close();
     this.events = null as unknown as Table;
   }
 }

@@ -83,6 +83,16 @@ const EmbeddingSchema = z.object({
   dimensions: z.number().int().positive().default(1024),
 }).strict();
 
+/** Media handling configuration */
+const MediaSchema = z.object({
+  enabled: z.boolean().default(true),
+  downloadDir: z.string().optional(),
+  maxSizeMB: z.number().int().positive().default(100),
+  allowedTypes: z.array(z.string()).default(["image/jpeg", "image/png", "image/webp", "image/gif", "audio/ogg", "audio/mpeg", "audio/wav", "application/pdf", "text/plain", "text/markdown", "video/mp4"]),
+  apexWrapper: z.string().optional(), // path to apex_transcriber.py
+  apexPython: z.string().optional(), // path to whisper-hindi python
+}).strict().optional();
+
 export const StrategosConfigSchema = z.object({
   $schema: z.string().optional(),
 
@@ -126,6 +136,18 @@ export const StrategosConfigSchema = z.object({
       mcpServers: z.array(z.string()),
       mcpServerTools: z.record(z.string(), z.array(z.string())).optional(),
     }).strict()).optional(),
+    loopDetection: z.object({
+      enabled: z.boolean().default(false),
+      historySize: z.number().int().positive().default(30),
+      warningThreshold: z.number().int().positive().default(10),
+      criticalThreshold: z.number().int().positive().default(20),
+      globalCircuitBreakerThreshold: z.number().int().positive().default(30),
+      detectors: z.object({
+        genericRepeat: z.boolean().default(true),
+        knownPollNoProgress: z.boolean().default(true),
+        pingPong: z.boolean().default(true),
+      }).strict().default({}),
+    }).strict().optional(),
     // ── Heartbeat configuration (role-based, per-agent) ──────────────
     heartbeat: z.object({
       mode: z.enum(["selective", "all"]).default("selective"),
@@ -167,6 +189,9 @@ export const StrategosConfigSchema = z.object({
   // ── Embedding model ──────────────────────────────────────────────────
   embedding: EmbeddingSchema.optional(),
 
+  // ── Media handling ───────────────────────────────────────────────────
+  media: MediaSchema.optional(),
+
   // ── Logging ──────────────────────────────────────────────────────────
   logging: z.object({
     level: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
@@ -181,6 +206,50 @@ export const StrategosConfigSchema = z.object({
     lastRunCommand: z.enum(["onboard", "configure", "reset"]).optional().default("onboard"),
     lastRunMode: z.enum(["quickstart", "advanced", "remote"]).optional().default("quickstart"),
   }).strict().optional(),
+
+  // ── CEO (Strategic) agent scheduler ───────────────────────────────
+  ceo: z.object({
+    dailyBriefTime: z.string().default("0 8 * * *"),
+    weeklyReviewTime: z.string().default("0 9 * * 1"),
+    monthlyStrategyTime: z.string().default("0 10 1 * *"),
+    enabled: z.boolean().default(true),
+  }).optional(),
+
+  // ── CPO (Psychologist) agent scheduler ───────────────────────────────
+  cpo: z.object({
+    dailyAnalysisTime: z.string().default("0 21 * * *"),
+    weeklyWellnessTime: z.string().default("0 10 * * 0"),
+    monthlyReviewTime: z.string().default("0 11 1 * *"),
+    burnoutThresholdDays: z.number().int().positive().default(14),
+    crisisEscalationEnabled: z.boolean().default(true),
+    enabled: z.boolean().default(true),
+  }).optional(),
+
+  // ── CRO (Relational) agent scheduler ─────────────────────────────────
+  cro: z.object({
+    dailyNudgeTime: z.string().default("0 9 * * *"),
+    weeklyAuditTime: z.string().default("0 15 * * 5"),
+    weeklyBriefTime: z.string().default("0 10 * * 1"),
+    approvalTimeoutHours: z.number().int().positive().default(24),
+    dormantThresholdDays: z.number().int().positive().default(30),
+    enabled: z.boolean().default(true),
+  }).optional(),
+
+  // ── COO (Productivity) agent scheduler ───────────────────────────────
+  coo: z.object({
+    dailyMorningTime: z.string().default("0 5 * * *"),
+    dailyEveningTime: z.string().default("0 17 * * *"),
+    enabled: z.boolean().default(true),
+  }).optional(),
+
+  // ── CTO (Technical) agent scheduler ─────────────────────────────────
+  cto: z.object({
+    dailyUpgradeReviewTime: z.string().default("0 7 * * *"),  // 12:30 PM IST
+    codeModificationEnabled: z.boolean().default(false),
+    sourceWorkspace: z.string().optional(),  // defaults to process.cwd() if not set
+    autoCommitEnabled: z.boolean().default(true),
+    enabled: z.boolean().default(true),
+  }).optional(),
 
   // Config version metadata (set by stampConfigVersion during migrations)
   _version: z.string().optional(),

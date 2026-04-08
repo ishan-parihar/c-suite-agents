@@ -72,6 +72,13 @@ export function getSearchForAgent(agentId: string, scopedToolNames: string[]): T
   return instances.get(agentId)!;
 }
 
+/**
+ * Remove a ToolSearch instance when an agent is removed.
+ */
+export function removeInstance(agentId: string): void {
+  instances.delete(agentId);
+}
+
 /** @deprecated Use getSearchForAgent() instead. This searches ALL tools, ignoring agent scoping. */
 export function searchTools(query: string, maxResults?: number): ToolSearchResult[] {
   const allTools = getAllToolDefinitions();

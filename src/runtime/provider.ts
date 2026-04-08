@@ -61,12 +61,17 @@ export interface LLMProvider {
 // ── Prompt Cache Tracker ─────────────────────────────────────────────
 
 export class PromptCacheTracker {
+  private static readonly MAX_ENTRIES = 100;
   private cache: Map<string, number> = new Map();
 
   /**
    * Record cache read tokens for a given prompt fingerprint.
    */
   record(promptFingerprint: string, cacheRead: number): void {
+    if (this.cache.size >= PromptCacheTracker.MAX_ENTRIES) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey !== undefined) this.cache.delete(oldestKey);
+    }
     this.cache.set(promptFingerprint, cacheRead);
   }
 
@@ -251,153 +256,165 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async complete(request: CompletionRequest): Promise<CompletionResponse> {
     const body = this.buildBody(request, false);
 
-    const response = await fetch(this.apiUrl, {
-      method: "POST",
-      headers: this.buildHeaders(),
-      body: JSON.stringify(body),
-      signal: request.abortSignal,
-    });
+    const controller = request.abortSignal ? undefined : new AbortController();
+    const timeout = controller ? setTimeout(() => controller.abort(), 120_000) : undefined;
+    try {
+      const response = await fetch(this.apiUrl, {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(body),
+        signal: request.abortSignal ?? controller?.signal,
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`LLM API error ${response.status}: ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`LLM API error ${response.status}: ${errorText}`);
+      }
+
+      const data = (await response.json()) as Record<string, unknown>;
+      const choice = (data.choices as Array<Record<string, unknown>> | undefined)?.[0];
+      if (!choice) {
+        throw new Error("No response from LLM");
+      }
+
+      const message = choice.message as Record<string, unknown> | undefined;
+      const content = (message?.content as string) ?? "";
+
+      let toolCalls: Array<{ id: string; name: string; arguments: string }> | undefined;
+      const rawToolCalls = message?.tool_calls as Array<Record<string, unknown>> | undefined;
+      if (rawToolCalls) {
+        toolCalls = rawToolCalls.map((tc) => ({
+          id: tc.id as string,
+          name: (tc.function as Record<string, unknown>).name as string,
+          arguments: (tc.function as Record<string, unknown>).arguments as string,
+        }));
+      }
+
+      const usage = data.usage as Record<string, unknown> | undefined;
+      const promptCache = this.extractCacheInfo(usage);
+
+      let usageOut: CompletionResponse["usage"] | undefined;
+      if (usage) {
+        usageOut = {
+          prompt_tokens: (usage["prompt_tokens"] as number) ?? 0,
+          completion_tokens: (usage["completion_tokens"] as number) ?? 0,
+          total_tokens: (usage["total_tokens"] as number) ?? 0,
+        };
+      }
+
+      return { content, toolCalls, usage: usageOut, promptCache };
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
-
-    const data = (await response.json()) as Record<string, unknown>;
-    const choice = (data.choices as Array<Record<string, unknown>> | undefined)?.[0];
-    if (!choice) {
-      throw new Error("No response from LLM");
-    }
-
-    const message = choice.message as Record<string, unknown> | undefined;
-    const content = (message?.content as string) ?? "";
-
-    let toolCalls: Array<{ id: string; name: string; arguments: string }> | undefined;
-    const rawToolCalls = message?.tool_calls as Array<Record<string, unknown>> | undefined;
-    if (rawToolCalls) {
-      toolCalls = rawToolCalls.map((tc) => ({
-        id: tc.id as string,
-        name: (tc.function as Record<string, unknown>).name as string,
-        arguments: (tc.function as Record<string, unknown>).arguments as string,
-      }));
-    }
-
-    const usage = data.usage as Record<string, unknown> | undefined;
-    const promptCache = this.extractCacheInfo(usage);
-
-    let usageOut: CompletionResponse["usage"] | undefined;
-    if (usage) {
-      usageOut = {
-        prompt_tokens: (usage["prompt_tokens"] as number) ?? 0,
-        completion_tokens: (usage["completion_tokens"] as number) ?? 0,
-        total_tokens: (usage["total_tokens"] as number) ?? 0,
-      };
-    }
-
-    return { content, toolCalls, usage: usageOut, promptCache };
   }
 
   async *stream(request: CompletionRequest): AsyncIterable<StreamEvent> {
     const body = this.buildBody(request, true);
 
-    const response = await fetch(this.apiUrl, {
-      method: "POST",
-      headers: {
-        ...this.buildHeaders(),
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify(body),
-      signal: request.abortSignal,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`LLM API error ${response.status}: ${errorText}`);
-    }
-
-    if (!response.body) {
-      throw new Error("Response body is null — streaming not supported");
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
+    const controller = request.abortSignal ? undefined : new AbortController();
+    const timeout = controller ? setTimeout(() => controller.abort(), 120_000) : undefined;
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      const response = await fetch(this.apiUrl, {
+        method: "POST",
+        headers: {
+          ...this.buildHeaders(),
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(body),
+        signal: request.abortSignal ?? controller?.signal,
+      });
 
-        buffer += decoder.decode(value, { stream: true });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`LLM API error ${response.status}: ${errorText}`);
+      }
 
-        // Process complete SSE messages from buffer
-        const chunks = buffer.split("\n\n");
-        buffer = chunks.pop() || ""; // Keep incomplete chunk in buffer
+      if (!response.body) {
+        throw new Error("Response body is null — streaming not supported");
+      }
 
-        for (const chunk of chunks) {
-          const parsed = parseSSEChunk(chunk);
-          for (const { event, data } of parsed) {
-            if (event === "done" || data === "[DONE]") {
-              yield { type: "done" };
-              return;
-            }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-            let parsedData: Record<string, unknown>;
-            try {
-              parsedData = JSON.parse(data);
-            } catch {
-              continue; // Skip malformed JSON
-            }
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-            // Extract delta text
-            const delta = (parsedData.choices as Array<Record<string, unknown>> | undefined)?.[0]
-              ?.delta as Record<string, unknown> | undefined;
+          buffer += decoder.decode(value, { stream: true });
 
-            if (delta) {
-              // Text content
-              if (typeof delta.content === "string" && delta.content.length > 0) {
-                yield { type: "text", delta: delta.content };
+          // Process complete SSE messages from buffer
+          const chunks = buffer.split("\n\n");
+          buffer = chunks.pop() || ""; // Keep incomplete chunk in buffer
+
+          for (const chunk of chunks) {
+            const parsed = parseSSEChunk(chunk);
+            for (const { event, data } of parsed) {
+              if (event === "done" || data === "[DONE]") {
+                yield { type: "done" };
+                return;
               }
 
-              // Tool use
-              const toolCallDelta = (delta.tool_calls as Array<Record<string, unknown>> | undefined)?.[0];
-              if (toolCallDelta) {
-                const id = (toolCallDelta.id as string) ?? "";
-                const funcInfo = toolCallDelta.function as Record<string, unknown> | undefined;
-                if (funcInfo) {
-                  const name = (funcInfo.name as string) ?? "";
-                  const input = (funcInfo.arguments as string) ?? "";
-                  if (name || input) {
-                    yield { type: "tool_use", id, name, input };
+              let parsedData: Record<string, unknown>;
+              try {
+                parsedData = JSON.parse(data);
+              } catch {
+                continue; // Skip malformed JSON
+              }
+
+              // Extract delta text
+              const delta = (parsedData.choices as Array<Record<string, unknown>> | undefined)?.[0]
+                ?.delta as Record<string, unknown> | undefined;
+
+              if (delta) {
+                // Text content
+                if (typeof delta.content === "string" && delta.content.length > 0) {
+                  yield { type: "text", delta: delta.content };
+                }
+
+                // Tool use
+                const toolCallDelta = (delta.tool_calls as Array<Record<string, unknown>> | undefined)?.[0];
+                if (toolCallDelta) {
+                  const id = (toolCallDelta.id as string) ?? "";
+                  const funcInfo = toolCallDelta.function as Record<string, unknown> | undefined;
+                  if (funcInfo) {
+                    const name = (funcInfo.name as string) ?? "";
+                    const input = (funcInfo.arguments as string) ?? "";
+                    if (name || input) {
+                      yield { type: "tool_use", id, name, input };
+                    }
                   }
                 }
-              }
 
-              // Usage (typically in the last chunk)
-              if (parsedData.usage) {
-                const usage = parsedData.usage as Record<string, unknown>;
-                yield {
-                  type: "usage",
-                  usage: {
-                    prompt_tokens: (usage["prompt_tokens"] as number) ?? 0,
-                    completion_tokens: (usage["completion_tokens"] as number) ?? 0,
-                    total_tokens: (usage["total_tokens"] as number) ?? 0,
-                  },
-                };
+                // Usage (typically in the last chunk)
+                if (parsedData.usage) {
+                  const usage = parsedData.usage as Record<string, unknown>;
+                  yield {
+                    type: "usage",
+                    usage: {
+                      prompt_tokens: (usage["prompt_tokens"] as number) ?? 0,
+                      completion_tokens: (usage["completion_tokens"] as number) ?? 0,
+                      total_tokens: (usage["total_tokens"] as number) ?? 0,
+                    },
+                  };
 
-                const cacheInfo = this.extractCacheInfo(usage);
-                if (cacheInfo) {
-                  yield { type: "prompt_cache", info: cacheInfo };
+                  const cacheInfo = this.extractCacheInfo(usage);
+                  if (cacheInfo) {
+                    yield { type: "prompt_cache", info: cacheInfo };
+                  }
                 }
               }
             }
           }
         }
+      } finally {
+        reader.releaseLock();
       }
-    } finally {
-      reader.releaseLock();
-    }
 
-    yield { type: "done" };
+      yield { type: "done" };
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 }

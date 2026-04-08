@@ -7,7 +7,8 @@
 import { homedir, userInfo } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync, copyFileSync, renameSync } from "node:fs";
+import * as crypto from "node:crypto";
 import { loadConfig, getConfigPath } from "../config/loader.js";
 
 // ---------------------------------------------------------------------------
@@ -283,7 +284,9 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
     const envContent = Object.entries(secrets)
       .map(([key, value]) => `${key}=${value}`)
       .join("\n");
-    writeFileSync(envFilePath, envContent, { mode: 0o600 });
+    const tmpEnvPath = `${envFilePath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+    writeFileSync(tmpEnvPath, envContent, { mode: 0o600 });
+    renameSync(tmpEnvPath, envFilePath);
     console.log(info(`Secrets written to ${envFilePath} (0o600)`));
   }
 
@@ -306,7 +309,9 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
   }
 
   // Write unit file
-  writeFileSync(unitPath, unitContent, "utf-8");
+  const tmpUnitPath = `${unitPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+  writeFileSync(tmpUnitPath, unitContent, "utf-8");
+  renameSync(tmpUnitPath, unitPath);
   chmodSync(unitPath, 0o644);
 
   // Activate: daemon-reload + enable + start
@@ -347,7 +352,7 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
     console.log(ok("Service enabled and started"));
 
     // Quick health check
-    setTimeout(() => {
+    const healthCheckTimer = setTimeout(() => {
       const status = systemctlSafe(["is-active", UNIT_NAME]);
       if (status.code === 0) {
         console.log(ok("Service is running"));
@@ -356,6 +361,7 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
         console.log(info(`Check: systemctl --user status ${UNIT_NAME}`));
       }
     }, 2000);
+    if (healthCheckTimer && typeof healthCheckTimer.unref === "function") healthCheckTimer.unref();
   }
 
   return true;
