@@ -3,7 +3,7 @@
 // 2. Project Memory — Shared among team members
 // 3. Company Memory — All agents can access
 
-import { connect, type Table } from "@lancedb/lancedb";
+import { connect, type Connection, type Table } from "@lancedb/lancedb";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
 import { getEmbeddingService } from "./embeddings.js";
@@ -29,6 +29,7 @@ export class HierarchicalMemory {
   private projectDBs: Map<string, Table> = new Map();
   private companyDB?: Table;
   private lancedbDir: string;
+  private conn?: Connection;
 
   private constructor(lancedbDir: string) {
     this.lancedbDir = lancedbDir;
@@ -36,7 +37,7 @@ export class HierarchicalMemory {
 
   static async init(lancedbDir: string): Promise<HierarchicalMemory> {
     const hm = new HierarchicalMemory(lancedbDir);
-    // Company memory is shared
+    hm.conn = await connect(hm.lancedbDir);
     await hm.initCompanyMemory();
     return hm;
   }
@@ -47,7 +48,7 @@ export class HierarchicalMemory {
   }
 
   private async initCompanyMemory() {
-    const db = await connect(this.lancedbDir);
+    const db = this.conn!;
     try {
       this.companyDB = await db.openTable("company_memory");
     } catch {
@@ -71,7 +72,7 @@ export class HierarchicalMemory {
     if (this.personalDBs.has(agentId)) {
       return this.personalDBs.get(agentId)!;
     }
-    const db = await connect(this.lancedbDir);
+    const db = this.conn!;
     const tableName = `personal_${agentId}`;
     let table: Table;
     try {
@@ -98,7 +99,7 @@ export class HierarchicalMemory {
     if (this.projectDBs.has(projectId)) {
       return this.projectDBs.get(projectId)!;
     }
-    const db = await connect(this.lancedbDir);
+    const db = this.conn!;
     const tableName = `project_${projectId}`;
     let table: Table;
     try {
@@ -119,6 +120,13 @@ export class HierarchicalMemory {
     }
     this.projectDBs.set(projectId, table);
     return table;
+  }
+
+  close(): void {
+    if (this.conn) {
+      this.conn.close();
+      this.conn = undefined;
+    }
   }
 
   async upsert(entry: MemoryEntry): Promise<string> {

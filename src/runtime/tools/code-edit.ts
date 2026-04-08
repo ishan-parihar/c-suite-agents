@@ -2,27 +2,23 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 
-export interface FsEditArgs {
+export interface CodeEditArgs {
   file_path: string;
-  agent_id: string;
   old_string: string;
   new_string: string;
+  agent_id: string;
 }
 
-export function createFsEditTool() {
+export function createCodeEditTool() {
   return {
-    name: "fs.edit" as const,
-    description: "Make a precise edit to a file in your workspace. Replaces old_string with new_string. The old_string must match the file content exactly (including whitespace). For best results, include 2-3 lines of surrounding context in old_string.",
+    name: "code.edit" as const,
+    description: "Make a precise edit to a source code file. Replaces old_string with new_string. The old_string must match the file content exactly (including whitespace). For best results, include 2-3 lines of surrounding context in old_string. Only available to the CTO agent.",
     parameters: {
       type: "object" as const,
       properties: {
         file_path: {
           type: "string",
-          description: "Path to the file, relative to your workspace directory.",
-        },
-        agent_id: {
-          type: "string",
-          description: "Your agent ID (auto-injected by the runtime).",
+          description: "Path to the file, relative to the source code workspace root.",
         },
         old_string: {
           type: "string",
@@ -32,34 +28,48 @@ export function createFsEditTool() {
           type: "string",
           description: "The new text to insert in place of old_string.",
         },
+        agent_id: {
+          type: "string",
+          description: "Your agent ID (auto-injected by the runtime).",
+        },
       },
       required: ["file_path", "old_string", "new_string"],
       additionalProperties: false,
     },
     permissionTier: "write" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { file_path, agent_id, old_string, new_string } = args as FsEditArgs;
+      const { file_path, agent_id, old_string, new_string } = args as CodeEditArgs;
 
-      if (!agent_id) {
-        return { content: [{ type: "text", text: "Error: agent_id is required" }] };
+      if (agent_id !== "cto-technical") {
+        return { content: [{ type: "text", text: "Error: code.edit is only available to the CTO agent." }] };
       }
 
-      const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      if (process.env.CTO_CODE_MODIFICATION_ENABLED !== "true") {
+        return { content: [{ type: "text", text: "Error: Code modification is disabled. Set CTO_CODE_MODIFICATION_ENABLED=true to enable." }] };
+      }
+
+      const sourceWorkspace = process.env.SOURCE_WORKSPACE;
+      if (!sourceWorkspace) {
+        return { content: [{ type: "text", text: "Error: SOURCE_WORKSPACE is not configured." }] };
+      }
+
+      if (!path.isAbsolute(sourceWorkspace)) {
+        return { content: [{ type: "text", text: "Error: SOURCE_WORKSPACE is not configured." }] };
+      }
 
       if (file_path.includes("..")) {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };
       }
 
-      const resolvedPath = path.resolve(workspaceDir, file_path);
-      if (!resolvedPath.startsWith(workspaceDir)) {
-        return { content: [{ type: "text", text: "Error: Access denied." }] };
+      const resolvedPath = path.resolve(sourceWorkspace, file_path);
+      if (!resolvedPath.startsWith(sourceWorkspace)) {
+        return { content: [{ type: "text", text: "Error: Access denied. File is outside the source code workspace." }] };
       }
 
       try {
         const stat = fs.statSync(resolvedPath);
         if (stat.size > 100 * 1024) {
-          return { content: [{ type: "text", text: `Error: File is too large (${(stat.size / 1024).toFixed(1)}KB). Maximum file size is 100KB. Read the file first to see its current content.` }] };
+          return { content: [{ type: "text", text: `Error: File is too large (${(stat.size / 1024).toFixed(1)}KB). Maximum is 100KB. Read the file first to see its current content.` }] };
         }
 
         const content = fs.readFileSync(resolvedPath, "utf-8");

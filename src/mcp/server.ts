@@ -10,6 +10,9 @@ import { createFsReadTool } from "../runtime/tools/fs-read.js";
 import { createFsWriteTool } from "../runtime/tools/fs-write.js";
 import { createFsEditTool } from "../runtime/tools/fs-edit.js";
 import { createBashTool } from "../runtime/tools/bash-exec.js";
+import { createCodeReadTool } from "../runtime/tools/code-read.js";
+import { createCodeWriteTool } from "../runtime/tools/code-write.js";
+import { createCodeEditTool } from "../runtime/tools/code-edit.js";
 import { Memory } from "../memory/lancedb.js";
 import { getMemoryFacade } from "../memory/index.js";
 import type { MemoryFacade } from "../memory/index.js";
@@ -24,7 +27,7 @@ import { getHiringSystem } from "../organic/hiring.js";
 import { AgentContextManager } from "../organic/context.js";
 import { sendTelegramMessage } from "../integrations/telegram.js";
 import { createServer } from "http";
-import { startBoardMeeting, runFullBoardMeeting, getActiveMeeting } from "../organic/board-meeting.js";
+import { startBoardMeeting, runFullBoardMeeting, getActiveMeeting, getMeeting, getBoardMeetingEngine } from "../organic/board-meeting.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 const ok = (text: string): ToolResult => ({ content: [{ type: "text" as const, text }] });
@@ -75,9 +78,10 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     function withCallerIdentity(args: any): any {
       if (!callerAgentId) return args;
       const overridden = { ...args };
-      if ("from_agent" in overridden) overridden.from_agent = callerAgentId;
-      if ("from" in overridden) overridden.from = callerAgentId;
-      if ("agent_id" in overridden) overridden.agent_id = callerAgentId;
+      // Always inject caller identity — don't check if field exists first
+      overridden.from = callerAgentId;
+      overridden.from_agent = callerAgentId;
+      overridden.agent_id = callerAgentId;
       return overridden;
     }
 
@@ -324,17 +328,33 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     // === MESSAGING TOOLS ===
     const messageSend = async (args: any): Promise<ToolResult> => {
-      const resolved = withCallerIdentity(args);
-      const thread = await messaging.send({ from: resolved.from, to: resolved.to, content: resolved.content, priority: resolved.priority || "P3", requires_response: resolved.requires_response || false, subject: resolved.subject, tags: resolved.tags });
-      return ok(`Message sent to ${resolved.to}. Thread ID: ${thread.id}`);
+      try {
+        const resolved = withCallerIdentity(args);
+        if (!resolved.to) return ok("❌ Error: 'to' (recipient agent ID) is required");
+        if (!resolved.content) return ok("❌ Error: 'content' (message body) is required");
+        const thread = await messaging.send({ from: resolved.from, to: resolved.to, content: resolved.content, priority: resolved.priority || "P3", requires_response: resolved.requires_response || false, subject: resolved.subject, tags: resolved.tags });
+        return ok(`Message sent to ${resolved.to}. Thread ID: ${thread.id}`);
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        logger.error({ err: msg }, "message.send failed");
+        return ok(`❌ Error: ${msg}`);
+      }
     };
     sessionToolImpls["message.send"] = messageSend;
     sessionServer.registerTool("message.send", { description: "Send an async message to another agent. Use for requests, updates, or questions.", inputSchema: z.object({ from: z.string().describe("Your agent ID"), to: z.string().describe("Recipient agent ID"), content: z.string().describe("Message content"), priority: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("Priority level (default: P3)"), requires_response: z.boolean().optional().describe("Whether a response is expected"), subject: z.string().optional().describe("Thread subject line"), tags: z.array(z.string()).optional().describe("Tags for categorization") }) }, messageSend);
 
     const messageReply = async (args: any): Promise<ToolResult> => {
-      const resolved = withCallerIdentity(args);
-      const thread = await messaging.reply({ thread_id: resolved.thread_id, from: resolved.from, content: resolved.content, requires_response: resolved.requires_response || false, tags: resolved.tags });
-      return ok(`Reply sent. Thread updated: ${thread.id}`);
+      try {
+        const resolved = withCallerIdentity(args);
+        if (!resolved.thread_id) return ok("❌ Error: 'thread_id' is required");
+        if (!resolved.content) return ok("❌ Error: 'content' (reply body) is required");
+        const thread = await messaging.reply({ thread_id: resolved.thread_id, from: resolved.from, content: resolved.content, requires_response: resolved.requires_response || false, tags: resolved.tags });
+        return ok(`Reply sent. Thread updated: ${thread.id}`);
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        logger.error({ err: msg }, "message.reply failed");
+        return ok(`❌ Error: ${msg}`);
+      }
     };
     sessionToolImpls["message.reply"] = messageReply;
     sessionServer.registerTool("message.reply", { description: "Reply to an existing message thread. Use to continue a conversation.", inputSchema: z.object({ thread_id: z.string().describe("Thread ID to reply to"), from: z.string().describe("Your agent ID"), content: z.string().describe("Reply content"), requires_response: z.boolean().optional().describe("Whether a response is expected"), tags: z.array(z.string()).optional().describe("Tags for categorization") }) }, messageReply);
@@ -569,12 +589,14 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       }
       try {
         const meeting = await runFullBoardMeeting(args.objective);
-        const turns = meeting.turns.length;
+        if (!meeting) return ok("❌ Error: Board meeting engine returned null");
+        const turns = meeting.turns?.length ?? 0;
         const reportPreview = meeting.report ? meeting.report.slice(0, 500) : "No report generated.";
         return ok(`✅ Board meeting completed: ${meeting.id}\nTurns: ${turns}\nStatus: ${meeting.status}${args.objective ? `\nObjective: ${args.objective}` : ""}\n\n${reportPreview}${meeting.report && meeting.report.length > 500 ? "\n\n[...report truncated]" : ""}`);
       } catch (err: any) {
-        logger.error({ err: err.message }, "Failed to run board meeting");
-        return ok(`❌ Failed to run board meeting: ${err.message}`);
+        const msg = err?.message || String(err);
+        logger.error({ err: msg }, "Failed to run board meeting");
+        return ok(`❌ Failed to run board meeting: ${msg}`);
       }
     };
     sessionToolImpls["boardmeeting.run"] = boardmeetingRun;
@@ -603,6 +625,73 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       description: "Get current board meeting state if active — shows ID, turns, objective, and timestamps.",
       inputSchema: z.object({})
     }, boardmeetingStatus);
+
+    const boardmeetingGet = async (args: { meeting_id: string }): Promise<ToolResult> => {
+      const meeting = getMeeting(args.meeting_id);
+      if (!meeting) return ok(`Meeting ${args.meeting_id} not found`);
+      const reportPreview = meeting.report
+        ? meeting.report.length > 500
+          ? meeting.report.slice(0, 500) + "\n\n[...report truncated]"
+          : meeting.report
+        : "No report generated.";
+      const lines: string[] = [
+        `🏛 **Board Meeting: ${meeting.id}**`,
+        `Date: ${meeting.date}`,
+        `Status: ${meeting.status}`,
+        meeting.objective ? `Objective: ${meeting.objective}` : "",
+        `Turns completed: ${meeting.turns.length}`,
+        meeting.started_at ? `Started: ${new Date(meeting.started_at).toISOString()}` : "",
+        meeting.concluded_at ? `Concluded: ${new Date(meeting.concluded_at).toISOString()}` : "",
+        "",
+        `**Report Preview:**`,
+        reportPreview,
+      ].filter(Boolean);
+      if (meeting.user_decision) {
+        lines.push(`\n**User Decision:** ${meeting.user_decision}`);
+      }
+      if (meeting.user_feedback) {
+        lines.push(`**User Feedback:** ${meeting.user_feedback}`);
+      }
+      return ok(lines.join("\n"));
+    };
+    sessionToolImpls["boardmeeting.get"] = boardmeetingGet;
+    sessionServer.registerTool("boardmeeting.get", {
+      description: "Retrieve a past board meeting by ID — shows date, status, objective, report preview, and any user decisions/feedback.",
+      inputSchema: z.object({ meeting_id: z.string().describe("The meeting ID to retrieve") })
+    }, boardmeetingGet);
+
+    const boardmeetingList = async (args: { limit?: number; status?: string }): Promise<ToolResult> => {
+      const engine = getBoardMeetingEngine();
+      if (!engine) return ok("No board meeting engine initialized.");
+      const limit = args.limit || 10;
+      let sql = "SELECT id, date, status, objective, started_at FROM board_meetings";
+      const params: unknown[] = [];
+      if (args.status) {
+        sql += " WHERE status = ?";
+        params.push(args.status);
+      }
+      sql += " ORDER BY started_at DESC LIMIT ?";
+      params.push(limit);
+      const rows = (engine as any).queryAllArrays(sql, params);
+      if (!rows || rows.length === 0) return ok("No board meetings found.");
+      const lines: string[] = [`🏛 **Board Meetings** (${rows.length} results)\n`];
+      for (const row of rows) {
+        const [id, date, status, objective, startedAt] = row as [string, string, string, string | null, number];
+        const obj = objective ? (objective.length > 80 ? objective.slice(0, 80) + "..." : objective) : "(no objective)";
+        const ts = startedAt ? new Date(startedAt).toISOString().slice(0, 16) : "unknown";
+        lines.push(`• **${id}** | ${date} | ${status} | ${ts}`);
+        lines.push(`  └─ ${obj}`);
+      }
+      return ok(lines.join("\n"));
+    };
+    sessionToolImpls["boardmeeting.list"] = boardmeetingList;
+    sessionServer.registerTool("boardmeeting.list", {
+      description: "List historical board meetings — shows ID, date, status, and objective. Supports optional limit and status filter.",
+      inputSchema: z.object({
+        limit: z.number().optional().describe("Max meetings to return (default: 10)"),
+        status: z.string().optional().describe("Filter by status (e.g., 'delivered', 'approved', 'in_progress')"),
+      })
+    }, boardmeetingList);
 
     // === HEARTBEAT & NOTIFY ===
     const heartbeatRun = async (): Promise<ToolResult> => { logger.info("Heartbeat"); return ok("Audit started"); };
@@ -824,7 +913,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       }),
     }, async (args) => {
       const result = await fsReadTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
-      return ok(result.content[0].text);
+      const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
     });
 
     const fsWriteTool = createFsWriteTool();
@@ -838,7 +927,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       }),
     }, async (args) => {
       const result = await fsWriteTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
-      return ok(result.content[0].text);
+      const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
     });
 
     const fsEditTool = createFsEditTool();
@@ -852,7 +941,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       }),
     }, async (args) => {
       const result = await fsEditTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
-      return ok(result.content[0].text);
+      const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
     });
 
     const bashToolInstance = createBashTool();
@@ -867,7 +956,48 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       }),
     }, async (args) => {
       const result = await bashToolInstance.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
-      return ok(result.content[0].text);
+      const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
+    });
+
+    // === SOURCE CODE TOOLS (CTO only) ===
+    const codeReadTool = createCodeReadTool();
+    sessionServer.registerTool("code.read", {
+      description: codeReadTool.description,
+      inputSchema: z.object({
+        file_path: z.string().describe("Path to the file, relative to the source code workspace root."),
+        agent_id: z.string().optional().describe("Your agent ID (auto-injected)."),
+      }),
+    }, async (args) => {
+      const result = await codeReadTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
+      const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
+    });
+
+    const codeWriteTool = createCodeWriteTool();
+    sessionServer.registerTool("code.write", {
+      description: codeWriteTool.description,
+      inputSchema: z.object({
+        file_path: z.string().describe("Path to the file, relative to the source code workspace root."),
+        content: z.string().describe("Content to write."),
+        agent_id: z.string().optional().describe("Your agent ID (auto-injected)."),
+        append: z.boolean().optional().describe("Append to existing file. Default: false."),
+      }),
+    }, async (args) => {
+      const result = await codeWriteTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
+      const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
+    });
+
+    const codeEditTool = createCodeEditTool();
+    sessionServer.registerTool("code.edit", {
+      description: codeEditTool.description,
+      inputSchema: z.object({
+        file_path: z.string().describe("Path to the file, relative to the source code workspace root."),
+        old_string: z.string().describe("The exact text to replace."),
+        new_string: z.string().describe("The new text to insert."),
+        agent_id: z.string().optional().describe("Your agent ID (auto-injected)."),
+      }),
+    }, async (args) => {
+      const result = await codeEditTool.execute("mcp", { ...args, agent_id: args.agent_id || callerAgentId });
+      const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
     });
 
     return { server: sessionServer, toolImpls: sessionToolImpls };
@@ -927,7 +1057,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
             res.writeHead(500, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
             res.end("Connection Failed");
           }
-          sessionServer.close().catch(() => {});
+          sessionServer.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "server close error"));
           return;
         }
 
@@ -935,7 +1065,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
           const entry = sseTransports.get(sseTransport.sessionId);
           sseTransports.delete(sseTransport.sessionId);
           sessionAgentMap.delete(sseTransport.sessionId);
-          entry?.server.close().catch(() => {});
+          entry?.server.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "SSE session close error"));
           logger.info({ sessionId: sseTransport.sessionId }, "SSE session closed");
         };
 
@@ -1015,19 +1145,17 @@ export async function startStrategos(): Promise<StrategosRuntime> {
   };
 
   const shutdown = async () => {
-    httpServer.close();
+    await new Promise<void>(resolve => httpServer.close(() => resolve()));
     for (const { server } of sseTransports.values()) {
-      await server.close().catch(() => {});
+      await server.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "shutdown server close error"));
     }
     sseTransports.clear();
     if (stdioServer) {
-      await stdioServer.close().catch(() => {});
+      await stdioServer.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "shutdown stdio close error"));
     }
     logger.info("Strategos MCP server shut down");
   };
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
 
   return { httpServer, ctx: { memory, memoryFacade, kanban, messaging, meetings, hiring }, executor, shutdown };
 }

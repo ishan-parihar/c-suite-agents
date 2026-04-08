@@ -9,12 +9,17 @@ import { Kanban } from "../kanban/sqlite.js";
 import { Memory } from "../memory/lancedb.js";
 import { getSessionRegistry } from "./session-registry.js";
 import { autoStore, autoRecall } from "../memory/auto.js";
+import { ErrorBus } from "../runtime/error-emitter.js";
+
+const MAX_THREAD_RETRIES = 3;
 
 export class MessageProcessor {
   private intervalMs: number;
   private running = false;
-  private timerId: ReturnType<typeof setInterval> | null = null;
+  private timerId: ReturnType<typeof setTimeout> | null = null;
+  private isProcessing = false;
   private activeConversations = new Map<string, { thread_id: string; round: number; initiated_by: string; started_at: number }>();
+  private failedThreads = new Map<string, number>();
 
   constructor(
     private kanban: Kanban,
@@ -36,16 +41,32 @@ export class MessageProcessor {
     // Initial processing
     await this.processAllAgents();
 
-    // Schedule periodic processing
-    this.timerId = setInterval(() => {
-      if (this.running) this.processAllAgents();
+    // Schedule periodic processing (recursive setTimeout prevents overlap)
+    this.scheduleNext();
+  }
+
+  private scheduleNext() {
+    if (!this.running) return;
+    this.timerId = setTimeout(() => {
+      if (!this.running || this.isProcessing) {
+        this.scheduleNext();
+        return;
+      }
+      this.isProcessing = true;
+      this.processAllAgents()
+        .catch((err) => logger.error({ err: err.message }, "Message processor cycle failed"))
+        .finally(() => {
+          this.isProcessing = false;
+          this.scheduleNext();
+        });
     }, this.intervalMs);
+    if (this.timerId && typeof this.timerId.unref === "function") this.timerId.unref();
   }
 
   stop() {
     this.running = false;
     if (this.timerId) {
-      clearInterval(this.timerId);
+      clearTimeout(this.timerId);
       this.timerId = null;
     }
     logger.info("Message processor stopped");
@@ -185,12 +206,32 @@ export class MessageProcessor {
 
         logger.info({ agentId, threadId: msg.thread_id }, "Agent responded to message");
       } catch (err: any) {
-        // Skip broken threads (e.g., single-participant self-messages)
-        logger.warn(
-          { agentId, threadId: msg.thread_id, err: err.message },
-          "Skipping broken thread, marking as read"
-        );
-        await messaging.markAsRead(agentId, msg.thread_id);
+        const threadKey = `${agentId}:${msg.thread_id}`;
+        const retries = (this.failedThreads.get(threadKey) || 0) + 1;
+        this.failedThreads.set(threadKey, retries);
+
+        if (retries >= MAX_THREAD_RETRIES) {
+          logger.error(
+            { agentId, threadId: msg.thread_id, retries, err: err.message },
+            "Thread permanently failed — archiving after max retries"
+          );
+          await messaging.markAsRead(agentId, msg.thread_id);
+          this.failedThreads.delete(threadKey);
+          ErrorBus.emit({
+            type: "message:failed",
+            severity: "error",
+            component: "message-processor",
+            error: err instanceof Error ? err : new Error(err.message),
+            message: `Thread ${msg.thread_id} failed ${retries} times for ${agentId}`,
+            agentId,
+            context: { thread_id: msg.thread_id, retries, action: "archived" },
+          });
+        } else {
+          logger.warn(
+            { agentId, threadId: msg.thread_id, retries, err: err.message },
+            `Thread failed (attempt ${retries}/${MAX_THREAD_RETRIES})`
+          );
+        }
       }
     }
 

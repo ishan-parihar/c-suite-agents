@@ -120,25 +120,36 @@ export class ReportsAndSessions {
     if (!this.db) return;
     const data = this.db.export();
     const tmpPath = `${this.path}.tmp`;
-    await fs.writeFile(tmpPath, Buffer.from(data));
-    await fs.rename(tmpPath, this.path);
+    try {
+      await fs.writeFile(tmpPath, Buffer.from(data));
+      await fs.rename(tmpPath, this.path);
+    } catch (err) {
+      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+      throw err;
+    }
   }
 
   private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const results: Record<string, unknown>[] = [];
-    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
-    stmt.free();
-    return results;
+    try {
+      if (params) stmt.bind(params);
+      const results: Record<string, unknown>[] = [];
+      while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+      return results;
+    } finally {
+      stmt.free();
+    }
   }
 
   private queryOne(sql: string, params?: unknown[]): Record<string, unknown> | undefined {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const result = stmt.step() ? (stmt.getAsObject() as Record<string, unknown>) : undefined;
-    stmt.free();
-    return result;
+    try {
+      if (params) stmt.bind(params);
+      const result = stmt.step() ? (stmt.getAsObject() as Record<string, unknown>) : undefined;
+      return result;
+    } finally {
+      stmt.free();
+    }
   }
 
   async close(): Promise<void> {

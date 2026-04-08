@@ -117,6 +117,20 @@ function buildEnvDefaults(): Record<string, unknown> {
     });
   }
 
+  // Media handling config
+  const mediaEnabled = process.env.MEDIA_ENABLED === 'true' || undefined;
+  const mediaMaxSizeMB = process.env.MEDIA_MAX_SIZE_MB ? parseInt(process.env.MEDIA_MAX_SIZE_MB) : undefined;
+  const mediaApexWrapper = process.env.MEDIA_APEX_WRAPPER || undefined;
+  const mediaApexPython = process.env.MEDIA_APEX_PYTHON || undefined;
+  if (mediaEnabled || mediaMaxSizeMB || mediaApexWrapper || mediaApexPython) {
+    result.media = stripUndefined({
+      enabled: mediaEnabled,
+      maxSizeMB: mediaMaxSizeMB,
+      apexWrapper: mediaApexWrapper,
+      apexPython: mediaApexPython,
+    });
+  }
+
   return result;
 }
 

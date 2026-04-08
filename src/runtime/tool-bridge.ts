@@ -438,6 +438,33 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       parameters: { type: "object", properties: {}, additionalProperties: false },
       permissionTier: "read",
     },
+    "boardmeeting.get": {
+      name: "boardmeeting.get",
+      description: "Retrieve a past board meeting by ID. Returns meeting details including date, status, objective, report preview, and any user decisions or feedback.",
+      parameters: {
+        type: "object",
+        properties: {
+          meeting_id: { type: "string", description: "The meeting ID to retrieve" },
+        },
+        required: ["meeting_id"],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "boardmeeting.list": {
+      name: "boardmeeting.list",
+      description: "List historical board meetings. Returns ID, date, status, and objective for each meeting. Supports optional limit and status filter.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "Max meetings to return (default: 10)" },
+          status: { type: "string", description: "Filter by status (e.g., 'delivered', 'approved', 'in_progress')" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
     "agent.wake": {
       name: "agent.wake",
       description: "Get wake-up context for an agent — recent activity, pending items, and state summary. Inject this on activation to restore context.",
@@ -923,6 +950,54 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       },
       permissionTier: "danger",
     },
+
+    // Source code tools (CTO only)
+    "code.read": {
+      name: "code.read",
+      description: "Read a file from the project source code workspace. Only available to the CTO agent. Use file_path relative to the source code root (e.g., 'src/mcp/server.ts').",
+      parameters: {
+        type: "object",
+        properties: {
+          file_path: { type: "string", description: "Path to the file, relative to the source code workspace root. Do NOT use absolute paths." },
+          agent_id: { type: "string", description: "Your agent ID (auto-injected by the runtime)." },
+        },
+        required: ["file_path"],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "code.write": {
+      name: "code.write",
+      description: "Write content to a file in the project source code workspace. Only available to the CTO agent. Creates the file if it doesn't exist. Use append=true to add to the end of an existing file.",
+      parameters: {
+        type: "object",
+        properties: {
+          file_path: { type: "string", description: "Path to the file, relative to the source code workspace root." },
+          content: { type: "string", description: "Content to write to the file." },
+          agent_id: { type: "string", description: "Your agent ID (auto-injected by the runtime)." },
+          append: { type: "boolean", description: "If true, append to the end of the file. Default: false (overwrite)." },
+        },
+        required: ["file_path", "content"],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "code.edit": {
+      name: "code.edit",
+      description: "Make a precise edit to a source code file. Replaces old_string with new_string. Only available to the CTO agent. The old_string must match exactly.",
+      parameters: {
+        type: "object",
+        properties: {
+          file_path: { type: "string", description: "Path to the file, relative to the source code workspace root." },
+          old_string: { type: "string", description: "The exact text to replace." },
+          new_string: { type: "string", description: "The new text to insert." },
+          agent_id: { type: "string", description: "Your agent ID (auto-injected by the runtime)." },
+        },
+        required: ["file_path", "old_string", "new_string"],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
   };
 
   // Filter to only requested tools
@@ -956,7 +1031,7 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     "task.get",
     "cron.status", "cron.list", "cron.create", "cron.pause", "cron.resume", "cron.delete", "cron.run",
     "tool.search",
-    "boardmeeting.run", "boardmeeting.status",
+    "boardmeeting.run", "boardmeeting.status", "boardmeeting.get", "boardmeeting.list",
     // Filesystem tools
     "fs.read", "fs.write", "fs.edit", "bash",
   ]);

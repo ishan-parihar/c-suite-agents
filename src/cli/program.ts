@@ -423,8 +423,11 @@ async function runMigrate(): Promise<boolean> {
   }
 
   // Write back
-  const { writeFileSync } = await import("node:fs");
-  writeFileSync(configPath, JSON.stringify(migrated.config, null, 2), "utf-8");
+  const { writeFileSync, renameSync } = await import("node:fs");
+  const crypto = await import("node:crypto");
+  const tmpConfigPath = `${configPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+  writeFileSync(tmpConfigPath, JSON.stringify(migrated.config, null, 2), "utf-8");
+  renameSync(tmpConfigPath, configPath);
   chmodSync(configPath, 0o600);
 
   console.log(`\n${GREEN}✓ Migration complete. Config written to ${configPath}${RESET}`);

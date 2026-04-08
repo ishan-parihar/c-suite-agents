@@ -137,6 +137,7 @@ export async function startHeartbeat(rt: StrategosRuntime) {
   heartbeatTimer = setInterval(() => {
     if (heartbeatRunning) enqueueForEnabled();
   }, DEFAULT_INTERVAL_MS);
+  if (heartbeatTimer && typeof heartbeatTimer.unref === "function") heartbeatTimer.unref();
 }
 
 export function stopHeartbeat() {

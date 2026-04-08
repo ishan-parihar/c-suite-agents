@@ -58,7 +58,8 @@ export function registerComponent(name: string): ComponentHealth {
 }
 
 export function getComponent(name: string): ComponentHealth | undefined {
-  return components.get(name);
+  const c = components.get(name);
+  return c ? JSON.parse(JSON.stringify(c)) : undefined;
 }
 
 // ── Status updates ──
@@ -70,7 +71,7 @@ export function markHealthy(name: string, metadata?: Record<string, unknown>) {
   c.checkedAt = Date.now();
   c.lastOkAt = Date.now();
   c.consecutiveFailures = 0;
-  if (metadata) c.metadata = metadata;
+  if (metadata) c.metadata = { ...c.metadata, ...metadata };
 }
 
 export function markDegraded(name: string, reason: string) {

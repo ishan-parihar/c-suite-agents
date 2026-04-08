@@ -158,7 +158,6 @@ describe("getAgentToolScope", () => {
     test("physician-health returns minimal scope (advisory role)", () => {
       const scope = getAgentToolScope("physician-health");
       expect(scope.length).toBeLessThan(40);
-      expect(scope).not.toContain("notify.telegram");
       expect(scope).not.toContain("board.viewReports");
     });
 
@@ -177,15 +176,10 @@ describe("getAgentToolScope", () => {
       }
     });
 
-    test("only ceo-strategic includes notify.telegram", () => {
+    test("notify.telegram is available to all core staff agents", () => {
       for (const agentId of allAgentIds) {
         const scope = getAgentToolScope(agentId);
-        const hasNotify = scope.includes("notify.telegram");
-        if (agentId === "ceo-strategic") {
-          expect(hasNotify, `ceo-strategic should include notify.telegram`).toBe(true);
-        } else {
-          expect(hasNotify, `${agentId} should NOT include notify.telegram`).toBe(false);
-        }
+        expect(scope, `${agentId} should include notify.telegram`).toContain("notify.telegram");
       }
     });
   });

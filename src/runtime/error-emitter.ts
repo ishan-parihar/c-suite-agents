@@ -80,7 +80,8 @@ export type ErrorEventType =
   | "gateway:down"
   | "gateway:restored"
   | "persistence:failed"
-  | "agent:error";
+  | "agent:error"
+  | "message:failed";
 
 /**
  * A structured error event emitted by any subsystem into the error bus.
@@ -143,6 +144,9 @@ export class ErrorEmitter {
   private constructor() {
     this.emitter = new EventEmitter();
     this.emitter.setMaxListeners(0); // No listener limit warning
+    this.emitter.on("error", (err: unknown) => {
+      logger.error({ err }, "ErrorBus: unhandled error event");
+    });
     this.historyBuffer = [];
     this.onceWrappers = new Map();
   }

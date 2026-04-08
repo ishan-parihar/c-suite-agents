@@ -2,6 +2,7 @@
 // Standalone implementation — no cross-dependencies with other tools
 
 import { promises as fs } from "node:fs";
+import { writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import OpenAI from "openai";
@@ -115,7 +116,14 @@ export function createTtsSynthesizeTool(): AnyAgentTool | null {
         const filepath = join(mediaDir, filename);
 
         const buffer = Buffer.from(await response.arrayBuffer());
-        await fs.writeFile(filepath, buffer);
+        const tmpPath = `${filepath}.tmp`;
+        try {
+          writeFileSync(tmpPath, buffer);
+          renameSync(tmpPath, filepath);
+        } catch (writeErr) {
+          try { unlinkSync(tmpPath); } catch { }
+          throw writeErr;
+        }
         logger.info({ filepath, voice, speed, bytes: buffer.length }, "tts.synthesize saved");
 
         return { content: [{ type: "text", text: `Audio saved: ${filepath}` }] };

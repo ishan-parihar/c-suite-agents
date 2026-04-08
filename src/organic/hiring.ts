@@ -49,6 +49,7 @@ export class HiringSystem {
   private contracts: Map<string, EmploymentContract> = new Map();
   private delegations: Map<string, Delegation> = new Map();
   private messaging: MessagingSystem | null = null;
+  private persistLock = Promise.resolve();
 
   private constructor(private db: any, private dbPath: string) {}
 
@@ -59,11 +60,14 @@ export class HiringSystem {
 
   private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const results: Record<string, unknown>[] = [];
-    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
-    stmt.free();
-    return results;
+    try {
+      if (params) stmt.bind(params.map(p => p === undefined ? null : p));
+      const results: Record<string, unknown>[] = [];
+      while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+      return results;
+    } finally {
+      stmt.free();
+    }
   }
 
   static async init(dbPath: string = process.env.HIRING_DB || "hiring.db"): Promise<HiringSystem> {
@@ -118,8 +122,17 @@ export class HiringSystem {
   private async persist() {
     const data = this.db.export();
     const tmpPath = `${this.dbPath}.tmp`;
-    await fs.writeFile(tmpPath, Buffer.from(data));
-    await fs.rename(tmpPath, this.dbPath);
+    const currentLock = this.persistLock;
+    this.persistLock = currentLock.then(async () => {
+      await fs.writeFile(tmpPath, Buffer.from(data));
+      await fs.rename(tmpPath, this.dbPath);
+    }).catch(async (err) => {
+      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+      throw err;
+    }).finally(() => {
+      this.persistLock = Promise.resolve();
+    });
+    await this.persistLock;
   }
 
   async close(): Promise<void> {
@@ -321,16 +334,24 @@ export class HiringSystem {
     deadline?: string;
   }): Promise<Delegation> {
     const contract = this.contracts.get(to);
-    if (!contract) {
+    const coreStaff = getStaffById(to);
+
+    if (!contract && !coreStaff) {
       throw new Error(`Agent ${to} is not a hired team member`);
     }
 
-    if (contract.status !== "active") {
+    if (contract && contract.status !== "active") {
       throw new Error(`Agent ${to} is not active (status: ${contract.status})`);
     }
 
-    if (contract.reports_to !== from) {
-      throw new Error(`Agent ${to} does not report to ${from}`);
+    if (contract) {
+      if (contract.reports_to !== from) {
+        throw new Error(`Agent ${to} does not report to ${from}`);
+      }
+    } else if (coreStaff) {
+      if (coreStaff.reportsTo !== from) {
+        throw new Error(`Agent ${to} does not report to ${from}`);
+      }
     }
 
     if (from === to) {

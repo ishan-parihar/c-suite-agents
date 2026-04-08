@@ -31,6 +31,7 @@ const VALID_BOOTSTRAP_NAMES = new Set(Object.values(CORE_FILES));
 
 /** Module-level cache: filePath → { content, identity } */
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
+const MAX_CACHE_SIZE = 20;
 
 /**
  * Build a stable identity string for a file stat.
@@ -108,6 +109,10 @@ function readWorkspaceFileWithCache(filePath: string, workspaceDir: string): { c
 
     // Cache miss or identity changed — read from disk
     const content = fs.readFileSync(resolvedPath, "utf-8");
+    if (workspaceFileCache.size >= MAX_CACHE_SIZE) {
+      const oldestKey = workspaceFileCache.keys().next().value;
+      if (oldestKey !== undefined) workspaceFileCache.delete(oldestKey);
+    }
     workspaceFileCache.set(resolvedPath, { content, identity });
     return { content, identity };
   } catch (err: any) {
@@ -782,7 +787,14 @@ export function initWorkspace(agentId: string, force = false): string {
   for (const [filename, generator] of Object.entries(fileGenerators)) {
     const filePath = path.join(workspace, filename);
     if (force || !fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, generator(), "utf-8");
+      const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+      try {
+        fs.writeFileSync(tmpPath, generator(), "utf-8");
+        fs.renameSync(tmpPath, filePath);
+      } catch (err: any) {
+        try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup failure */ }
+        throw err;
+      }
       logger.debug({ agentId, file: filename }, "Core file written");
       workspaceFileCache.delete(filePath);
     } else {
@@ -879,7 +891,14 @@ export function updateCoreFile(agentId: string, filename: string, content: strin
   }
   if (!fs.existsSync(workspace)) initWorkspace(agentId);
   const filePath = path.join(workspace, filename);
-  fs.writeFileSync(filePath, content, "utf-8");
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmpPath, content, "utf-8");
+    fs.renameSync(tmpPath, filePath);
+  } catch (err: any) {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup failure */ }
+    throw err;
+  }
   workspaceFileCache.delete(filePath);
   logger.info({ agentId, file: filename }, "Core file updated");
 

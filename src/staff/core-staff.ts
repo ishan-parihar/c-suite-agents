@@ -16,7 +16,7 @@ export const CORE_STAFF_ROLES: Record<string, CoreStaffRole> = {
   "ceo-strategic": {
     id: "ceo-strategic", name: "CEO-Strategic", title: "CEO — Strategic", avatar: "👔",
     boardSeat: true, reportsTo: "board-chair",
-    databases: ["annual_goals", "quarterly_goals", "projects", "campaigns", "directives_risk_log", "opportunities_strengths", "people", "content_pipeline"],
+    databases: ["annual_goals", "quarterly_goals", "projects", "campaigns", "directives_risk_log", "opportunities_strengths", "people", "content_pipeline", "systemic_journal"],
     kanbanColumns: ["Strategic Priorities", "OKR Planning", "In Review", "Approved", "Monitoring", "Complete"],
     systemPrompt: "You're CEO-Strategic, the CEO. The Board Chair (Ishan Parihar) set your direction — you execute by leading the team. Think big picture, set direction, rally the C-suite. Keep it conversational - you're talking TO someone, not writing a report. Ask questions, show interest, be proactive."
   },
@@ -30,7 +30,7 @@ export const CORE_STAFF_ROLES: Record<string, CoreStaffRole> = {
   "cpo-psychologist": {
     id: "cpo-psychologist", name: "CPO", title: "CPO — Psychologist", avatar: "🧠",
     boardSeat: true, reportsTo: "ceo-strategic",
-    databases: ["subjective_journal", "relational_journal", "systemic_journal", "projects"],
+    databases: ["subjective_journal", "relational_journal", "projects"],
     kanbanColumns: ["Journal Queue", "Analyzing", "Insights Generated", "Action Items", "Integrated", "Archived"],
     systemPrompt: "You're the CPO, the team's psychologist. Listen deeply, notice patterns, gently surface what matters. Be warm and human. Skip the clinical jargon - talk like a caring colleague who happens to know psychology."
   },
@@ -68,6 +68,13 @@ export const CORE_STAFF_ROLES: Record<string, CoreStaffRole> = {
     databases: ["projects", "campaigns", "directives_risk_log", "opportunities_strengths"],
     kanbanColumns: ["Signal Detection", "Researching", "Analyzing", "Brief Ready", "Distributed", "Archived"],
     systemPrompt: "You're the CIO, the team's intelligence officer. You monitor the world — news, research, Reddit, trends — and surface what matters for the team's work. You separate signal from noise. Be analytical but concise. Don't dump data — tell us what it MEANS for our strategy, content, finances, or relationships. Connect dots others miss."
+  },
+  "cto-technical": {
+    id: "cto-technical", name: "CTO", title: "CTO — Technical", avatar: "⚡",
+    boardSeat: true, reportsTo: "ceo-strategic",
+    databases: ["tech_debt", "system_health", "upgrade_log", "directives_risk_log", "projects"],
+    kanbanColumns: ["Detected", "Diagnosing", "Fix Proposed", "In Progress", "Testing", "Deployed", "Monitoring"],
+    systemPrompt: "You're the CTO, the technical backbone. Monitor system health, track technical debt, and propose upgrades. You bridge self-healing operations with strategic improvement. Direct, pragmatic, no fluff."
   }
 };
 
@@ -111,4 +118,5 @@ export const AGENT_ID_MAP: Record<string, string> = {
   "cmo": "cmo-content",
   "physician": "physician-health",
   "cio": "cio-intelligence",
+  "cto": "cto-technical",
 };

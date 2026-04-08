@@ -48,6 +48,7 @@ export class AgentExecutor {
   private runtime: NativeAgentRuntime;
   private toolExecutor: ToolExecutor | null = null;
   private sessionsInitialized = new Set<string>();
+  private sessionInitPromises = new Map<string, Promise<void>>();
   private sessionMap = new Map<string, string>();
   private recovery: RecoveryRegistry;
   private policyEngine: PolicyEngine;
@@ -82,6 +83,26 @@ export class AgentExecutor {
     this.toolExecutor = executor;
     this.runtime.setToolExecutor(executor, toolNames);
     logger.info({ toolCount: toolNames.length }, "AgentExecutor tool executor configured");
+  }
+
+  private async ensureSessionInitialized(sessionId: string, agentId: string, mode: "message" | "heartbeat") {
+    if (this.sessionsInitialized.has(sessionId)) return;
+    let initPromise = this.sessionInitPromises.get(sessionId);
+    if (!initPromise) {
+      initPromise = (async () => {
+        const runtimeSessionId = this.runtime.createSession(agentId, { mode });
+        this.sessionMap.set(sessionId, runtimeSessionId);
+        this.sessionsInitialized.add(sessionId);
+      })();
+      this.sessionInitPromises.set(sessionId, initPromise);
+      try {
+        await initPromise;
+      } finally {
+        this.sessionInitPromises.delete(sessionId);
+      }
+    } else {
+      await initPromise;
+    }
   }
 
   async start() {
@@ -152,13 +173,7 @@ export class AgentExecutor {
         const sessionId = await sessionRegistry.getOrCreate(agentId, {});
 
         // Initialize session if needed
-        if (!this.sessionsInitialized.has(sessionId)) {
-          const runtimeSessionId = this.runtime.createSession(agentId, {
-            mode: "message",
-          });
-          this.sessionMap.set(sessionId, runtimeSessionId);
-          this.sessionsInitialized.add(sessionId);
-        }
+        await this.ensureSessionInitialized(sessionId, agentId, "message");
 
         const wakeCtx = await contextManager.getWakeContext(agentId);
         const pendingText = validResponses.map((msg: any) => msg.content).join(" ");
@@ -266,13 +281,7 @@ export class AgentExecutor {
       const sessionId = await sessionRegistry.getOrCreate(agentId, {});
 
       // Initialize session if needed
-      if (!this.sessionsInitialized.has(sessionId)) {
-        const runtimeSessionId = this.runtime.createSession(agentId, {
-          mode: "heartbeat",
-        });
-        this.sessionMap.set(sessionId, runtimeSessionId);
-        this.sessionsInitialized.add(sessionId);
-      }
+      await this.ensureSessionInitialized(sessionId, agentId, "heartbeat");
 
       // Memory injection
       const memoryInjection = await this.getMemoryInjection(agentId, `domain check ${staff.title}`);
@@ -464,7 +473,7 @@ export class AgentExecutor {
     if (evt.escalation_triggered) {
       sendTelegramMessage(
         `⚠️ **System Alert**: ${evt.scenario}\nAgent: ${evt.agentId}\n${evt.message || "No additional details."}`
-      ).catch(() => {});
+      ).catch((err) => logger.error({ err: err instanceof Error ? err.message : String(err) }, "recovery:telegram_notification_failed"));
     }
   }
 
@@ -472,7 +481,7 @@ export class AgentExecutor {
     logger.error({ agentId }, "recovery:agent_aborted");
     sendTelegramMessage(
       `🛑 **Agent Aborted**: ${agentId} has been stopped after recovery exhaustion.`
-    ).catch(() => {});
+    ).catch((err) => logger.error({ err: err instanceof Error ? err.message : String(err) }, "recovery:abort_notification_failed"));
   }
 
   // ── Policy Engine Integration ──────────────────────────────────────

@@ -14,12 +14,11 @@ import { v4 as uuidv4 } from "uuid";
 import { CronExpressionParser } from "cron-parser";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
-import { resolve, join, dirname } from "node:path";
+import { resolve } from "node:path";
 import { getSessionRegistry } from "./session-registry.js";
 import { SystemEventQueue, currentTimeLine } from "./system-events.js";
 import { ErrorBus, createErrorEvent } from "../runtime/error-emitter.js";
 import { autoStore } from "../memory/auto.js";
-import * as os from "node:os";
 
 export type ScheduleType =
   | "interval"
@@ -62,30 +61,19 @@ function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 }
 
-export interface CronJobConfig {
-  id: string;
-  agentId: string;
-  cronExpression: string;
-  instructions: string;
-  enabled: boolean;
-  lastRun?: Date;
-  lastResult?: string;
-}
-
 export class AgentScheduler {
   private db: any;
   private dbPath: string;
   private running = false;
   private checkIntervalMs: number = 60000;
   private tasks: Map<string, ScheduledTask> = new Map();
-
-  private cronJobs: Map<string, CronJobConfig & { nextRun: number }> = new Map();
-  private cronJobsPath: string;
+  private persistLock = Promise.resolve();
+  private persistChainLength = 0;
+  private static readonly MAX_CHAIN_LENGTH = 100;
 
   private constructor(dbPath: string) {
     this.dbPath = dbPath;
     this.db = null;
-    this.cronJobsPath = join(os.homedir(), ".strategos", "crons.json");
   }
 
   static async init(dbPath: string = "scheduler.db"): Promise<AgentScheduler> {
@@ -150,7 +138,6 @@ export class AgentScheduler {
 
     await this.persist();
     await this.loadTasks();
-    await this.loadCronJobs();
     logger.info({ dbPath: this.dbPath, taskCount: this.tasks.size }, "Agent scheduler initialized");
   }
 
@@ -158,23 +145,35 @@ export class AgentScheduler {
     if (!this.db) return;
     const data = this.db.export();
     const tmpPath = `${this.dbPath}.tmp`;
-    await fs.writeFile(tmpPath, Buffer.from(data));
-    await fs.rename(tmpPath, this.dbPath);
+    const currentLock = this.persistLock;
+    this.persistLock = currentLock.then(async () => {
+      await fs.writeFile(tmpPath, Buffer.from(data));
+      await fs.rename(tmpPath, this.dbPath);
+    }).catch(async (err) => {
+      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+      throw err;
+    }).finally(() => {
+      this.persistLock = Promise.resolve();
+      this.persistChainLength = 0;
+    });
+    await this.persistLock;
   }
 
   private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
-    if (params) stmt.bind(params);
-    const results: Record<string, unknown>[] = [];
-    while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
-    stmt.free();
-    return results;
+    try {
+      if (params) stmt.bind(params.map(p => p === undefined ? null : p));
+      const results: Record<string, unknown>[] = [];
+      while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
+      return results;
+    } finally {
+      stmt.free();
+    }
   }
 
   async close(): Promise<void> {
     this.stop();
     await this.persist();
-    await this.persistCronJobs();
   }
 
   private async loadTasks() {
@@ -352,186 +351,6 @@ export class AgentScheduler {
     return Array.from(this.tasks.values()).filter(t => t.enabled && t.status === "active");
   }
 
-  private async loadCronJobs() {
-    try {
-      const raw = await fs.readFile(this.cronJobsPath, "utf-8");
-      const jobs: CronJobConfig[] = JSON.parse(raw);
-      for (const job of jobs) {
-        const nextRun = this.computeNextCron(job.cronExpression);
-        this.cronJobs.set(job.id, { ...job, nextRun, lastRun: job.lastRun ? new Date(job.lastRun) : undefined });
-      }
-      logger.info({ count: jobs.length }, "Cron jobs loaded");
-    } catch {
-      logger.info("No cron jobs found, starting fresh");
-    }
-  }
-
-  private async persistCronJobs() {
-    const dir = dirname(this.cronJobsPath);
-    await fs.mkdir(dir, { recursive: true });
-    const serializable: CronJobConfig[] = Array.from(this.cronJobs.values()).map(j => ({
-      id: j.id,
-      agentId: j.agentId,
-      cronExpression: j.cronExpression,
-      instructions: j.instructions,
-      enabled: j.enabled,
-      lastRun: j.lastRun,
-      lastResult: j.lastResult,
-    }));
-    const tmpPath = `${this.cronJobsPath}.tmp`;
-    await fs.writeFile(tmpPath, JSON.stringify(serializable, null, 2));
-    await fs.rename(tmpPath, this.cronJobsPath);
-  }
-
-  async registerCron(config: CronJobConfig): Promise<void> {
-    try {
-      CronExpressionParser.parse(config.cronExpression);
-    } catch (err: any) {
-      throw new Error(`Invalid cron expression "${config.cronExpression}": ${err.message}`);
-    }
-
-    const nextRun = this.computeNextCron(config.cronExpression);
-    this.cronJobs.set(config.id, {
-      ...config,
-      nextRun,
-      lastRun: config.lastRun ? new Date(config.lastRun) : undefined,
-    });
-    await this.persistCronJobs();
-
-    const staff = getStaffById(config.agentId);
-    logger.info({ cronId: config.id, agentId: config.agentId, agentName: staff?.name, cronExpression: config.cronExpression }, "Cron job registered");
-  }
-
-  async removeCron(id: string): Promise<boolean> {
-    const existed = this.cronJobs.delete(id);
-    if (existed) {
-      await this.persistCronJobs();
-      logger.info({ cronId: id }, "Cron job removed");
-    }
-    return existed;
-  }
-
-  listCrons(agentId?: string): CronJobConfig[] {
-    const jobs = Array.from(this.cronJobs.values());
-    if (agentId) {
-      return jobs.filter(j => j.agentId === agentId);
-    }
-    return jobs;
-  }
-
-  async enableCron(id: string): Promise<boolean> {
-    const job = this.cronJobs.get(id);
-    if (!job) return false;
-    job.enabled = true;
-    job.nextRun = this.computeNextCron(job.cronExpression);
-    await this.persistCronJobs();
-    logger.info({ cronId: id }, "Cron job enabled");
-    return true;
-  }
-
-  async disableCron(id: string): Promise<boolean> {
-    const job = this.cronJobs.get(id);
-    if (!job) return false;
-    job.enabled = false;
-    await this.persistCronJobs();
-    logger.info({ cronId: id }, "Cron job disabled");
-    return true;
-  }
-
-  private async checkAndRunCrons() {
-    const now = Date.now();
-    for (const job of this.cronJobs.values()) {
-      if (!job.enabled) continue;
-      if (job.nextRun > now) continue;
-
-      logger.info({ cronId: job.id, agentId: job.agentId }, "Cron job firing");
-      try {
-        await this.executeCronJob(job);
-        job.lastRun = new Date();
-        job.nextRun = this.computeNextCron(job.cronExpression);
-        await this.persistCronJobs();
-      } catch (err: any) {
-        logger.error({ cronId: job.id, err: err.message }, "Cron job execution failed");
-        job.lastResult = `Error: ${err.message}`;
-        await this.persistCronJobs();
-
-        // Emit error event via ErrorBus
-        ErrorBus.emit({
-          type: "cron:failed",
-          severity: "warn",
-          component: "scheduler",
-          error: err,
-          message: `Cron job ${job.id} failed: ${err.message}`,
-          agentId: job.agentId,
-          context: { cronId: job.id },
-        });
-      }
-    }
-  }
-
-  private async executeCronJob(job: CronJobConfig & { nextRun: number }) {
-    const staff = getStaffById(job.agentId);
-    const nativeAgentId = AGENT_ID_MAP[job.agentId] || job.agentId;
-    const timeLine = currentTimeLine();
-
-    // Use SessionRegistry for persistent sessions (same pattern as executeTask)
-    const sessionRegistry = getSessionRegistry();
-    const sessionId = await sessionRegistry.getOrCreate(job.agentId, {
-      title: `cron:${job.id}`
-    });
-
-    // Restore session in runtime's ContextManager so sendMessage can find it
-    const runtime = getNativeRuntime();
-    runtime.restoreSession(nativeAgentId, sessionId);
-
-    const prompt = `## Scheduled Cron Task
-
-## You are ${staff?.avatar} ${staff?.name} (${staff?.title})
-
-${timeLine}
-
-### Instructions:
-${job.instructions}
-
-Execute these instructions and report results.`;
-
-    const result = await runtime.sendMessage(sessionId, prompt, nativeAgentId);
-    await sessionRegistry.touch(sessionId);
-
-    if (result.text && result.text.trim().length > 0) {
-      const memory = await this.getMemoryInstance();
-      await memory.upsertEvent({
-        agent_id: job.agentId,
-        type: "log",
-        content: `[Cron: ${job.id}]\n${result.text.slice(0, 1000)}`,
-        importance: 0.5,
-        tags: ["cron-job", job.id]
-      });
-
-      // Push result to system event queue for heartbeat injection
-      SystemEventQueue.enqueue({
-        agentId: job.agentId,
-        text: `[Cron: ${job.id}]\n${result.text.slice(0, 500)}`,
-        contextKey: `cron:${job.id}`,
-        priority: "P3",
-      });
-
-      job.lastResult = result.text.slice(0, 500);
-      logger.info({ cronId: job.id, agentId: job.agentId }, "Cron job completed");
-
-      // Emit success event
-      ErrorBus.emit({
-        type: "cron:success",
-        severity: "info",
-        component: "scheduler",
-        error: null,
-        message: `Cron job ${job.id} completed successfully`,
-        agentId: job.agentId,
-        context: { cronId: job.id },
-      });
-    }
-  }
-
   async start() {
     if (this.running) {
       logger.warn("Scheduler already running");
@@ -559,7 +378,6 @@ Execute these instructions and report results.`;
       if (!this.running) return;
       try {
         await this.checkAndRunTasks();
-        await this.checkAndRunCrons();
       } catch (err: any) {
         logger.error({ err: err.message }, "Scheduler loop error");
       }

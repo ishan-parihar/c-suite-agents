@@ -2,23 +2,23 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 
-export interface FsWriteArgs {
+export interface CodeWriteArgs {
   file_path: string;
   content: string;
   agent_id: string;
   append?: boolean;
 }
 
-export function createFsWriteTool() {
+export function createCodeWriteTool() {
   return {
-    name: "fs.write" as const,
-    description: "Write content to a file in your workspace directory. Creates the file if it doesn't exist. Use append=true to add to the end of an existing file.",
+    name: "code.write" as const,
+    description: "Write content to a file in the project source code workspace. Only available to the CTO agent. Creates the file if it doesn't exist. Use append=true to add to the end of an existing file.",
     parameters: {
       type: "object" as const,
       properties: {
         file_path: {
           type: "string",
-          description: "Path to the file, relative to your workspace directory.",
+          description: "Path to the file, relative to the source code workspace root.",
         },
         content: {
           type: "string",
@@ -38,22 +38,29 @@ export function createFsWriteTool() {
     },
     permissionTier: "write" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { file_path, content, agent_id, append = false } = args as FsWriteArgs;
+      const { file_path, content, agent_id, append = false } = args as CodeWriteArgs;
 
-      if (!agent_id) {
-        return { content: [{ type: "text", text: "Error: agent_id is required" }] };
+      if (agent_id !== "cto-technical") {
+        return { content: [{ type: "text", text: "Error: code.write is only available to the CTO agent." }] };
       }
 
-      const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      if (process.env.CTO_CODE_MODIFICATION_ENABLED !== "true") {
+        return { content: [{ type: "text", text: "Error: Code modification is disabled. Set CTO_CODE_MODIFICATION_ENABLED=true to enable." }] };
+      }
+
+      const sourceWorkspace = process.env.SOURCE_WORKSPACE || process.cwd();
+
+      if (!path.isAbsolute(sourceWorkspace)) {
+        return { content: [{ type: "text", text: "Error: SOURCE_WORKSPACE is not configured." }] };
+      }
 
       if (file_path.includes("..")) {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };
       }
 
-      const resolvedPath = path.resolve(workspaceDir, file_path);
-      if (!resolvedPath.startsWith(workspaceDir)) {
-        return { content: [{ type: "text", text: "Error: Access denied. You can only write files within your workspace directory." }] };
+      const resolvedPath = path.resolve(sourceWorkspace, file_path);
+      if (!resolvedPath.startsWith(sourceWorkspace)) {
+        return { content: [{ type: "text", text: "Error: Access denied. File is outside the source code workspace." }] };
       }
 
       try {

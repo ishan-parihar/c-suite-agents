@@ -32,6 +32,28 @@ function truncateResult(content: string): string {
   }
 }
 
+/**
+ * Strip fields from args that are not defined in the tool's input schema.
+ * External MCP servers often use additionalProperties: false and reject
+ * injected/LLM-added fields like agent_id, from, from_agent, etc.
+ */
+function stripUnknownFields(
+  args: Record<string, unknown>,
+  schema: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!schema || typeof schema !== 'object') return args;
+  const props = (schema as any).properties;
+  if (!props || typeof props !== 'object') return args;
+  // Only strip if additionalProperties is explicitly false
+  if ((schema as any).additionalProperties !== false) return args;
+  const allowed = new Set(Object.keys(props));
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (allowed.has(key)) cleaned[key] = value;
+  }
+  return cleaned;
+}
+
 export function createBridge(
   nativeToolImpls: Record<string, (args: any) => Promise<any>>,
   connections: McpServerConnection[],
@@ -65,19 +87,31 @@ export function createBridge(
     }
   }
 
+  // Build a lookup for MCP tool schemas (needed for field stripping)
+  const mcpSchemaMap = new Map<string, Record<string, unknown>>();
+  for (const conn of connections) {
+    for (const tool of conn.tools) {
+      mcpSchemaMap.set(tool.name, (tool.inputSchema || {}) as Record<string, unknown>);
+    }
+  }
+
   const executor: ToolExecutor = async (
     name: string,
     args: Record<string, unknown>,
   ): Promise<ToolResult> => {
     const mcpEntry = mcpToolMap.get(name);
     if (mcpEntry) {
+      // Strip fields not in the external tool's schema (handles agent_id injection)
+      const schema = mcpSchemaMap.get(name);
+      const cleanedArgs = stripUnknownFields(args, schema);
+
       const MAX_RETRIES = 2;
       let lastErr: Error | null = null;
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
           const response = await mcpEntry.conn.callTool(
             mcpEntry.toolName,
-            args,
+            cleanedArgs,
           );
           if (response?.content && Array.isArray(response.content)) {
             const r = mcpResponseToToolResult(response);
@@ -124,10 +158,10 @@ export function createBridge(
       };
     } catch (err: any) {
       logger.error(
-        { tool: name, err: err.message },
+        { tool: name, err: err?.message },
         "Native tool execution failed",
       );
-      return { success: false, content: "", error: err.message };
+      return { success: false, content: "", error: err?.message ?? String(err) ?? "Unknown error" };
     }
   };
 
