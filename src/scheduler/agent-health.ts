@@ -14,6 +14,7 @@ export interface AgentHealth {
   consecutiveHeartbeatOk: number;
   pendingMessages: number;
   errorCount24h: number;
+  errorTimestamps: number[];
   status: "healthy" | "degraded" | "silent" | "error";
 }
 
@@ -37,6 +38,7 @@ class AgentHealthRegistry {
         consecutiveHeartbeatOk: 0,
         pendingMessages: 0,
         errorCount24h: 0,
+        errorTimestamps: [],
         status: "healthy",
       });
     }
@@ -45,7 +47,6 @@ class AgentHealthRegistry {
   private getOrInit(agentId: string): AgentHealth {
     let h = this.health.get(agentId);
     if (!h) {
-      // Evict oldest non-core entry if map is at capacity
       if (this.health.size >= MAX_HEALTH_ENTRIES) {
         this.evictOldest();
       }
@@ -58,6 +59,7 @@ class AgentHealthRegistry {
         consecutiveHeartbeatOk: 0,
         pendingMessages: 0,
         errorCount24h: 0,
+        errorTimestamps: [],
         status: "healthy",
       };
       this.health.set(agentId, h);
@@ -116,8 +118,7 @@ class AgentHealthRegistry {
     const h = this.getOrInit(agentId);
     h.lastError = Date.now();
     h.consecutiveFailures++;
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    if (h.lastError > oneDayAgo) h.errorCount24h++;
+    h.errorTimestamps.push(Date.now());
     this.recalcStatus(h);
   }
 
@@ -157,6 +158,10 @@ class AgentHealthRegistry {
 
   private recalcStatus(h: AgentHealth) {
     const now = Date.now();
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    h.errorTimestamps = h.errorTimestamps.filter(ts => ts > oneDayAgo);
+    h.errorCount24h = h.errorTimestamps.length;
+
     const timeSinceResponse = now - h.lastResponse;
     const timeSinceHeartbeat = now - h.lastHeartbeat;
 

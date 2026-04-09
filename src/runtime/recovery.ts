@@ -1,3 +1,5 @@
+import { logger } from "../logger.js";
+
 /**
  * Recovery Recipes — encoded failure playbooks with auto-attempt + escalation.
  *
@@ -533,9 +535,10 @@ export class RecoveryRegistry {
 
       let attemptSucceeded = true;
 
-      for (const step of recipe.steps) {
+      for (let i = 0; i < recipe.steps.length; i++) {
+        const step = recipe.steps[i];
         const result = await step(attemptCtx);
-        stepsAttempted.push(result.message);
+        stepsAttempted.push(step.name || `step_${i}`);
 
         if (!result.success) {
           attemptSucceeded = false;
@@ -602,8 +605,8 @@ export class RecoveryRegistry {
     for (const listener of this.eventListeners) {
       try {
         listener(event);
-      } catch {
-        // Listener should not crash the recovery process
+      } catch (err: any) {
+        logger.error({ err: err.message, listener: listener.name }, "recovery:listener.error");
       }
     }
   }

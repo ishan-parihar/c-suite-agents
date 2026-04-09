@@ -9,9 +9,27 @@ import { getStaffById, CORE_STAFF_ROLES } from "../staff/core-staff.js";
 import { getMessagingSystem, type MessagingSystem } from "./messaging.js";
 import { Memory } from "../memory/lancedb.js";
 import { Kanban } from "../kanban/sqlite.js";
+import { SystemEventQueue } from "../scheduler/system-events.js";
 
 function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+}
+
+let _memoryInstance: Memory | null = null;
+let _kanbanInstance: Kanban | null = null;
+
+async function getMemory(): Promise<Memory> {
+  if (!_memoryInstance) {
+    _memoryInstance = await Memory.init(process.env.LANCEDB_PATH || "lancedb");
+  }
+  return _memoryInstance;
+}
+
+async function getKanban(): Promise<Kanban> {
+  if (!_kanbanInstance) {
+    _kanbanInstance = await Kanban.init(process.env.KANBAN_DB || "kanban.db");
+  }
+  return _kanbanInstance;
 }
 
 export type EmploymentStatus = "active" | "terminated" | "on_hold";
@@ -129,8 +147,6 @@ export class HiringSystem {
     }).catch(async (err) => {
       try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
       throw err;
-    }).finally(() => {
-      this.persistLock = Promise.resolve();
     });
     await this.persistLock;
   }
@@ -236,7 +252,7 @@ export class HiringSystem {
     await this.persist();
 
     try {
-      const memory = await Memory.init(process.env.LANCEDB_PATH || "lancedb");
+      const memory = await getMemory();
       await memory.ensureAgent(agent_id);
       logger.info({ agent_id }, "Hired agent registered in memory system");
     } catch (err: any) {
@@ -244,7 +260,7 @@ export class HiringSystem {
     }
 
     try {
-      const kanban = await Kanban.init(process.env.KANBAN_DB || "kanban.db");
+      const kanban = await getKanban();
       await kanban.ensureBoard(agent_id, role);
       logger.info({ agent_id }, "Hired agent registered in kanban system");
     } catch (err: any) {
@@ -262,6 +278,7 @@ export class HiringSystem {
     });
 
     logger.info({ agent_id, role, reports_to }, "Auxiliary staff hired");
+    logger.warn({ agent_id }, "hiring:agent.created — hired agents require manual workspace configuration. Add them to agent-tool-scoping.ts for tool access.");
 
     return contract;
   }
@@ -303,7 +320,13 @@ export class HiringSystem {
 
     await this.persist();
 
-    // Notify the hiring manager
+    await SystemEventQueue.enqueueCoalesced({
+      agentId: agent_id,
+      text: `Your contract has been terminated. Stop all work immediately.`,
+      contextKey: `contract:terminated:${agent_id}`,
+      priority: "P1",
+    });
+
     await (await this.getMessaging()).send({
       from: "system",
       to: contract.reports_to,

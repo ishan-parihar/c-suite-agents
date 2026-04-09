@@ -185,7 +185,9 @@ export function migrateLegacyConfig(
             raw.llm = {};
           }
           const llm = raw.llm as Record<string, unknown>;
-          llm.provider = "ollama";
+          if (llm.provider === undefined) {
+            llm.provider = "ollama";
+          }
           llm.baseUrl = val;
           deleteByPath(raw, "ollama.baseUrl");
           migrated = true;

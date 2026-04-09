@@ -87,6 +87,13 @@ export function removeInstance(agentId: string): void {
   instances.delete(agentId);
 }
 
+/**
+ * Clear all cached ToolSearch instances. Call during shutdown to release memory.
+ */
+export function cleanupAll(): void {
+  instances.clear();
+}
+
 /** @deprecated Use getSearchForAgent() instead. This searches ALL tools, ignoring agent scoping. */
 export function searchTools(query: string, maxResults?: number): ToolSearchResult[] {
   const allTools = getAllToolDefinitions();

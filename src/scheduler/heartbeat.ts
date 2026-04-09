@@ -97,28 +97,51 @@ export async function startHeartbeat(rt: StrategosRuntime) {
 
       let enqueued = 0;
       const health = getAgentHealthRegistry();
-      for (const agentId of enabledAgents) {
-        const ackCount = SystemEventQueue.getAckCount(agentId);
-        if (ackCount >= 6) {
-          logger.debug(
-            { agentId, ackCount },
-            "heartbeat:skipped (agent in sleep mode)",
+
+      // Build per-agent work items (filter out sleep-mode agents)
+      const workItems = enabledAgents
+        .map((agentId) => {
+          const ackCount = SystemEventQueue.getAckCount(agentId);
+          if (ackCount >= 6) {
+            logger.debug(
+              { agentId, ackCount },
+              "heartbeat:skipped (agent in sleep mode)",
+            );
+            health.recordHeartbeat(agentId, true);
+            return null;
+          }
+          return agentId;
+        })
+        .filter((id): id is string => id !== null);
+
+      // Parallel enqueue with per-agent error handling
+      const results = await Promise.allSettled(
+        workItems.map(async (agentId) => {
+          const staff = getStaffById(agentId);
+          const title = staff?.title || agentId;
+
+          await SystemEventQueue.enqueueCoalesced({
+            agentId,
+            text: `It's ${timeStr} on ${dayStr}. Time for your domain check. Query your LifeOS databases for anything needing attention in ${title}. Check your Kanban for blocked/overdue items. Review your inbox for pending items. If anything needs attention, take action internally — update your Kanban, send messages to other agents, store findings in memory. If all clear, reply HEARTBEAT_OK.`,
+            contextKey: "heartbeat:domain-check",
+            priority: "P3",
+          });
+        }),
+      );
+
+      // Process results: count successes and log failures
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === "fulfilled") {
+          enqueued++;
+          health.recordHeartbeat(workItems[i], true);
+        } else {
+          const agentId = workItems[i];
+          logger.error(
+            { agentId, err: (results[i] as PromiseRejectedResult).reason },
+            "heartbeat:agent.enqueue.failed",
           );
-          health.recordHeartbeat(agentId, true);
-          continue;
+          health.recordHeartbeat(agentId, false);
         }
-
-        const staff = getStaffById(agentId);
-        const title = staff?.title || agentId;
-
-        await SystemEventQueue.enqueueCoalesced({
-          agentId,
-          text: `It's ${timeStr} on ${dayStr}. Time for your domain check. Query your LifeOS databases for anything needing attention in ${title}. Check your Kanban for blocked/overdue items. Review your inbox for pending items. If anything needs attention, take action internally — update your Kanban, send messages to other agents, store findings in memory. If all clear, reply HEARTBEAT_OK.`,
-          contextKey: "heartbeat:domain-check",
-          priority: "P3",
-        });
-        enqueued++;
-        health.recordHeartbeat(agentId, true);
       }
 
       if (enqueued > 0) {

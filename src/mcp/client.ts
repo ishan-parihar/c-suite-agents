@@ -124,6 +124,8 @@ async function connectLocal(
 
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnecting = false;
+    let attempts = reconnectAttempt;
     const doDispose = async () => {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -133,23 +135,25 @@ async function connectLocal(
 
     // Auto-reconnect on transport close with exponential backoff
     transport.onclose = async () => {
-      if (disposed) return;
+      if (disposed || reconnecting) return;
+      reconnecting = true;
       // Cancel any previously scheduled reconnect to prevent duplicate timers
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       const delay = Math.min(
-        INITIAL_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempt),
+        INITIAL_RECONNECT_DELAY_MS * Math.pow(2, attempts),
         MAX_RECONNECT_DELAY_MS,
       );
       logger.warn(
-        { server: serverName, attempt: reconnectAttempt + 1, delayMs: delay },
+        { server: serverName, attempt: attempts + 1, delayMs: delay },
         "MCP server disconnected, scheduling reconnect",
       );
       reconnectTimer = setTimeout(async () => {
         reconnectTimer = null;
         if (disposed) return;
         try {
-          const newConn = await connectLocal(config, serverName, onReconnect, reconnectAttempt + 1);
+          const newConn = await connectLocal(config, serverName, onReconnect, attempts + 1);
           if (newConn) {
+            attempts = 0;
             logger.info({ server: serverName }, "MCP server reconnected");
             ErrorBus.emit({
               type: "gateway:restored",
@@ -171,6 +175,8 @@ async function connectLocal(
             message: `MCP server ${serverName} connection lost: ${err.message}`,
             context: { gatewayType: "mcp-client", url: serverName },
           });
+        } finally {
+          reconnecting = false;
         }
       }, delay);
       reconnectTimer.unref();
@@ -180,15 +186,13 @@ async function connectLocal(
       serverName,
       tools,
       callTool: async (toolName, args) => {
-        const timeoutId = setTimeout(
-          () => {},
-          TOOL_CALL_TIMEOUT_MS,
-        );
+        let timeoutId: ReturnType<typeof setTimeout>;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS);
+        });
         return Promise.race([
           client.callTool({ name: toolName, arguments: args }).finally(() => clearTimeout(timeoutId)),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS),
-          ),
+          timeoutPromise,
         ]);
       },
       dispose: doDispose,
@@ -254,6 +258,8 @@ async function connectRemote(
 
       let disposed = false;
       let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+      let reconnecting = false;
+      let attempts = reconnectAttempt;
       const doDispose = async () => {
         disposed = true;
         if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -266,22 +272,24 @@ async function connectRemote(
 
       // Auto-reconnect on transport close with exponential backoff
       transport.onclose = async () => {
-        if (disposed) return;
+        if (disposed || reconnecting) return;
+        reconnecting = true;
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         const delay = Math.min(
-          INITIAL_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempt),
+          INITIAL_RECONNECT_DELAY_MS * Math.pow(2, attempts),
           MAX_RECONNECT_DELAY_MS,
         );
         logger.warn(
-          { server: serverName, attempt: reconnectAttempt + 1, delayMs: delay },
+          { server: serverName, attempt: attempts + 1, delayMs: delay },
           "Remote MCP server disconnected, scheduling reconnect",
         );
         reconnectTimer = setTimeout(async () => {
           reconnectTimer = null;
           if (disposed) return;
           try {
-            const newConn = await connectRemote(config, serverName, onReconnect, reconnectAttempt + 1);
+            const newConn = await connectRemote(config, serverName, onReconnect, attempts + 1);
             if (newConn) {
+              attempts = 0;
               logger.info({ server: serverName }, "Remote MCP server reconnected");
               ErrorBus.emit({
                 type: "gateway:restored",
@@ -303,6 +311,8 @@ async function connectRemote(
               message: `MCP server ${serverName} connection lost: ${err.message}`,
               context: { gatewayType: "mcp-client", url: serverName },
             });
+          } finally {
+            reconnecting = false;
           }
         }, delay);
         reconnectTimer.unref();
@@ -312,11 +322,13 @@ async function connectRemote(
         serverName,
         tools,
         callTool: async (toolName, args) => {
+          let timeoutId: ReturnType<typeof setTimeout>;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS);
+          });
           return Promise.race([
-            client.callTool({ name: toolName, arguments: args }),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS),
-            ),
+            client.callTool({ name: toolName, arguments: args }).finally(() => clearTimeout(timeoutId)),
+            timeoutPromise,
           ]);
         },
         dispose: doDispose,

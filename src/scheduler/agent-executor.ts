@@ -556,17 +556,17 @@ export class AgentExecutor {
 
   // ── Instruction File Discovery ─────────────────────────────────────
 
-  private async discoverAndCacheInstructionFiles(agentId: string): Promise<string> {
-    const cached = this.instructionFilesCache.get(agentId);
+  private async discoverAndCacheInstructionFiles(_agentId: string): Promise<string> {
+    const cached = this.instructionFilesCache.get("__global__");
     if (cached !== undefined) return cached;
 
     try {
       const files = await discoverInstructionFiles(process.cwd());
       const formatted = formatInstructionFiles(files);
-      this.instructionFilesCache.set(agentId, formatted);
+      this.instructionFilesCache.set("__global__", formatted);
       return formatted;
     } catch {
-      this.instructionFilesCache.set(agentId, "");
+      this.instructionFilesCache.set("__global__", "");
       return "";
     }
   }

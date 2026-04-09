@@ -96,6 +96,9 @@ export function createCodeEditTool() {
         }
 
         const newContent = content.replace(old_string, new_string);
+        if (newContent.length > 100 * 1024) {
+          return { content: [{ type: "text", text: `Error: Result would exceed 100KB limit (${(newContent.length / 1024).toFixed(1)}KB). Make smaller edits.` }] };
+        }
         const tmpPath = `${resolvedPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
         fs.writeFileSync(tmpPath, newContent, "utf-8");
         fs.renameSync(tmpPath, resolvedPath);

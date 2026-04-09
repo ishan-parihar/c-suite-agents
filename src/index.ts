@@ -16,7 +16,7 @@ import { logger } from "./logger.js";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import { writeFileSync, readFileSync, unlinkSync } from "fs";
+import { writeFileSync, readFileSync, unlinkSync, openSync, writeSync, closeSync } from "fs";
 import { createServer } from "http";
 import { initWorkspace, initAllWorkspaces } from "./agents/workspace-manager.js";
 import { initNativeRuntime, getNativeRuntime } from "./runtime/native-agent-runtime.js";
@@ -94,22 +94,22 @@ const webhookServer = createServer(async (req, res) => {
 
   let body: unknown = null;
   if (method === "POST" || method === "PUT" || method === "PATCH") {
-    const chunks: Buffer[] = [];
-    let totalSize = 0;
-    const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB
-    for await (const chunk of req) {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      totalSize += buf.length;
-      if (totalSize > MAX_BODY_SIZE) {
-        res.writeHead(413, { "Content-Type": "text/plain" });
-        res.end("Payload too large");
-        return;
-      }
-      chunks.push(buf);
-    }
-    const raw = Buffer.concat(chunks);
-    const contentType = req.headers["content-type"] || "";
     try {
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+      const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB
+      for await (const chunk of req) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalSize += buf.length;
+        if (totalSize > MAX_BODY_SIZE) {
+          res.writeHead(413, { "Content-Type": "text/plain" });
+          res.end("Payload too large");
+          return;
+        }
+        chunks.push(buf);
+      }
+      const raw = Buffer.concat(chunks);
+      const contentType = req.headers["content-type"] || "";
       if (contentType.includes("application/json")) {
         const parsed = JSON.parse(raw.toString("utf-8"));
         // Prototype pollution guard
@@ -121,8 +121,12 @@ const webhookServer = createServer(async (req, res) => {
       } else {
         body = raw.toString("utf-8");
       }
-    } catch {
-      body = raw.toString("utf-8");
+    } catch (err: any) {
+      if (res.writableEnded) return;
+      logger.warn({ err: err.message }, "Webhook: body read/parse error (client disconnect?)");
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("Request aborted");
+      return;
     }
   }
 
@@ -160,30 +164,50 @@ webhookServer.listen(WEBHOOK_PORT, "127.0.0.1", async () => {
 // Keepalive for systemd watchdog
 const watchdogTimer = setInterval(() => {
   if (process.env.NOTIFY_SOCKET) {
-    const dgram = require("dgram").createSocket("unixgram");
-    dgram.send("WATCHDOG=1", process.env.NOTIFY_SOCKET, () => dgram.close());
+    try {
+      const dgram = require("dgram").createSocket("unixgram");
+      dgram.send("WATCHDOG=1", process.env.NOTIFY_SOCKET, () => dgram.close());
+    } catch {
+      // NOTIFY_SOCKET not available or send failed
+    }
   }
 }, 30000).unref();
 
 async function main() {
-  // Single-instance enforcement via PID file check
+  // Single-instance enforcement via exclusive PID file creation (atomic check-and-claim)
   const pidFile = join(homedir(), ".local/run/strategos.pid");
   try {
-    const existingPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
-    try {
-      process.kill(existingPid, 0); // Check if process exists
-      // Process exists — log and exit
-      console.error(`Strategos already running (PID ${existingPid}). Exiting.`);
-      process.exit(1);
-    } catch (e: any) {
-      if (e.code === "ESRCH") {
-        // Process dead, stale PID file — remove it
-        try { unlinkSync(pidFile); } catch {}
+    const fd = openSync(pidFile, 'wx');
+    writeSync(fd, String(process.pid));
+    closeSync(fd);
+  } catch (err: any) {
+    if (err.code === 'EEXIST') {
+      try {
+        const existingPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+        try {
+          process.kill(existingPid, 0);
+          console.error(`Strategos already running (PID ${existingPid}). Exiting.`);
+          process.exit(1);
+        } catch (e: any) {
+          if (e.code === "ESRCH") {
+            // Stale PID file — remove and retry exclusive create
+            try { unlinkSync(pidFile); } catch {}
+            const fd = openSync(pidFile, 'wx');
+            writeSync(fd, String(process.pid));
+            closeSync(fd);
+          } else {
+            throw e;
+          }
+        }
+      } catch {
+        // Race — another instance took it
+        console.error("Strategos already running. Exiting.");
+        process.exit(1);
       }
+    } else {
+      throw err;
     }
-  } catch { /* No PID file — safe to start */ }
-  // Write PID file AFTER this check passes
-  writeFileSync(pidFile, String(process.pid));
+  }
 
   let decayTimer: ReturnType<typeof setInterval> | null = null;
   let consolidateTimer: ReturnType<typeof setInterval> | null = null;
@@ -236,10 +260,18 @@ async function main() {
     // ── CONNECT MCP BRIDGE: External servers + native tools ──
     const mcpConfig = (config as any).mcp || {};
     const mcpToolMap = new Map<string, { conn: McpServerConnection; toolName: string }>();
+    const mcpSchemaMap = new Map<string, Record<string, unknown>>();
     const onReconnect = (serverName: string, newConn: McpServerConnection) => {
       for (const [toolName, entry] of mcpToolMap) {
         if (entry.conn.serverName === serverName) {
           mcpToolMap.set(toolName, { conn: newConn, toolName: newConn.tools.find(t => t.toolName === entry.toolName)?.toolName ?? entry.toolName });
+        }
+      }
+      for (const [toolName] of mcpSchemaMap) {
+        const entry = mcpToolMap.get(toolName);
+        if (entry?.conn.serverName === serverName) {
+          const tool = newConn.tools.find(t => t.toolName === entry.toolName);
+          if (tool) mcpSchemaMap.set(toolName, (tool.inputSchema || {}) as Record<string, unknown>);
         }
       }
       logger.info({ server: serverName }, "Bridge updated with reconnected MCP server");
@@ -250,6 +282,7 @@ async function main() {
     for (const conn of mcpConnections) {
       for (const tool of conn.tools) {
         mcpToolMap.set(tool.name, { conn, toolName: tool.toolName });
+        mcpSchemaMap.set(tool.name, (tool.inputSchema || {}) as Record<string, unknown>);
       }
     }
     logger.info({ serverCount: mcpConnections.length }, "MCP servers connected");
@@ -1013,6 +1046,9 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
 
         // Clear session registry
         try { const { getSessionRegistry } = await import("./scheduler/session-registry.js"); const sr = getSessionRegistry(); await sr.close?.(); logger.info("Session registry closed"); } catch { /* ignore */ }
+
+        // Clear ToolSearch cache (unbounded Map)
+        try { const { cleanupAll } = await import("./runtime/tool-search.js"); cleanupAll(); logger.info("ToolSearch cache cleared"); } catch { /* ignore */ }
 
         // Close MCP connections
         if (mcpShutdown) { try { await mcpShutdown(); logger.info("MCP server shutdown complete"); } catch { /* ignore */ } }

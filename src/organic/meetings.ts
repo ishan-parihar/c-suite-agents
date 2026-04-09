@@ -55,7 +55,7 @@ export class MeetingGovernance {
   private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
     try {
-      if (params) stmt.bind(params);
+      if (params) stmt.bind(params.map(p => p === undefined ? null : p));
       const results: Record<string, unknown>[] = [];
       while (stmt.step()) results.push(stmt.getAsObject() as Record<string, unknown>);
       return results;
@@ -357,6 +357,21 @@ export class MeetingGovernance {
   async getProposal(meeting_id: string): Promise<MeetingProposal | null> { return this.proposals.get(meeting_id) || null; }
   async getActiveProposals(): Promise<MeetingProposal[]> { return Array.from(this.proposals.values()).filter(p => p.status === "voting" || p.status === "scheduled" || p.status === "in_progress").sort((a, b) => b.created_at - a.created_at); }
   async getMinutes(meeting_id: string): Promise<MeetingMinutes | null> { return this.minutes.get(meeting_id) || null; }
+
+  cleanup(): void {
+    const now = Date.now();
+    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+    const terminalStatuses = new Set(["completed", "rejected", "cancelled"] as const);
+    for (const [id, p] of this.proposals.entries()) {
+      if (terminalStatuses.has(p.status as typeof terminalStatuses extends Set<infer T> ? T : never)) {
+        const age = now - (p.voting_deadline || p.created_at);
+        if (age > sevenDays) this.proposals.delete(id);
+      }
+    }
+    for (const [id, m] of this.minutes.entries()) {
+      if (now - m.recorded_at > sevenDays) this.minutes.delete(id);
+    }
+  }
 }
 
 let meetingGovernance: MeetingGovernance | null = null;

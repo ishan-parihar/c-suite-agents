@@ -26,6 +26,18 @@ function error(text: string): string {
   return `${RED}${text}${RESET}`;
 }
 
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key]) && target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])) {
+      result[key] = deepMerge(target[key] as Record<string, unknown>, source[key] as Record<string, unknown>);
+    } else {
+      result[key] = source[key];
+    }
+  }
+  return result;
+}
+
 function persistConfig(config: Record<string, unknown>, configPath: string): boolean {
   applyWizardMetadata(config);
   const wizard = config.wizard as Record<string, unknown>;
@@ -64,7 +76,7 @@ export async function runConfigureWizard(options?: { section?: string }): Promis
   }
 
   const configPath = snapshot.path;
-  const nextConfig = structuredClone(snapshot.config) as Record<string, unknown>;
+  let nextConfig = structuredClone(snapshot.config) as Record<string, unknown>;
 
   console.log(`\n${heading("Existing configuration detected:")}\n`);
   console.log(summarizeConfig(nextConfig));
@@ -97,7 +109,7 @@ export async function runConfigureWizard(options?: { section?: string }): Promis
 
     console.log(`\n${heading(`Configuring: ${selected}`)}\n`);
     const result = await handler(nextConfig);
-    Object.assign(nextConfig, result);
+    nextConfig = deepMerge(nextConfig, result);
     if (!persistConfig(nextConfig, configPath)) {
       console.log(error("Config not saved — fix validation errors and retry."));
       continue;

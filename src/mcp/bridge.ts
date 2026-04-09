@@ -9,6 +9,8 @@ export interface BridgeResult {
   definitions: ToolDefinition[];
   /** Mutable map allowing callers to update MCP connections on reconnect */
   mcpToolMap: Map<string, { conn: McpServerConnection; toolName: string }>;
+  /** Mutable map of MCP tool input schemas, updated on reconnect */
+  mcpSchemaMap: Map<string, Record<string, unknown>>;
 }
 
 const MAX_TOOL_RESULT_CHARS = 50_000;
@@ -43,8 +45,8 @@ function stripUnknownFields(
   schema: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
   if (!schema || typeof schema !== 'object') return args;
+  if (!schema?.properties || typeof schema.properties !== 'object' || Object.keys(schema.properties).length === 0) return args;
   const props = (schema as any).properties;
-  if (!props || typeof props !== 'object') return args;
   // Only strip if additionalProperties is explicitly false
   if ((schema as any).additionalProperties !== false) return args;
   const allowed = new Set(Object.keys(props));
@@ -80,18 +82,11 @@ export function createBridge(
     string,
     { conn: McpServerConnection; toolName: string }
   >();
-  if (!existingMap) {
-    for (const conn of connections) {
-      for (const tool of conn.tools) {
-        mcpToolMap.set(tool.name, { conn, toolName: tool.toolName });
-      }
-    }
-  }
-
-  // Build a lookup for MCP tool schemas (needed for field stripping)
   const mcpSchemaMap = new Map<string, Record<string, unknown>>();
+
   for (const conn of connections) {
     for (const tool of conn.tools) {
+      mcpToolMap.set(tool.name, { conn, toolName: tool.toolName });
       mcpSchemaMap.set(tool.name, (tool.inputSchema || {}) as Record<string, unknown>);
     }
   }
@@ -129,7 +124,10 @@ export function createBridge(
         } catch (err: any) {
           lastErr = err;
           if (attempt < MAX_RETRIES) {
-            await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+            await new Promise((r) => {
+              const delay = 500 * (attempt + 1) + Math.random() * 200;
+              setTimeout(r, delay).unref();
+            });
           }
         }
       }
@@ -184,5 +182,5 @@ export function createBridge(
     }
   };
 
-  return { executor, definitions, mcpToolMap };
+  return { executor, definitions, mcpToolMap, mcpSchemaMap };
 }

@@ -102,6 +102,11 @@ export class SessionPersistence {
     } finally {
       resolveLock!(); // Release lock for next waiter
     }
+
+    // Auto-cleanup to prevent unbounded map growth
+    if (this.sessionLocks.size > 100) {
+      this.cleanupLocks();
+    }
   }
 
   async load(sessionId: string): Promise<SessionEntry[]> {

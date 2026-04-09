@@ -85,11 +85,19 @@ export function createFsWriteTool() {
             release();
           }
         } else {
-          // Atomic write: write to tmp file, then rename
-          const tmpPath = `${resolvedPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
-          fs.writeFileSync(tmpPath, content, "utf-8");
-          fs.renameSync(tmpPath, resolvedPath);
-          return { content: [{ type: "text", text: `Wrote ${content.length} characters to ${file_path}` }] };
+          const MAX_WRITE_SIZE = 10 * 1024 * 1024;
+          if (content.length > MAX_WRITE_SIZE) {
+            return { content: [{ type: "text", text: `Error: Content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum: ${MAX_WRITE_SIZE / 1024 / 1024}MB.` }] };
+          }
+          const release = await fileWriteMutex.acquire(resolvedPath);
+          try {
+            const tmpPath = `${resolvedPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+            fs.writeFileSync(tmpPath, content, "utf-8");
+            fs.renameSync(tmpPath, resolvedPath);
+            return { content: [{ type: "text", text: `Wrote ${content.length} characters to ${file_path}` }] };
+          } finally {
+            release();
+          }
         }
       } catch (err: any) {
         return { content: [{ type: "text", text: `Error writing file: ${err.message}` }] };

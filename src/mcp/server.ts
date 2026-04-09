@@ -74,7 +74,8 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     const sessionServer = new McpServer({ name: "strategos", version: "0.1.0" }, { capabilities: { logging: {} } });
     const sessionToolImpls: Record<string, (args: any) => Promise<ToolResult>> = {};
 
-    // Security: override identity fields with session-bound caller
+    // Identity override: callerAgentId is validated at SSE connection time (rejects unknown agents),
+    // so per-message re-validation would be redundant. This invariant holds for the session lifetime.
     function withCallerIdentity(args: any): any {
       if (!callerAgentId) return args;
       const overridden = { ...args };
@@ -584,8 +585,8 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     // === BOARD MEETING TOOLS ===
     const boardmeetingRun = async (args: any): Promise<ToolResult> => {
       // CEO-only enforcement: runtime identity check
-      if (callerAgentId && callerAgentId !== "ceo-strategic") {
-        return ok("❌ Access denied: boardmeeting.run is restricted to the CEO agent.");
+      if (!callerAgentId || callerAgentId !== "ceo-strategic") {
+        throw new Error("boardmeeting.run requires CEO identity");
       }
       try {
         const meeting = await runFullBoardMeeting(args.objective);
@@ -1045,6 +1046,24 @@ export async function startStrategos(): Promise<StrategosRuntime> {
           return;
         }
         const agentId = url.searchParams.get("agentId") || undefined;
+
+        if (agentId) {
+          const coreStaffIds = getCoreStaffIds();
+          if (!coreStaffIds.includes(agentId)) {
+            const hiring = await getHiringSystem();
+            const allContracts = await hiring.getAllContracts();
+            const isHired = allContracts.some(
+              (c) => c.agent_id === agentId && c.status === "active"
+            );
+            if (!isHired) {
+              logger.warn({ agentId }, "MCP: rejected unknown agentId from SSE connection");
+              res.writeHead(403, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
+              res.end("Forbidden: unknown agent");
+              return;
+            }
+          }
+        }
+
         const { server: sessionServer, toolImpls: sessionToolImpls } = createSessionServer(agentId);
         const sseTransport = new SSEServerTransport("/mcp", res);
 
