@@ -1,8 +1,23 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
+
+// ---------------------------------------------------------------------------
+// 0. Path Safety
+// ---------------------------------------------------------------------------
+
+const SAFE_BASES = [
+  process.env.HOME || homedir(),
+  resolve(process.env.HOME || homedir(), '.local', 'share', 'strategos'),
+  resolve(process.env.HOME || homedir(), '.strategos'),
+];
+
+function isPathSafe(dirPath: string): boolean {
+  const resolved = resolve(dirPath);
+  return SAFE_BASES.some(base => resolved === resolve(base) || resolved.startsWith(resolve(base) + sep));
+}
 
 // ---------------------------------------------------------------------------
 // 1. LLM Reachability Probe
@@ -265,6 +280,10 @@ export async function handleReset(
 
   // Remove directories
   for (const dir of dirsToRemove) {
+    if (!isPathSafe(dir)) {
+      console.error(`  Skipping unsafe path: ${dir} (not within Strategos directories)`);
+      continue;
+    }
     rmSync(dir, { recursive: true, force: true });
     console.log(`  Removed directory: ${dir}`);
   }

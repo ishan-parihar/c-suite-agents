@@ -1,5 +1,6 @@
 // Embedding Service — LRU cache + fallback + config-driven providers
 
+import { createHash } from "crypto";
 import ollama from "ollama";
 import { logger } from "../logger.js";
 import { loadConfig } from "../config/loader.js";
@@ -95,12 +96,18 @@ export class EmbeddingService {
 
   private async callEmbedding(model: string, text: string): Promise<number[]> {
     if (this.provider === "ollama") {
-      return Promise.race([
-        ollama.embed({ model, input: text }).then(r => r.embeddings[0] as number[]),
-        new Promise<number[]>((_, reject) =>
-          setTimeout(() => reject(new Error("Ollama embed timeout (30s)")), 30_000),
-        ),
-      ]);
+      let timeoutHandle: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<number[]>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error("Ollama embed timeout (30s)")), 30_000);
+      });
+      try {
+        return await Promise.race([
+          ollama.embed({ model, input: text }).then(r => r.embeddings[0] as number[]),
+          timeout,
+        ]);
+      } finally {
+        clearTimeout(timeoutHandle!);
+      }
     }
 
     // OpenAI-compatible providers (openai, qwen-proxy, etc.)
@@ -167,12 +174,18 @@ export class EmbeddingService {
 
   private async callBatchEmbedding(model: string, texts: string[]): Promise<number[][]> {
     if (this.provider === "ollama") {
-      return Promise.race([
-        ollama.embed({ model, input: texts }).then(r => r.embeddings as number[][]),
-        new Promise<number[][]>((_, reject) =>
-          setTimeout(() => reject(new Error("Ollama batch embed timeout (30s)")), 30_000),
-        ),
-      ]);
+      let timeoutHandle: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<number[][]>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error("Ollama batch embed timeout (30s)")), 30_000);
+      });
+      try {
+        return await Promise.race([
+          ollama.embed({ model, input: texts }).then(r => r.embeddings as number[][]),
+          timeout,
+        ]);
+      } finally {
+        clearTimeout(timeoutHandle!);
+      }
     }
 
     // OpenAI-compatible providers
@@ -215,14 +228,8 @@ export class EmbeddingService {
   }
 
   private hashKey(text: string): string {
-    let hash = 0;
     const str = text.trim().slice(0, 200);
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash |= 0;
-    }
-    return hash.toString(36);
+    return createHash('sha256').update(str).digest('hex');
   }
 }
 

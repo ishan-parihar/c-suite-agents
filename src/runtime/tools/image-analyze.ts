@@ -102,25 +102,30 @@ function validateNotPrivateIP(url: URL): void {
 
 /**
  * DNS rebinding protection: resolve hostname and verify the resolved IP is not private.
- * This catches DNS rebinding attacks where a public hostname resolves to a private IP after initial check.
+ * Returns resolved addresses for before/after comparison (null on DNS failure).
  */
-async function validateResolvedIP(hostname: string): Promise<void> {
+async function validateResolvedIP(hostname: string): Promise<string[] | null> {
   try {
-    const { address } = await Promise.race([
-      lookup(hostname),
+    const results = await Promise.race([
+      lookup(hostname, { all: true }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("DNS lookup timeout (5s)")), 5000)
       ),
     ]);
-    if (isPrivateIP(address)) {
-      throw new Error(`DNS rebinding blocked: ${hostname} resolved to private/reserved IP ${address}`);
+    const addresses = (results as { address: string }[]).map((r) => r.address);
+    for (const addr of addresses) {
+      if (isPrivateIP(addr)) {
+        throw new Error(`DNS rebinding blocked: ${hostname} resolved to private/reserved IP ${addr}`);
+      }
     }
+    return addresses;
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("DNS rebinding blocked")) {
       throw err;
     }
     // DNS lookup failures are non-fatal — the URL already passed validateNotPrivateIP
     logger.debug({ hostname, err }, "DNS lookup failed; skipping rebinding check");
+    return null;
   }
 }
 
@@ -134,6 +139,9 @@ async function imageToDataUrl(source: string): Promise<string> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
+    // Pre-fetch DNS validation: check ALL resolved IPs are not private
+    const beforeAddresses = await validateResolvedIP(parsedUrl.hostname);
+
     let response: Response;
     try {
       response = await fetch(source, { signal: controller.signal });
@@ -141,21 +149,36 @@ async function imageToDataUrl(source: string): Promise<string> {
       clearTimeout(timeoutId);
     }
 
-    // DNS rebinding check: verify resolved IP after fetch completes
-    await validateResolvedIP(parsedUrl.hostname);
+    // Post-fetch DNS validation + response handling with guaranteed body cleanup
+    try {
+      const afterAddresses = await validateResolvedIP(parsedUrl.hostname);
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
+      // Compare before/after to detect DNS rebinding mid-request
+      if (beforeAddresses && afterAddresses) {
+        if (beforeAddresses.length !== afterAddresses.length ||
+            !beforeAddresses.every((addr, i) => addr === afterAddresses[i])) {
+          throw new Error(`DNS rebinding detected: ${parsedUrl.hostname} resolved to different addresses before vs after fetch`);
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
+      }
+
+      const contentLength = response.headers.get("content-length");
+      if (contentLength && parseInt(contentLength, 10) > MAX_CONTENT_LENGTH) {
+        throw new Error(`Image exceeds maximum allowed size (10MB): ${contentLength} bytes`);
+      }
+
+      const buffer = await readStreamWithLimit(response.body, MAX_CONTENT_LENGTH);
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      return `data:${contentType};base64,${buffer.toString("base64")}`;
+    } catch (err) {
+      if (response?.body && !response.body.locked) {
+        await response.body.cancel().catch(() => {});
+      }
+      throw err;
     }
-
-    const contentLength = response.headers.get("content-length");
-    if (contentLength && parseInt(contentLength, 10) > MAX_CONTENT_LENGTH) {
-      throw new Error(`Image exceeds maximum allowed size (10MB): ${contentLength} bytes`);
-    }
-
-    const buffer = await readStreamWithLimit(response.body, MAX_CONTENT_LENGTH);
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    return `data:${contentType};base64,${buffer.toString("base64")}`;
   }
 
   const allowedBaseDirs = [

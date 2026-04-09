@@ -57,9 +57,12 @@ function loadRawConfig(): Record<string, unknown> {
 
 function saveRawConfig(config: Record<string, unknown>): void {
   if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  const tmpPath = `${CONFIG_FILE}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + "\n", { mode: 0o600, encoding: "utf-8" });
+  fs.renameSync(tmpPath, CONFIG_FILE);
+  fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
 // ── Validation Helpers ───────────────────────────────────────────────────

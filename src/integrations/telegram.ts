@@ -263,7 +263,13 @@ async function sendTelegramHtmlChunks(
   html: string,
   plainText: string,
 ): Promise<void> {
-  const htmlChunks = splitTelegramHtmlChunks(html, TELEGRAM_MAX_LENGTH);
+  let htmlChunks: string[];
+  try {
+    htmlChunks = splitTelegramHtmlChunks(html, TELEGRAM_MAX_LENGTH);
+  } catch (err: any) {
+    logger.warn({ err: err.message }, "telegram:html.chunking.failed, falling back to plain text");
+    return sendTelegramHtmlChunks(ctx, plainText, plainText);
+  }
   const sentMessageIds: number[] = [];
 
   for (let i = 0; i < htmlChunks.length; i++) {
@@ -300,8 +306,20 @@ const defaultTimeoutMs = parseInt(process.env.TG_ROUTE_TIMEOUT_MS || "1800000", 
 const chatAgentMap = new Map<string, string>();
 const chatRoutes = new Map<string, ChatRoute>();
 const chatMutex = new AsyncMutex();
+let lastChatRoutesPruneTime = 0;
 
 function getRoute(chatId: string): ChatRoute {
+  const now = Date.now();
+  if (now - lastChatRoutesPruneTime > 3600000) { // every hour
+    lastChatRoutesPruneTime = now;
+    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+    for (const [id, route] of chatRoutes) {
+      if (now - route.lastActive > ONE_WEEK) {
+        chatRoutes.delete(id);
+        chatAgentMap.delete(id);
+      }
+    }
+  }
   const r = chatRoutes.get(chatId);
   if (r) return { ...r, participants: [...r.participants] };
   const created: ChatRoute = { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
@@ -459,6 +477,11 @@ let boardMeetingActive = false;
 let previousRoute: ChatRoute | null = null;
 
 export async function startTelegram(rt: StrategosRuntime) {
+  if (telegramBot) {
+    logger.warn("Telegram bot already running, ignoring duplicate start");
+    return telegramBot;
+  }
+
   if (!cfg.telegramToken || cfg.telegramToken === "your_bot_token_here") {
     logger.warn("Telegram not configured - set TELEGRAM_BOT_TOKEN in .env");
     return null;
@@ -472,7 +495,7 @@ export async function startTelegram(rt: StrategosRuntime) {
   try {
     const bot = new Telegraf(cfg.telegramToken, {
       handlerTimeout: 120_000,
-      telegram: { timeout: 15000 } as Record<string, unknown>,
+      telegram: { timeout: 15000, retryLimit: 3 } as Record<string, unknown>,
     });
     const registry: AgentRegistry = { agents: new Map(), cards: new Map() };
     const contextManager = new AgentContextManager(rt.ctx.kanban, rt.ctx.memory);
@@ -498,17 +521,18 @@ export async function startTelegram(rt: StrategosRuntime) {
 
     // /start command
     bot.command("start", async (ctx) => {
-      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
-      
-      const staffList = getCoreStaffIds()
-        .map(id => {
-          const s = getStaffById(id);
-          return s ? `• ${s.avatar} ${s.name} — ${s.title}` : "";
-        })
-        .filter(Boolean)
-        .join("\n");
-      
-      const message = `<b>👋 I'm Strategos, your CEO agent.</b>
+      try {
+        if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+        
+        const staffList = getCoreStaffIds()
+          .map(id => {
+            const s = getStaffById(id);
+            return s ? `• ${s.avatar} ${s.name} — ${s.title}` : "";
+          })
+          .filter(Boolean)
+          .join("\n");
+        
+        const message = `<b>👋 I'm Strategos, your CEO agent.</b>
 
 <b>Core Staff:</b>
 ${staffList}
@@ -537,73 +561,83 @@ ${staffList}
 /meetings — Pending meeting proposals
 
 Just talk naturally to interact with the team!`;
-      
-      await ctx.reply(message, { parse_mode: "HTML" });
-      const chatId = ctx.chat.id.toString();
-      const currentAgent = chatAgentMap.get(chatId) || "ceo-strategic";
-      setRoute(chatId, { participants: [currentAgent], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
+        
+        await ctx.reply(message, { parse_mode: "HTML" });
+        const chatId = ctx.chat.id.toString();
+        const currentAgent = chatAgentMap.get(chatId) || "ceo-strategic";
+        setRoute(chatId, { participants: [currentAgent], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.start.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
+      }
     });
 
     // /agent - Summon any agent
     bot.command("agent", async (ctx) => {
-      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
-      
-      const args = (ctx.message as any)?.text?.split(" ") || [];
-      const agentName = args[1]?.toLowerCase();
-      
-      if (!agentName) {
-        const chatId = ctx.chat.id.toString();
-        const currentAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
+      try {
+        if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+        
+        const args = (ctx.message as any)?.text?.split(" ") || [];
+        const agentName = args[1]?.toLowerCase();
+        
+        if (!agentName) {
+          const chatId = ctx.chat.id.toString();
+          const currentAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
 
-        const buttons = getCoreStaffIds().map(id => {
-          const s = getStaffById(id);
-          if (!s) return null;
-          const isActive = id === currentAgentId;
-          const label = isActive ? `✅ ${s.avatar} ${s.name}` : `${s.avatar} ${s.name}`;
-          return Markup.button.callback(label, `agent_${id}`);
-        }).filter(Boolean);
+          const buttons = getCoreStaffIds().map(id => {
+            const s = getStaffById(id);
+            if (!s) return null;
+            const isActive = id === currentAgentId;
+            const label = isActive ? `✅ ${s.avatar} ${s.name}` : `${s.avatar} ${s.name}`;
+            return Markup.button.callback(label, `agent_${id}`);
+          }).filter(Boolean);
 
-        const rows: any[][] = [];
-        for (let i = 0; i < buttons.length; i += 2) {
-          rows.push(buttons.slice(i, i + 2));
+          const rows: any[][] = [];
+          for (let i = 0; i < buttons.length; i += 2) {
+            rows.push(buttons.slice(i, i + 2));
+          }
+
+          const currentStaff = getStaffById(currentAgentId);
+          const currentLabel = currentStaff
+            ? `${currentStaff.avatar} ${currentStaff.name}`
+            : currentAgentId;
+
+          await ctx.reply(
+            `<b>🎯 Summon an Agent</b>\n\nCurrently: ${currentLabel}\n\nTap an agent below to switch:`,
+            { parse_mode: "HTML", ...Markup.inlineKeyboard(rows) },
+          );
+          return;
         }
-
-        const currentStaff = getStaffById(currentAgentId);
-        const currentLabel = currentStaff
-          ? `${currentStaff.avatar} ${currentStaff.name}`
-          : currentAgentId;
-
-        await ctx.reply(
-          `<b>🎯 Summon an Agent</b>\n\nCurrently: ${currentLabel}\n\nTap an agent below to switch:`,
-          { parse_mode: "HTML", ...Markup.inlineKeyboard(rows) },
-        );
-        return;
+        
+        const agentId = getCoreStaffIds().find(id => {
+          const s = getStaffById(id);
+          return s?.name.toLowerCase().replace(/\s+/g, '-') === agentName || id.toLowerCase().includes(agentName);
+        });
+        
+        if (!agentId) {
+          await ctx.reply(`<b>❌ Agent not found.</b> Try /agent to see available agents.`, { parse_mode: "HTML" });
+          return;
+        }
+        
+        chatAgentMap.set(ctx.chat.id.toString(), agentId);
+        setRoute(ctx.chat.id.toString(), { participants: [agentId], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
+        persistState();
+        const staff = getStaffById(agentId);
+        await ctx.reply(`<b>✅ Now speaking with ${staff?.avatar} ${staff?.name}</b>\n\n${staff?.title || "Agent"}\n\nAsk me anything or give me tasks.`, { parse_mode: "HTML" });
+        logger.info({ chat_id: ctx.chat.id.toString(), agent_id: agentId }, "Agent summoned");
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.agent.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
       }
-      
-      const agentId = getCoreStaffIds().find(id => {
-        const s = getStaffById(id);
-        return s?.name.toLowerCase().replace(/\s+/g, '-') === agentName || id.toLowerCase().includes(agentName);
-      });
-      
-      if (!agentId) {
-        await ctx.reply(`<b>❌ Agent not found.</b> Try /agent to see available agents.`, { parse_mode: "HTML" });
-        return;
-      }
-      
-      chatAgentMap.set(ctx.chat.id.toString(), agentId);
-      setRoute(ctx.chat.id.toString(), { participants: [agentId], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
-      persistState();
-      const staff = getStaffById(agentId);
-      await ctx.reply(`<b>✅ Now speaking with ${staff?.avatar} ${staff?.name}</b>\n\n${staff?.title || "Agent"}\n\nAsk me anything or give me tasks.`, { parse_mode: "HTML" });
-      logger.info({ chat_id: ctx.chat.id.toString(), agent_id: agentId }, "Agent summoned");
     });
 
     // /meeting command: manage multi-agent sessions (user can still start meetings)
     bot.command("meeting", async (ctx) => {
-      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
-      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
-      if (args.length === 0) {
-        await ctx.reply(`<b>⏳ Board Meeting Management</b>
+      try {
+        if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+        const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+        if (args.length === 0) {
+          await ctx.reply(`<b>⏳ Board Meeting Management</b>
 
 Usage:
 /meeting [end|names...]
@@ -613,34 +647,34 @@ Examples:
 • <b>/meeting end</b> — End current meeting and return to single-agent mode
 
 The meeting will be processed through the board meeting engine with turn-based discussion.`, { parse_mode: "HTML" });
-        return;
-      }
-      const chatId = ctx.chat.id.toString();
-      if (args[0].toLowerCase() === "end") {
-        setRoute(chatId, { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
+          return;
+        }
+        const chatId = ctx.chat.id.toString();
+        if (args[0].toLowerCase() === "end") {
+          setRoute(chatId, { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
+          persistState();
+          await ctx.reply(`<b>🛑 Meeting ended. Back to Strategos.</b>`, { parse_mode: "HTML" });
+          return;
+        }
+        const wanted = args.map((a: string) => a.toLowerCase());
+        const ids = getCoreStaffIds().filter(id => {
+          const s = getStaffById(id);
+          if (!s) return false;
+          const key = s.name.toLowerCase().replace(/\s+/g, '-');
+          return wanted.includes(key) || wanted.includes(id.toLowerCase());
+        });
+        if (ids.length === 0) { await ctx.reply(`<b>❌ No valid agents found</b>`, { parse_mode: "HTML" }); return; }
+        setRoute(chatId, { participants: ids, mode: "meeting", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
         persistState();
-        await ctx.reply(`<b>🛑 Meeting ended. Back to Strategos.</b>`, { parse_mode: "HTML" });
-        return;
-      }
-      const wanted = args.map((a: string) => a.toLowerCase());
-      const ids = getCoreStaffIds().filter(id => {
-        const s = getStaffById(id);
-        if (!s) return false;
-        const key = s.name.toLowerCase().replace(/\s+/g, '-');
-        return wanted.includes(key) || wanted.includes(id.toLowerCase());
-      });
-      if (ids.length === 0) { await ctx.reply(`<b>❌ No valid agents found</b>`, { parse_mode: "HTML" }); return; }
-      setRoute(chatId, { participants: ids, mode: "meeting", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
-      persistState();
-      const names = ids.map(id => {
-        const s = getStaffById(id);
-        return s ? `${s.avatar} ${s.name}` : id;
-      }).join(", ");
-      const namesList = ids.map(id => {
-        const s = getStaffById(id);
-        return s ? `• ${s.avatar} <b>${s.name}</b> — ${s.title}` : `• ${id}`;
-      }).join("\n");
-      await ctx.reply(`<b>🏛 Multi-Agent Discussion Active</b>
+        const names = ids.map(id => {
+          const s = getStaffById(id);
+          return s ? `${s.avatar} ${s.name}` : id;
+        }).join(", ");
+        const namesList = ids.map(id => {
+          const s = getStaffById(id);
+          return s ? `• ${s.avatar} <b>${s.name}</b> — ${s.title}` : `• ${id}`;
+        }).join("\n");
+        await ctx.reply(`<b>🏛 Multi-Agent Discussion Active</b>
 
 Participants:
 ${namesList}
@@ -648,6 +682,10 @@ ${namesList}
 Your messages will be sent to all participants concurrently. Each agent will respond independently.
 
 <b>Note:</b> This routes messages to multiple agents. For formal board meetings with quorum voting, agents can use the board meeting tools internally.`, { parse_mode: "HTML" });
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.meeting.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
+      }
     });
 
     // ── Board Meeting Decision Callbacks ──────────────────────────────
@@ -709,22 +747,32 @@ Your messages will be sent to all participants concurrently. Each agent will res
 
     // /org command
     bot.command("org", async (ctx) => {
-      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
-      const html = markdownToTelegramHtml(getOrgChart());
-      await ctx.reply(html, { parse_mode: "HTML" });
+      try {
+        if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+        const html = markdownToTelegramHtml(getOrgChart());
+        await ctx.reply(html, { parse_mode: "HTML" });
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.org.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
+      }
     });
 
     // /staff command
     bot.command("staff", async (ctx) => {
-      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+      try {
+        if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
 
-      const staffLines = getCoreStaffIds().map(id => {
-        const s = getStaffById(id);
-        if (!s) return "";
-        return `${s.avatar} <b>${s.name}</b> — ${s.title}\n   ├─ Board: ${s.boardSeat ? "Yes" : "No"}\n   └─ Reports: ${s.reportsTo || "CEO"}`;
-      }).filter(Boolean).join("\n\n");
+        const staffLines = getCoreStaffIds().map(id => {
+          const s = getStaffById(id);
+          if (!s) return "";
+          return `${s.avatar} <b>${s.name}</b> — ${s.title}\n   ├─ Board: ${s.boardSeat ? "Yes" : "No"}\n   └─ Reports: ${s.reportsTo || "CEO"}`;
+        }).filter(Boolean).join("\n\n");
 
-      await ctx.reply(`<b>Core Staff:</b>\n\n${staffLines}`, { parse_mode: "HTML" });
+        await ctx.reply(`<b>Core Staff:</b>\n\n${staffLines}`, { parse_mode: "HTML" });
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.staff.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
+      }
     });
 
     // /agents command — core staff + auxiliary from HiringSystem
@@ -860,7 +908,8 @@ Searches across messages, tasks, and stored memories for the CEO agent.`, { pars
 
     // /help command
     bot.command("help", async (ctx) => {
-      const helpText = `<b>📋 Strategos Help</b>
+      try {
+        const helpText = `<b>📋 Strategos Help</b>
 
 <b>Organization Commands:</b>
 /org — Organization chart
@@ -907,7 +956,11 @@ Just talk naturally! Examples:
 • "Create a developer agent"
 • "Propose a board meeting"`;
 
-      await ctx.reply(helpText, { parse_mode: "HTML" });
+        await ctx.reply(helpText, { parse_mode: "HTML" });
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.help.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
+      }
     });
 
     // /session command - manage sessions
@@ -1482,30 +1535,31 @@ Usage:
 
     // /whoami command — show user identity context
     bot.command("whoami", async (ctx) => {
-      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
-      const chatId = ctx.chat.id.toString();
-      const sender = ctx.from;
-      const firstName = escapeHtml(sender.first_name || "");
-      const lastName = sender.last_name ? ` ${escapeHtml(sender.last_name)}` : "";
-      const username = sender.username ? ` @${escapeHtml(sender.username)}` : "";
+      try {
+        if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+        const chatId = ctx.chat.id.toString();
+        const sender = ctx.from;
+        const firstName = escapeHtml(sender.first_name || "");
+        const lastName = sender.last_name ? ` ${escapeHtml(sender.last_name)}` : "";
+        const username = sender.username ? ` @${escapeHtml(sender.username)}` : "";
 
-      const activeAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
-      const activeStaff = getStaffById(activeAgentId);
-      const activeAgentDisplay = activeStaff
-        ? `${activeStaff.avatar} ${escapeHtml(activeStaff.name)}`
-        : escapeHtml(activeAgentId);
+        const activeAgentId = chatAgentMap.get(chatId) || "ceo-strategic";
+        const activeStaff = getStaffById(activeAgentId);
+        const activeAgentDisplay = activeStaff
+          ? `${activeStaff.avatar} ${escapeHtml(activeStaff.name)}`
+          : escapeHtml(activeAgentId);
 
-      const route = getRoute(chatId);
-      const participantNames = route.participants.map(id => {
-        const s = getStaffById(id);
-        return s ? `${s.avatar} ${escapeHtml(s.name)}` : escapeHtml(id);
-      }).join(", ");
+        const route = getRoute(chatId);
+        const participantNames = route.participants.map(id => {
+          const s = getStaffById(id);
+          return s ? `${s.avatar} ${escapeHtml(s.name)}` : escapeHtml(id);
+        }).join(", ");
 
-      const timeoutFormatted = formatDowntime(route.timeoutMs);
-      const inactiveMs = Date.now() - route.lastActive;
-      const lastActiveStr = formatDowntime(inactiveMs) + " ago";
+        const timeoutFormatted = formatDowntime(route.timeoutMs);
+        const inactiveMs = Date.now() - route.lastActive;
+        const lastActiveStr = formatDowntime(inactiveMs) + " ago";
 
-      const text = `<b>👤 Your Identity</b>
+        const text = `<b>👤 Your Identity</b>
 
 <b>Chat ID:</b> <code>${escapeHtml(chatId)}</code>
 <b>Sender:</b> ${firstName}${lastName}${username}
@@ -1515,19 +1569,28 @@ Usage:
 <b>Session Timeout:</b> ${timeoutFormatted}
 <b>Last Active:</b> ${lastActiveStr}`;
 
-      await ctx.reply(text, { parse_mode: "HTML" });
+        await ctx.reply(text, { parse_mode: "HTML" });
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.whoami.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
+      }
     });
 
     // /commands command — paginated command browser
     bot.command("commands", async (ctx) => {
-      if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
-      const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
-      let page = parseInt(args[0], 10) || 1;
-      const totalPages = Math.ceil(STRATEGOS_COMMANDS.length / COMMANDS_PER_PAGE);
-      if (page < 1) page = 1;
-      if (page > totalPages) page = totalPages;
+      try {
+        if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
+        const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
+        let page = parseInt(args[0], 10) || 1;
+        const totalPages = Math.ceil(STRATEGOS_COMMANDS.length / COMMANDS_PER_PAGE);
+        if (page < 1) page = 1;
+        if (page > totalPages) page = totalPages;
 
-      await sendCommandsPage(ctx, page, totalPages);
+        await sendCommandsPage(ctx, page, totalPages);
+      } catch (err: any) {
+        logger.error({ err: err.message }, "telegram.command.commands.error");
+        await ctx.reply("⚠️ An error occurred. Please try again.").catch(() => {});
+      }
     });
 
     // /reset command — standalone session reset
@@ -2415,6 +2478,7 @@ Example:
         logger.info({ chatId }, "Media message received");
         await ctx.sendChatAction("typing");
 
+        let typingInterval: ReturnType<typeof setInterval> | undefined;
         try {
           // Import media pipeline
           const { detectMedia, downloadTelegramFile, buildMediaContext, resolveMediaPlaceholder } = await import("./telegram-media.js");
@@ -2490,7 +2554,7 @@ Example:
           const runtime = getNativeRuntime();
 
           // Keep typing indicator active during processing
-          const typingInterval = setInterval(() => {
+          typingInterval = setInterval(() => {
             ctx.sendChatAction("typing").catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "sendChatAction failed"));
           }, 5000);
 
@@ -2582,6 +2646,7 @@ Example:
             await ctx.reply(`❌ ${safeMsg}\n\nPlease try again or use /help for commands.`);
           }
         } catch (err: any) {
+          clearInterval(typingInterval);
           logger.error({ err: err.message }, "Media processing failed");
           await ctx.reply("❌ Failed to process the media file.", { parse_mode: "HTML" });
         }
@@ -2592,6 +2657,10 @@ Example:
 
     // Natural language messages - route to native runtime
     bot.on("message", async (ctx) => {
+      // Skip media types — they are handled by dedicated handlers above
+      const msg = ctx.message as any;
+      if (msg.photo || msg.document || msg.video || msg.audio || msg.voice || msg.sticker || msg.animation) return;
+
       const chatId = ctx.chat.id.toString();
       const text = (ctx.message as any)?.text ?? (ctx.message as any)?.caption ?? "";
       
@@ -2602,6 +2671,7 @@ Example:
         logger.info({ chatId, text: text.substring(0, 100) }, "Message received");
         await ctx.sendChatAction("typing");
         
+        let typingInterval: ReturnType<typeof setInterval> | undefined;
         try {
           // Determine route with timeout reset
           let route = getRoute(chatId);
@@ -2613,7 +2683,7 @@ Example:
           const runtime = getNativeRuntime();
 
           // Keep typing indicator active during processing
-          const typingInterval = setInterval(() => {
+          typingInterval = setInterval(() => {
             ctx.sendChatAction("typing").catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "sendChatAction failed"));
           }, 5000);
 
@@ -2753,6 +2823,7 @@ Example:
             await ctx.reply(`❌ ${safeMsg}\n\nPlease try again or use /help for commands.`);
           }
         } catch (err: any) {
+          clearInterval(typingInterval);
           logger.error({ err: err.message }, "Unexpected error in message handler");
           await ctx.reply(`<b>❌ Unexpected error</b> - Please try again`, { parse_mode: "HTML" });
         }
@@ -2780,10 +2851,14 @@ Example:
       persistState();
 
       await ctx.answerCbQuery(`Switched to ${staff.name}`);
-      await ctx.editMessageText(
-        `✅ Now speaking with ${staff.avatar} ${staff.name}\n\n${staff.title}\n\nAsk me anything or give me tasks.`,
-        { parse_mode: "HTML" },
-      );
+      try {
+        await ctx.editMessageText(
+          `✅ Now speaking with ${staff.avatar} ${staff.name}\n\n${staff.title}\n\nAsk me anything or give me tasks.`,
+          { parse_mode: "HTML" },
+        );
+      } catch (err: any) {
+        logger.warn({ err: err.message }, "telegram:action.agent.edit.failed");
+      }
       logger.info({ chatId, agentId }, "Agent switched via inline keyboard");
     });
 
@@ -2929,7 +3004,9 @@ Example:
           ...Markup.inlineKeyboard([buttons]),
         });
       } catch (err: any) {
-        await ctx.answerCbQuery("Failed to update");
+        try {
+          await ctx.answerCbQuery("Failed to update");
+        } catch { /* ignore answerCbQuery failure in error handler */ }
         logger.error({ err: err.message }, "commands_page callback error");
       }
     });
@@ -2955,7 +3032,7 @@ Example:
     // bot.launch() starts long-polling — Promise never resolves until bot.stop()
     // Do NOT await it, or all subsequent code will hang forever
     try {
-      bot.launch({ dropPendingUpdates: false });
+      bot.launch({ dropPendingUpdates: true });
       logger.info({ username: bot.botInfo?.username }, "Telegram bot running");
     } catch (err: any) {
       logger.error({ err: err.message }, "Telegram bot launch failed");
@@ -3103,11 +3180,14 @@ export async function sendTelegramMessage(text: string, priority: "info" | "warn
           disable_notification: priority === "info"
         });
       } catch (htmlErr: any) {
-        // Fall back to plain text on parse error
         if (/can't parse entities|parse entities|find end of the entity/i.test(htmlErr.message)) {
-          await telegramBot.telegram.sendMessage(cfg.telegramChatId, text, { 
-            disable_notification: priority === "info"
-          });
+          const plainText = text.replace(/<[^>]*>/g, '');
+          const plainChunks = splitTelegramHtmlChunks(plainText, TELEGRAM_MAX_LENGTH);
+          for (const plainChunk of plainChunks) {
+            await telegramBot.telegram.sendMessage(cfg.telegramChatId, plainChunk, {
+              disable_notification: priority === "info"
+            });
+          }
         } else {
           throw htmlErr;
         }
@@ -3238,8 +3318,9 @@ export async function deliverMeetingReport(report: string, meetingId: string): P
         }
       } catch (htmlErr: any) {
         if (/can't parse entities|parse entities|find end of the entity/i.test(htmlErr.message)) {
+          const plainChunk = chunk.replace(/<[^>]*>/g, '').slice(0, TELEGRAM_MAX_LENGTH);
           if (isLast) {
-            await telegramBot.telegram.sendMessage(cfg.telegramChatId, report.slice(0, TELEGRAM_MAX_LENGTH), {
+            await telegramBot.telegram.sendMessage(cfg.telegramChatId, plainChunk, {
               reply_markup: {
                 inline_keyboard: [
                   [
@@ -3250,7 +3331,7 @@ export async function deliverMeetingReport(report: string, meetingId: string): P
               },
             });
           } else {
-            await telegramBot.telegram.sendMessage(cfg.telegramChatId, report.slice(0, TELEGRAM_MAX_LENGTH));
+            await telegramBot.telegram.sendMessage(cfg.telegramChatId, plainChunk);
           }
         } else {
           throw htmlErr;

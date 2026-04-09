@@ -375,7 +375,7 @@ export class BoardMeetingEngine {
         "DELETE FROM board_meetings WHERE id IN (SELECT id FROM board_meetings ORDER BY date ASC LIMIT ?)",
         [toArchive]
       );
-      this.persist();
+      await this.persist();
       logger.info({ archived: toArchive }, "Old board meetings archived");
     }
   }

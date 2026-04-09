@@ -165,8 +165,6 @@ export class MessagingSystem extends EventEmitter {
     }).catch(async (err) => {
       try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
       throw err;
-    }).finally(() => {
-      this.persistLock = Promise.resolve();
     });
     await this.persistLock;
   }
@@ -286,6 +284,7 @@ export class MessagingSystem extends EventEmitter {
   }): Promise<MessageThread> {
     const thread = this.getThread(thread_id);
     if (!thread) throw new Error(`Thread ${thread_id} not found`);
+    if (!thread.participants.includes(from)) throw new Error("Not a participant in this thread");
     if (!content || content.trim().length === 0) throw new Error("Message content cannot be empty");
     if (content.length > MAX_MESSAGE_LENGTH) throw new Error(`Message content exceeds maximum length of ${MAX_MESSAGE_LENGTH} characters`);
 

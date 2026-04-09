@@ -2,14 +2,21 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { StrategosConfigSchema, type StrategosConfig, type ProviderDef, type ModelDef } from "./schema.js";
+import { runMigrations } from "../cli/migrations.js";
 
 const CONFIG_DIR = path.join(os.homedir(), ".strategos");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
-function envOr<T>(key: string, fallback: T): T {
+function envString(key: string, fallback: string): string {
   const value = process.env[key];
   if (value === undefined || value === "") return fallback;
-  return value as unknown as T;
+  return value;
+}
+
+function envBool(key: string, fallback: boolean): boolean {
+  const value = process.env[key];
+  if (value === undefined) return fallback;
+  return value === "true";
 }
 
 function envNumber(key: string, fallback: number): number {
@@ -33,13 +40,13 @@ function buildEnvDefaults(): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
   // LLM - always included with qwen-proxy defaults
-  const provider = envOr("AGENT_LLM_PROVIDER", "qwen-proxy") as string;
-  const baseUrl = envOr("AGENT_LLM_BASE_URL", "http://127.0.0.1:3000/v1") as string;
-  const openaiKey = envOr("OPENAI_API_KEY", "") as string;
-  const anthropicKey = envOr("ANTHROPIC_API_KEY", "") as string;
-  const openrouterKey = envOr("OPENROUTER_API_KEY", "") as string;
-  const ollamaKey = envOr("OLLAMA_API_KEY", "") as string;
-  const model = envOr("AGENT_LLM_MODEL", "coder-model") as string;
+  const provider = envString("AGENT_LLM_PROVIDER", "qwen-proxy");
+  const baseUrl = envString("AGENT_LLM_BASE_URL", "http://127.0.0.1:3000/v1");
+  const openaiKey = envString("OPENAI_API_KEY", "");
+  const anthropicKey = envString("ANTHROPIC_API_KEY", "");
+  const openrouterKey = envString("OPENROUTER_API_KEY", "");
+  const ollamaKey = envString("OLLAMA_API_KEY", "");
+  const model = envString("AGENT_LLM_MODEL", "coder-model");
   const maxTokens = envNumber("AGENT_LLM_MAX_TOKENS", 65536);
   const temperature = envNumber("AGENT_LLM_TEMPERATURE", 0.3);
   const contextTokens = envNumber("AGENT_LLM_CONTEXT_TOKENS", 262144);
@@ -47,7 +54,7 @@ function buildEnvDefaults(): Record<string, unknown> {
   const apiKey = openaiKey || anthropicKey || openrouterKey || ollamaKey || "";
 
   // Parse fallback models from env (comma-separated)
-  const fallbackModelsRaw = envOr("AGENT_LLM_FALLBACK_MODELS", "") as string;
+  const fallbackModelsRaw = envString("AGENT_LLM_FALLBACK_MODELS", "");
   const fallbackModels = fallbackModelsRaw
     ? fallbackModelsRaw.split(",").map((s) => s.trim()).filter(Boolean)
     : undefined;
@@ -70,8 +77,8 @@ function buildEnvDefaults(): Record<string, unknown> {
     });
   }
 
-  const telegramToken = envOr("TELEGRAM_BOT_TOKEN", "") as string;
-  const telegramChatId = envOr("TELEGRAM_CHAT_ID", "") as string;
+  const telegramToken = envString("TELEGRAM_BOT_TOKEN", "");
+  const telegramChatId = envString("TELEGRAM_CHAT_ID", "");
   if (telegramToken || telegramChatId) {
     result.telegram = stripUndefined({
       botToken: telegramToken || undefined,
@@ -79,9 +86,9 @@ function buildEnvDefaults(): Record<string, unknown> {
     });
   }
 
-  const lancedb = envOr("LANCEDB_DIR", "") as string;
-  const kanbanDb = envOr("KANBAN_DB", "") as string;
-  const messagesDb = envOr("MESSAGES_DB", "") as string;
+  const lancedb = envString("LANCEDB_DIR", "");
+  const kanbanDb = envString("KANBAN_DB", "");
+  const messagesDb = envString("MESSAGES_DB", "");
   if (lancedb || kanbanDb || messagesDb) {
     result.paths = stripUndefined({
       lancedb: lancedb || undefined,
@@ -90,8 +97,8 @@ function buildEnvDefaults(): Record<string, unknown> {
     });
   }
 
-  const logLevel = envOr("LOG_LEVEL", "") as string;
-  const logFile = envOr("LOG_FILE", "") as string;
+  const logLevel = envString("LOG_LEVEL", "");
+  const logFile = envString("LOG_FILE", "");
   if (logLevel || logFile) {
     result.logging = stripUndefined({
       level: ["fatal", "error", "warn", "info", "debug", "trace"].includes(logLevel)
@@ -102,10 +109,10 @@ function buildEnvDefaults(): Record<string, unknown> {
   }
 
   // Embedding provider config
-  const embedProvider = envOr("EMBEDDING_PROVIDER", "") as string;
-  const embedModel = envOr("EMBEDDING_MODEL", "") as string;
-  const embedBaseUrl = envOr("EMBEDDING_BASE_URL", "") as string;
-  const embedApiKey = envOr("EMBEDDING_API_KEY", "") as string;
+  const embedProvider = envString("EMBEDDING_PROVIDER", "");
+  const embedModel = envString("EMBEDDING_MODEL", "");
+  const embedBaseUrl = envString("EMBEDDING_BASE_URL", "");
+  const embedApiKey = envString("EMBEDDING_API_KEY", "");
   const embedDimensions = envNumber("EMBEDDING_DIMENSIONS", 0);
   if (embedProvider || embedModel || embedBaseUrl) {
     result.embedding = stripUndefined({
@@ -118,8 +125,12 @@ function buildEnvDefaults(): Record<string, unknown> {
   }
 
   // Media handling config
-  const mediaEnabled = process.env.MEDIA_ENABLED === 'true' || undefined;
-  const mediaMaxSizeMB = process.env.MEDIA_MAX_SIZE_MB ? parseInt(process.env.MEDIA_MAX_SIZE_MB) : undefined;
+  const mediaEnabled = process.env.MEDIA_ENABLED !== undefined
+    ? process.env.MEDIA_ENABLED === 'true'
+    : undefined;
+  const mediaMaxSizeMB = process.env.MEDIA_MAX_SIZE_MB
+    ? (() => { const n = parseInt(process.env.MEDIA_MAX_SIZE_MB, 10); return isNaN(n) ? undefined : n; })()
+    : undefined;
   const mediaApexWrapper = process.env.MEDIA_APEX_WRAPPER || undefined;
   const mediaApexPython = process.env.MEDIA_APEX_PYTHON || undefined;
   if (mediaEnabled || mediaMaxSizeMB || mediaApexWrapper || mediaApexPython) {
@@ -229,11 +240,26 @@ export function loadConfig(): StrategosConfig {
   // Resolve models.primary from providers section
   const resolvedLlm = resolveModelConfig(merged);
   if (resolvedLlm) {
-    const existingLlm = (merged.llm || {}) as Record<string, unknown>;
-    merged.llm = deepMerge(existingLlm, resolvedLlm);
+    const existingLlm = merged.llm as Record<string, unknown> | undefined;
+    const hasExplicitProvider =
+      existingLlm?.provider !== undefined && existingLlm?.provider !== "qwen-proxy";
+    if (hasExplicitProvider) {
+      delete resolvedLlm.provider;
+    }
+    merged.llm = deepMerge(existingLlm || {}, resolvedLlm);
   }
 
-  const parseResult = StrategosConfigSchema.safeParse(merged);
+  // Run migrations to handle legacy config keys before validation
+  const migrationResult = runMigrations(merged);
+  const migrated = migrationResult.config;
+
+  if (migrationResult.warnings.length > 0) {
+    for (const warning of migrationResult.warnings) {
+      console.warn(`[strategos] Config migration: ${warning}`);
+    }
+  }
+
+  const parseResult = StrategosConfigSchema.safeParse(migrated);
 
   if (!parseResult.success) {
     const errors = parseResult.error.errors

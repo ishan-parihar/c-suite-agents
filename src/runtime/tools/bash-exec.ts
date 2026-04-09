@@ -97,6 +97,13 @@ export function createBashTool() {
 
       if (!fs.existsSync(workingDir)) {
         fs.mkdirSync(workingDir, { recursive: true });
+        // Re-resolve after creation to catch symlinks
+        try {
+          workingDir = fs.realpathSync(workingDir);
+        } catch { /* still doesn't exist? skip */ }
+        if (!(workingDir === workspaceDir || workingDir.startsWith(workspaceDir + path.sep))) {
+          return { content: [{ type: "text", text: "Error: cwd must be within your workspace directory." }] };
+        }
       }
 
       try {

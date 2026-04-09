@@ -129,7 +129,7 @@ export const StrategosConfigSchema = z.object({
     defaultAutonomy: z.number().int().min(1).max(4).default(3),
     maxConcurrent: z.number().int().positive().default(5),
     maxToolRounds: z.number().int().positive().default(10),
-    heartbeatInterval: z.string().optional(),
+    heartbeatInterval: z.union([z.string(), z.number().int().positive()]).optional(),
     directToUser: z.boolean().default(true),
     toolScoping: z.record(z.string(), z.object({
       nativeTools: z.array(z.string()).optional(),
@@ -204,7 +204,7 @@ export const StrategosConfigSchema = z.object({
     lastRunAt: z.string().optional(),
     lastRunVersion: z.string().optional(),
     lastRunCommand: z.enum(["onboard", "configure", "reset"]).optional().default("onboard"),
-    lastRunMode: z.enum(["quickstart", "advanced", "remote"]).optional().default("quickstart"),
+    lastRunMode: z.enum(["quickstart", "advanced", "remote", "configure"]).optional().default("quickstart"),
   }).strict().optional(),
 
   // ── CEO (Strategic) agent scheduler ───────────────────────────────

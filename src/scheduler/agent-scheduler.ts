@@ -558,8 +558,13 @@ ${timeLine}
   }
 
   private async getMemoryInstance(): Promise<Memory> {
-    return Memory.init(process.env.LANCEDB_DIR || ".lancedb");
+    if (!this._memoryInstance) {
+      this._memoryInstance = await Memory.init(process.env.LANCEDB_DIR || ".lancedb");
+    }
+    return this._memoryInstance;
   }
+
+  private _memoryInstance: Memory | null = null;
 }
 
 let scheduler: AgentScheduler | null = null;

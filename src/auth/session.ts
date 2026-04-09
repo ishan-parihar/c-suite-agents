@@ -23,6 +23,7 @@ export interface AuthContext {
 }
 
 export class SessionManager {
+  private static readonly MAX_SESSIONS = 1000;
   private sessions: Map<string, AgentSession> = new Map();
   private sessionTimeoutMs: number;
 
@@ -31,6 +32,12 @@ export class SessionManager {
   }
 
   createSession(agentId: string): AgentSession {
+    if (this.sessions.size >= SessionManager.MAX_SESSIONS) {
+      this.cleanupExpired();
+      if (this.sessions.size >= SessionManager.MAX_SESSIONS) {
+        throw new Error(`Session limit reached (${SessionManager.MAX_SESSIONS}). Try again later.`);
+      }
+    }
     const session: AgentSession = {
       sessionId: uuidv4(),
       agentId,

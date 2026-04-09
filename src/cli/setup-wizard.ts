@@ -816,7 +816,7 @@ async function writeConfigWithMetadata(rawConfig: Record<string, unknown>): Prom
 
   // Create config directory
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
     console.log(`\n${success(`Created directory: ${CONFIG_DIR}`)}`);
   }
 
