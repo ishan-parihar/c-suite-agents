@@ -78,7 +78,7 @@ export async function startHeartbeat(rt: StrategosRuntime) {
   const enqueueForEnabled = async () => {
     if (!heartbeatRunning) return;
     try {
-      if (!SystemEventQueue.shouldFireHeartbeat()) {
+      if (!await SystemEventQueue.shouldFireHeartbeat()) {
         logger.debug("heartbeat:skipped (outside active hours)");
         return;
       }
@@ -111,7 +111,7 @@ export async function startHeartbeat(rt: StrategosRuntime) {
         const staff = getStaffById(agentId);
         const title = staff?.title || agentId;
 
-        SystemEventQueue.enqueueCoalesced({
+        await SystemEventQueue.enqueueCoalesced({
           agentId,
           text: `It's ${timeStr} on ${dayStr}. Time for your domain check. Query your LifeOS databases for anything needing attention in ${title}. Check your Kanban for blocked/overdue items. Review your inbox for pending items. If anything needs attention, take action internally — update your Kanban, send messages to other agents, store findings in memory. If all clear, reply HEARTBEAT_OK.`,
           contextKey: "heartbeat:domain-check",

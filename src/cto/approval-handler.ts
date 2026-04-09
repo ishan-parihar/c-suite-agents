@@ -4,6 +4,7 @@ import * as crypto from "crypto";
 import { spawnSync } from "child_process";
 import Database from "better-sqlite3";
 import { logger } from "../logger.js";
+import { AsyncMutex } from "../runtime/async-mutex.js";
 import type { UpgradeProposal, ProposalItem } from "./upgrade-proposer.js";
 
 // Extended types for execution-layer fields
@@ -26,6 +27,8 @@ const SOURCE_WORKSPACE = (() => {
 })();
 
 const CTO_AGENT_ID = "cto-technical";
+
+const upgradeMutex = new AsyncMutex();
 
 function getDbPath(): string {
   const dataDir = path.join(
@@ -50,6 +53,7 @@ function getDb(): Database.Database {
         summary            TEXT NOT NULL,
         agent_id           TEXT NOT NULL DEFAULT '${CTO_AGENT_ID}',
         items_json         TEXT NOT NULL,
+        edit_instructions_json TEXT DEFAULT NULL,
         files_to_modify    TEXT NOT NULL,
         status             TEXT NOT NULL DEFAULT 'pending',
         created_date       TEXT NOT NULL DEFAULT (datetime('now')),
@@ -101,9 +105,11 @@ function resolveSafePath(
     throw new Error(`Path traversal not allowed: ${relativePath}`);
   }
   const resolved = path.resolve(workspace, relativePath);
-  if (!resolved.startsWith(workspace + path.sep) && resolved !== workspace) {
+  const realResolved = fs.realpathSync(resolved);
+  const realWorkspace = fs.realpathSync(workspace);
+  if (realResolved !== realWorkspace && !realResolved.startsWith(realWorkspace + path.sep)) {
     throw new Error(
-      `Path escapes workspace: ${relativePath} resolves to ${resolved}`
+      `Path escapes workspace (symlink resolved): ${relativePath} resolves to ${realResolved}`
     );
   }
   const normalizedRelative = path.normalize(relativePath);
@@ -112,7 +118,7 @@ function resolveSafePath(
       `File not in proposal's filesToModify: ${relativePath}`
     );
   }
-  return resolved;
+  return realResolved;
 }
 
 // Atomic write: write to .tmp then rename (mirrors fs-write.ts)
@@ -143,6 +149,13 @@ function performSurgicalEdit(
   oldString: string,
   newString: string
 ): EditResult {
+  const stat = fs.statSync(filePath);
+  if (stat.size > 100 * 1024) {
+    return {
+      success: false,
+      message: `File too large (max 100KB): ${filePath}`,
+    };
+  }
   const content = fs.readFileSync(filePath, "utf-8");
   const firstIndex = content.indexOf(oldString);
   if (firstIndex === -1) {
@@ -228,7 +241,8 @@ interface BackupEntry {
   existed: boolean;
 }
 
-function rollback(backups: BackupEntry[]): void {
+function rollback(backups: BackupEntry[]): { success: boolean; failedFiles: string[] } {
+  const failedFiles: string[] = [];
   for (const backup of backups) {
     try {
       if (backup.existed) {
@@ -242,14 +256,16 @@ function rollback(backups: BackupEntry[]): void {
       }
     } catch (err: any) {
       logger.error(`Failed to rollback ${backup.filePath}: ${err.message}`);
+      failedFiles.push(backup.filePath);
     }
   }
+  return { success: failedFiles.length === 0, failedFiles };
 }
 
 const MAX_CACHE_SIZE = 50;
-const proposalCache = new Map<string, UpgradeProposal>();
+const proposalCache = new Map<string, UpgradeProposalWithAgent>();
 
-export function cacheProposal(proposal: UpgradeProposal): void {
+export function cacheProposal(proposal: UpgradeProposalWithAgent): void {
   if (proposalCache.size >= MAX_CACHE_SIZE) {
     const oldestKey = proposalCache.keys().next().value;
     if (oldestKey !== undefined) proposalCache.delete(oldestKey);
@@ -257,7 +273,11 @@ export function cacheProposal(proposal: UpgradeProposal): void {
   proposalCache.set(proposal.id, proposal);
 }
 
-function getProposal(proposalId: string): UpgradeProposal | null {
+interface UpgradeProposalWithAgent extends UpgradeProposal {
+  agent_id: string;
+}
+
+function getProposal(proposalId: string): UpgradeProposalWithAgent | null {
   const cached = proposalCache.get(proposalId);
   if (cached) return cached;
 
@@ -265,35 +285,118 @@ function getProposal(proposalId: string): UpgradeProposal | null {
   const row = db
     .prepare("SELECT * FROM upgrade_log WHERE proposal_id = ?")
     .get(proposalId) as
-    | { items_json: string; files_to_modify: string; summary: string; created_date: string }
+    | { items_json: string; edit_instructions_json: string | null; files_to_modify: string; summary: string; created_date: string; agent_id: string; status: string }
     | undefined;
   if (!row) return null;
+
+  const items = JSON.parse(row.items_json) as ProposalItemWithEdits[];
+  const dbEditInstructions = row.edit_instructions_json ? JSON.parse(row.edit_instructions_json) as Array<{ file: string; old_string: string; new_string: string }> : [];
+
+  // Validate items schema
+  const validSeverities = ["critical", "high", "medium", "low", "info"];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new Error(`Invalid item at index ${i}: must be an object`);
+    }
+    if (typeof item.type !== "string") {
+      throw new Error(`Invalid item at index ${i}: type must be a string, got ${typeof item.type}`);
+    }
+    if (typeof item.title !== "string") {
+      throw new Error(`Invalid item at index ${i}: title must be a string, got ${typeof item.title}`);
+    }
+    if (!validSeverities.includes(item.severity)) {
+      throw new Error(`Invalid item at index ${i}: severity must be one of ${validSeverities.join(", ")}, got "${item.severity}"`);
+    }
+    if (item.filesToModify !== undefined) {
+      if (!Array.isArray(item.filesToModify)) {
+        throw new Error(`Invalid item at index ${i}: filesToModify must be an array or undefined`);
+      }
+      for (let j = 0; j < item.filesToModify.length; j++) {
+        if (typeof item.filesToModify[j] !== "string") {
+          throw new Error(`Invalid item at index ${i}: filesToModify[${j}] must be a string`);
+        }
+      }
+    }
+  }
+
+  // Validate edit_instructions schema
+  if (!Array.isArray(dbEditInstructions)) {
+    throw new Error(`Invalid dbEditInstructions: must be an array`);
+  }
+  for (let i = 0; i < dbEditInstructions.length; i++) {
+    const edit = dbEditInstructions[i];
+    if (typeof edit !== "object" || edit === null || Array.isArray(edit)) {
+      throw new Error(`Invalid edit instruction at index ${i}: must be an object`);
+    }
+    if (typeof edit.file !== "string") {
+      throw new Error(`Invalid edit instruction at index ${i}: file must be a string`);
+    }
+    if (typeof edit.old_string !== "string") {
+      throw new Error(`Invalid edit instruction at index ${i}: old_string must be a string`);
+    }
+    if (typeof edit.new_string !== "string") {
+      throw new Error(`Invalid edit instruction at index ${i}: new_string must be a string`);
+    }
+  }
+
+  // Distribute edit_instructions from DB back to items by matching file paths
+  if (dbEditInstructions.length > 0) {
+    for (const item of items) {
+      if (!item.edit_instructions || item.edit_instructions.length === 0) {
+        const matching = dbEditInstructions.filter(
+          (e) => item.filesToModify.includes(e.file)
+        );
+        if (matching.length > 0) {
+          item.edit_instructions = matching;
+        }
+      }
+    }
+  }
 
   return {
     id: proposalId,
     proposalDate: Date.now(),
     summary: row.summary,
-    items: JSON.parse(row.items_json) as ProposalItem[],
+    items,
     riskLevel: "low",
     estimatedEffort: "",
     rollbackPlan: "",
+    agent_id: row.agent_id,
   };
 }
 
-function storeProposalInDb(proposal: UpgradeProposal): void {
+function storeProposalInDb(proposal: UpgradeProposalWithAgent): void {
   const db = getDb();
+  const existing = db.prepare("SELECT status FROM upgrade_log WHERE proposal_id = ?").get(proposal.id) as { status: string } | undefined;
+  if (existing && existing.status !== "pending") {
+    logger.warn(`[CTO] Proposal ${proposal.id} already has status "${existing.status}", skipping insert to preserve history`);
+    return;
+  }
   db.prepare(
-    `INSERT OR REPLACE INTO upgrade_log (proposal_id, summary, items_json, files_to_modify, status, created_date)
-     VALUES (?, ?, ?, ?, 'pending', datetime('now'))`
+    `INSERT OR REPLACE INTO upgrade_log (proposal_id, summary, items_json, edit_instructions_json, files_to_modify, status, created_date)
+     VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`
   ).run(
     proposal.id,
     proposal.summary,
     JSON.stringify(proposal.items),
+    JSON.stringify(proposal.items.flatMap((i) => (i as ProposalItemWithEdits).edit_instructions ?? []).flat()),
     JSON.stringify(proposal.items.flatMap((i) => i.filesToModify))
   );
 }
 
 export async function executeApprovedUpgrade(
+  proposalId: string
+): Promise<{ success: boolean; message: string; commitHash?: string }> {
+  const release = await upgradeMutex.acquire("upgrade-execution");
+  try {
+    return await executeUpgrade(proposalId);
+  } finally {
+    release();
+  }
+}
+
+async function executeUpgrade(
   proposalId: string
 ): Promise<{ success: boolean; message: string; commitHash?: string }> {
   const workspace = validateWorkspace();
@@ -307,7 +410,18 @@ export async function executeApprovedUpgrade(
   const allFilesToModify = new Set<string>(
     proposal.items.flatMap((item) => item.filesToModify)
   );
-  const filesList = Array.from(allFilesToModify);
+  let filesList = Array.from(allFilesToModify);
+
+  if (filesList.length === 0) {
+    const editFiles = proposal.items.flatMap(
+      (item) => (item as ProposalItemWithEdits).edit_instructions?.map((e) => e.file) ?? []
+    );
+    if (editFiles.length > 0) {
+      filesList = [...new Set(editFiles)];
+      allFilesToModify.clear();
+      for (const f of filesList) allFilesToModify.add(f);
+    }
+  }
 
   const backups: BackupEntry[] = [];
   const appliedEdits: Array<{ file: string; oldString: string; newString: string }> = [];
@@ -323,11 +437,16 @@ export async function executeApprovedUpgrade(
             throw new Error(`Target file does not exist: ${edit.file}`);
           }
           if (!backups.some((b) => b.filePath === resolvedPath)) {
-            backups.push({
-              filePath: resolvedPath,
-              content: fs.readFileSync(resolvedPath, "utf-8"),
-              existed: true,
-            });
+            const fileStat = fs.statSync(resolvedPath);
+            if (fileStat.size > 100 * 1024) {
+              logger.warn({ path: resolvedPath, size: fileStat.size }, "File too large, skipping backup");
+            } else {
+              backups.push({
+                filePath: resolvedPath,
+                content: fs.readFileSync(resolvedPath, "utf-8"),
+                existed: true,
+              });
+            }
           }
           const result = performSurgicalEdit(resolvedPath, edit.old_string, edit.new_string);
           if (!result.success) {
@@ -343,11 +462,16 @@ export async function executeApprovedUpgrade(
             throw new Error(`Target file does not exist: ${targetFile}`);
           }
           if (!backups.some((b) => b.filePath === resolvedPath)) {
-            backups.push({
-              filePath: resolvedPath,
-              content: fs.readFileSync(resolvedPath, "utf-8"),
-              existed: true,
-            });
+            const fileStat = fs.statSync(resolvedPath);
+            if (fileStat.size > 100 * 1024) {
+              logger.warn({ path: resolvedPath, size: fileStat.size }, "File too large, skipping backup");
+            } else {
+              backups.push({
+                filePath: resolvedPath,
+                content: fs.readFileSync(resolvedPath, "utf-8"),
+                existed: true,
+              });
+            }
           }
           const result = performSurgicalEdit(resolvedPath, item.current_state, item.proposed_state);
           if (!result.success) {
@@ -362,8 +486,9 @@ export async function executeApprovedUpgrade(
     const commitResult = gitCommit(workspace, proposalId, proposal.summary);
     if (!commitResult.success) {
       logger.error(`[CTO] Git commit failed, rolling back ${backups.length} file(s)`);
-      rollback(backups);
-      return { success: false, message: `Git commit failed: ${commitResult.message}` };
+      const rollbackResult = rollback(backups);
+      const rollbackDetail = rollbackResult.success ? "" : ` Rollback partially failed: ${rollbackResult.failedFiles.join(", ")}.`;
+      return { success: false, message: `Git commit failed: ${commitResult.message}.${rollbackDetail}` };
     }
 
     const db = getDb();
@@ -379,7 +504,8 @@ export async function executeApprovedUpgrade(
     };
   } catch (err: any) {
     logger.error(`[CTO] Upgrade ${proposalId} failed: ${err.message}. Rolling back ${backups.length} file(s)...`);
-    rollback(backups);
+    const rollbackResult = rollback(backups);
+    const rollbackDetail = rollbackResult.success ? "" : ` Rollback partially failed: ${rollbackResult.failedFiles.join(", ")}.`;
     try {
       const db = getDb();
       db.prepare(
@@ -390,14 +516,15 @@ export async function executeApprovedUpgrade(
     }
     return {
       success: false,
-      message: `Upgrade failed: ${err.message}. All changes have been rolled back.`,
+      message: `Upgrade failed: ${err.message}. All changes have been rolled back.${rollbackDetail}`,
     };
   }
 }
 
 export async function handleUpgradeApproval(
   proposalId: string,
-  decision: "approved" | "rejected"
+  decision: "approved" | "rejected",
+  callerAgentId?: string
 ): Promise<{ success: boolean; message: string }> {
   logger.info(`[CTO] Processing ${decision} decision for proposal ${proposalId}`);
 
@@ -410,6 +537,18 @@ export async function handleUpgradeApproval(
   const proposal = getProposal(proposalId);
   if (!proposal) {
     return { success: false, message: `Proposal not found: ${proposalId}` };
+  }
+
+  if (proposal.agent_id !== CTO_AGENT_ID) {
+    return { success: false, message: "Unauthorized: proposal was not created by CTO agent" };
+  }
+
+  if (callerAgentId !== undefined) {
+    if (callerAgentId !== CTO_AGENT_ID) {
+      return { success: false, message: "Unauthorized: caller is not the CTO agent" };
+    }
+  } else {
+    logger.warn(`[CTO] handleUpgradeApproval called without callerAgentId — allowing for backwards compatibility`);
   }
 
   storeProposalInDb(proposal);
@@ -427,7 +566,7 @@ export async function handleUpgradeApproval(
   }
 
   db.prepare(
-    `UPDATE upgrade_log SET status = 'approved', approval_date = datetime('now') WHERE proposal_id = ?`
+    `UPDATE upgrade_log SET status = 'executing', approval_date = datetime('now') WHERE proposal_id = ?`
   ).run(proposalId);
   logger.info(`[CTO] Proposal ${proposalId} approved. Executing upgrade...`);
 

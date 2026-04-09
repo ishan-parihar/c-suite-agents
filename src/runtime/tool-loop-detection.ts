@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { logger } from '../logger.js';
 
+/**
+ * Tracks which toolName+argsHash combinations have been circuit-broken.
+ * Prevents self-resetting when the BLOCKED message produces varying resultHashes.
+ */
+const circuitBreakerKeys = new Set<string>();
+
 export type LoopDetectorKind =
   | 'generic_repeat'
   | 'known_poll_no_progress'
@@ -337,12 +343,27 @@ export function detectToolCallLoop(
   }
 
   const currentHash = hashToolCall(toolName, params);
+
+  // C1 fix: If this tool+args combo is already circuit-broken, stay blocked
+  const breakerKey = `${toolName.toLowerCase()}:${currentHash}`;
+  if (circuitBreakerKeys.has(breakerKey)) {
+    return {
+      stuck: true,
+      level: 'critical',
+      detector: 'global_circuit_breaker',
+      count: -1,
+      message: `CRITICAL: ${toolName} is permanently blocked by global circuit breaker. Session execution blocked.`,
+      warningKey: `global:${breakerKey}:blocked`,
+    };
+  }
+
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
-  const knownPollTool = isKnownPollTool(toolName);
-  const pingPong = getPingPongStreak(history, currentHash);
+  const knownPollTool = config.detectors.knownPollNoProgress ? isKnownPollTool(toolName) : false;
+  const pingPong = config.detectors.pingPong ? getPingPongStreak(history, currentHash) : { count: 0, pairedToolName: undefined, pairedSignature: undefined, noProgressEvidence: false };
 
   if (noProgressStreak >= config.globalCircuitBreakerThreshold) {
+    circuitBreakerKeys.add(`${toolName.toLowerCase()}:${currentHash}`);
     logger.error(
       `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
     );
@@ -416,18 +437,31 @@ export function detectToolCallLoop(
     };
   }
 
-  const recentCount = history.filter(
-    (h) => h.toolName === toolName && h.argsHash === currentHash,
-  ).length;
+  // H11 fix: Count only CONSECUTIVE matching entries from end of history
+  let consecutiveCount = 0;
+  let latestResult: string | undefined;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const h = history[i];
+    if (h.toolName.toLowerCase() === toolName.toLowerCase() && h.argsHash === currentHash) {
+      if (latestResult === undefined) {
+        latestResult = h.resultHash;
+      } else if (h.resultHash !== latestResult) {
+        break;
+      }
+      consecutiveCount += 1;
+    } else {
+      break;
+    }
+  }
 
-  if (config.detectors.genericRepeat && recentCount >= config.warningThreshold) {
-    logger.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+  if (config.detectors.genericRepeat && consecutiveCount >= config.warningThreshold) {
+    logger.warn(`Loop warning: ${toolName} called ${consecutiveCount} times with identical arguments`);
     return {
       stuck: true,
       level: 'warning',
       detector: 'generic_repeat',
-      count: recentCount,
-      message: `WARNING: You have called ${toolName} ${recentCount} times with identical arguments. If this is not making progress, stop retrying and report the task as failed.`,
+      count: consecutiveCount,
+      message: `WARNING: You have called ${toolName} ${consecutiveCount} times with identical arguments. If this is not making progress, stop retrying and report the task as failed.`,
       warningKey: `generic:${toolName}:${currentHash}`,
     };
   }
@@ -443,6 +477,7 @@ export function recordToolCall(
   toolName: string,
   params: unknown,
   toolCallId?: string,
+  config: ToolLoopDetectionConfig = DEFAULT_LOOP_DETECTION_CONFIG,
 ): ToolCallRecord[] {
   const newRecord: ToolCallRecord = {
     toolName,
@@ -452,8 +487,8 @@ export function recordToolCall(
   };
 
   const updated = [...history, newRecord];
-  if (updated.length > DEFAULT_LOOP_DETECTION_CONFIG.historySize) {
-    return updated.slice(updated.length - DEFAULT_LOOP_DETECTION_CONFIG.historySize);
+  if (updated.length > config.historySize) {
+    return updated.slice(updated.length - config.historySize);
   }
   return updated;
 }
@@ -468,6 +503,7 @@ export function recordToolCallOutcome(
   result: unknown,
   error?: unknown,
   toolCallId?: string,
+  config: ToolLoopDetectionConfig = DEFAULT_LOOP_DETECTION_CONFIG,
 ): ToolCallRecord[] {
   const resultHash = hashToolOutcome(toolName, params, result, error);
   if (resultHash === undefined) {
@@ -500,8 +536,8 @@ export function recordToolCallOutcome(
       timestamp: Date.now(),
     };
     const appended = [...updated, newRecord];
-    if (appended.length > DEFAULT_LOOP_DETECTION_CONFIG.historySize) {
-      return appended.slice(appended.length - DEFAULT_LOOP_DETECTION_CONFIG.historySize);
+    if (appended.length > config.historySize) {
+      return appended.slice(appended.length - config.historySize);
     }
     return appended;
   }
@@ -538,4 +574,20 @@ export function getToolCallStats(history: ToolCallRecord[]): {
     uniquePatterns: patterns.size,
     mostFrequent,
   };
+}
+
+/**
+ * Reset the circuit breaker for a specific tool+params combination.
+ * Call this when progress is made to allow the tool to be used again.
+ */
+export function resetCircuitBreaker(toolName: string, params: unknown): void {
+  const key = `${toolName}:${hashToolCall(toolName, params)}`;
+  circuitBreakerKeys.delete(key);
+}
+
+/**
+ * Clear all circuit breaker entries. Call this on session reset.
+ */
+export function clearCircuitBreakers(): void {
+  circuitBreakerKeys.clear();
 }

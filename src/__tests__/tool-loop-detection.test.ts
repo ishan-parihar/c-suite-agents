@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach } from "bun:test";
 import {
   hashToolCall,
   hashToolOutcome,
@@ -7,6 +7,7 @@ import {
   recordToolCallOutcome,
   getToolCallStats,
   DEFAULT_LOOP_DETECTION_CONFIG,
+  clearCircuitBreakers,
 } from "../runtime/tool-loop-detection.js";
 import type { ToolCallRecord, ToolLoopDetectionConfig } from "../runtime/tool-loop-detection.js";
 
@@ -65,6 +66,11 @@ function makeRecord(
 }
 
 // ─── 1. hashToolCall ────────────────────────────────────────────────────────
+
+// Clear module-level circuit breaker state between tests
+beforeEach(() => {
+  clearCircuitBreakers();
+});
 
 describe("hashToolCall", () => {
   test("same tool+params produces same hash", () => {

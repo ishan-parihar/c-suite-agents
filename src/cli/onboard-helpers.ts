@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
 // 1. LLM Reachability Probe
@@ -107,6 +107,11 @@ export function readPackageVersion(): string {
   for (const path of candidates) {
     try {
       if (existsSync(path)) {
+        const stat = statSync(path);
+        if (stat.size > 100 * 1024) {
+          console.warn(`[strategos] WARN: package.json too large (${stat.size} bytes), skipping`);
+          continue;
+        }
         const pkg = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
         if (typeof pkg.version === "string" && pkg.version) {
           return pkg.version;
@@ -218,6 +223,10 @@ export async function handleReset(
     // Parse config to find workspace paths
     try {
       if (existsSync(configPath)) {
+        const stat = statSync(configPath);
+        if (stat.size > 100 * 1024) {
+          console.warn(`[strategos] WARN: Config file too large (${stat.size} bytes), skipping full reset`);
+        } else {
         const raw = readFileSync(configPath, "utf-8");
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const paths = parsed.paths as Record<string, string> | undefined;
@@ -235,6 +244,7 @@ export async function handleReset(
           if (existsSync(officeDir) && !dirsToRemove.includes(officeDir)) {
             dirsToRemove.push(officeDir);
           }
+        }
         }
       }
     } catch {
@@ -280,6 +290,14 @@ export function detectExistingConfig(
   }
 
   try {
+    const cfgStat = statSync(configPath);
+    if (cfgStat.size > 100 * 1024) {
+      return {
+        exists: true,
+        config: null,
+        error: `Config file too large (${cfgStat.size} bytes, max 100KB)`,
+      };
+    }
     const raw = readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return { exists: true, config: parsed };

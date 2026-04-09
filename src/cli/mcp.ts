@@ -42,6 +42,15 @@ function loadRawConfig(): Record<string, unknown> {
   if (!fs.existsSync(CONFIG_FILE)) {
     return {};
   }
+  try {
+    const stat = fs.statSync(CONFIG_FILE);
+    if (stat.size > 100 * 1024) {
+      console.warn(`[strategos] WARN: Config file too large (${stat.size} bytes), skipping`);
+      return {};
+    }
+  } catch {
+    return {};
+  }
   const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
 }

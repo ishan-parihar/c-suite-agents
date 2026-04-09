@@ -39,7 +39,6 @@ type McpServerConfig = McpLocalConfig | McpRemoteConfig;
 
 const CONNECTION_TIMEOUT_MS = 10_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
-const SLOW_START_TIMEOUT_MS = 30_000;
 const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000;
 const INITIAL_RECONNECT_DELAY_MS = 2000;
 
@@ -135,6 +134,8 @@ async function connectLocal(
     // Auto-reconnect on transport close with exponential backoff
     transport.onclose = async () => {
       if (disposed) return;
+      // Cancel any previously scheduled reconnect to prevent duplicate timers
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       const delay = Math.min(
         INITIAL_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempt),
         MAX_RECONNECT_DELAY_MS,
@@ -144,6 +145,7 @@ async function connectLocal(
         "MCP server disconnected, scheduling reconnect",
       );
       reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null;
         if (disposed) return;
         try {
           const newConn = await connectLocal(config, serverName, onReconnect, reconnectAttempt + 1);
@@ -178,8 +180,12 @@ async function connectLocal(
       serverName,
       tools,
       callTool: async (toolName, args) => {
+        const timeoutId = setTimeout(
+          () => {},
+          TOOL_CALL_TIMEOUT_MS,
+        );
         return Promise.race([
-          client.callTool({ name: toolName, arguments: args }),
+          client.callTool({ name: toolName, arguments: args }).finally(() => clearTimeout(timeoutId)),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS),
           ),
@@ -261,6 +267,7 @@ async function connectRemote(
       // Auto-reconnect on transport close with exponential backoff
       transport.onclose = async () => {
         if (disposed) return;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         const delay = Math.min(
           INITIAL_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempt),
           MAX_RECONNECT_DELAY_MS,
@@ -270,6 +277,7 @@ async function connectRemote(
           "Remote MCP server disconnected, scheduling reconnect",
         );
         reconnectTimer = setTimeout(async () => {
+          reconnectTimer = null;
           if (disposed) return;
           try {
             const newConn = await connectRemote(config, serverName, onReconnect, reconnectAttempt + 1);

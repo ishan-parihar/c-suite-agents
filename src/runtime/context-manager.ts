@@ -13,6 +13,7 @@
 import { logger } from "../logger.js";
 import type { ContextWindowInfo } from "./context-window.js";
 import { isRealConversation } from "./utils.js";
+import { AsyncMutex } from "./async-mutex.js";
 
 // ── Token Estimation ──────────────────────────────────────────────
 // OpenClaw: CHARS_PER_TOKEN = 4 with SAFETY_MARGIN = 1.2 (20% buffer)
@@ -142,6 +143,7 @@ export class ContextManager {
   private summarizeFn: SummarizeFn | null = null;
   private persist: PersistCallbacks | null = null;
   private contextWindowInfo: ContextWindowInfo | null = null;
+  private sessionMutex = new AsyncMutex();
 
   constructor(config?: Partial<ContextManagerConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -254,102 +256,121 @@ export class ContextManager {
 
   // ── Message Management ───────────────────────────────────────────
 
-  addUserMessage(sessionId: string, content: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+  async addUserMessage(sessionId: string, content: string): Promise<void> {
+    const release = await this.sessionMutex.acquire("session");
+    try {
+      const session = this.sessions.get(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    const tokens = estimateTokens(content);
-    const msg: ChatMessage = {
-      role: "user",
-      content,
-      timestamp: Date.now(),
-      tokenEstimate: tokens,
-    };
+      const tokens = estimateTokens(content);
+      const msg: ChatMessage = {
+        role: "user",
+        content,
+        timestamp: Date.now(),
+        tokenEstimate: tokens,
+      };
 
-    session.messages.push(msg);
-    session.totalTokens += tokens;
-    session.lastUsed = Date.now();
+      session.messages.push(msg);
+      session.totalTokens += tokens;
+      session.lastUsed = Date.now();
 
-    // Check if this is real conversation (not just heartbeat)
-    if (!session.hasRealConversation && hasMeaningfulText(content)) {
-      session.hasRealConversation = true;
+      if (!session.hasRealConversation && hasMeaningfulText(content)) {
+        session.hasRealConversation = true;
+      }
+
+      this._trimIfNeededInternal(session);
+      this.triggerSave(sessionId);
+    } finally {
+      release();
     }
-
-    this.trimIfNeeded(session);
-    this.triggerSave(sessionId);
   }
 
-  addAssistantMessage(sessionId: string, content: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+  async addAssistantMessage(sessionId: string, content: string): Promise<void> {
+    const release = await this.sessionMutex.acquire("session");
+    try {
+      const session = this.sessions.get(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    const tokens = estimateTokens(content);
-    const msg: ChatMessage = {
-      role: "assistant",
-      content,
-      timestamp: Date.now(),
-      tokenEstimate: tokens,
-    };
+      const tokens = estimateTokens(content);
+      const msg: ChatMessage = {
+        role: "assistant",
+        content,
+        timestamp: Date.now(),
+        tokenEstimate: tokens,
+      };
 
-    session.messages.push(msg);
-    session.totalTokens += tokens;
-    session.lastUsed = Date.now();
+      session.messages.push(msg);
+      session.totalTokens += tokens;
+      session.lastUsed = Date.now();
 
-    this.trimIfNeeded(session);
+      this._trimIfNeededInternal(session);
+    } finally {
+      release();
+    }
   }
 
   /**
    * Record an assistant message that contains tool_calls.
    * If textContent is empty/null, content is stored as null (required by OpenAI-compatible backends).
    */
-  recordAssistantToolCalls(sessionId: string, textContent: string | null | undefined, toolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }>): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+  async recordAssistantToolCalls(sessionId: string, textContent: string | null | undefined, toolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }>): Promise<void> {
+    const release = await this.sessionMutex.acquire("session");
+    try {
+      const session = this.sessions.get(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    const content = (textContent && textContent.trim().length > 0) ? textContent : null;
-    const tokens = content ? estimateTokens(content) : 0;
+      const content = (textContent && textContent.trim().length > 0) ? textContent : null;
+      const tokens = content ? estimateTokens(content) : 0;
 
-    const msg: ChatMessage = {
-      role: "assistant",
-      content,
-      timestamp: Date.now(),
-      tokenEstimate: tokens,
-      tool_calls: toolCalls,
-    };
+      const msg: ChatMessage = {
+        role: "assistant",
+        content,
+        timestamp: Date.now(),
+        tokenEstimate: tokens,
+        tool_calls: toolCalls,
+      };
 
-    session.messages.push(msg);
-    session.totalTokens += tokens;
-    session.lastUsed = Date.now();
+      session.messages.push(msg);
+      session.totalTokens += tokens;
+      session.lastUsed = Date.now();
 
-    this.trimIfNeeded(session);
-    this.triggerSave(sessionId);
+      this._trimIfNeededInternal(session);
+      this.triggerSave(sessionId);
+    } finally {
+      release();
+    }
   }
 
-  recordToolCall(sessionId: string, toolCall: ToolCall): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+  async recordToolCall(sessionId: string, toolCall: ToolCall): Promise<void> {
+    const release = await this.sessionMutex.acquire("session");
+    try {
+      const session = this.sessions.get(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
 
-    const resultTokens = toolCall.result ? estimateTokens(toolCall.result) : 0;
-    toolCall.tokenEstimate = resultTokens;
+      const resultTokens = toolCall.result ? estimateTokens(toolCall.result) : 0;
+      toolCall.tokenEstimate = resultTokens;
 
-    session.toolCalls.push(toolCall);
+      session.toolCalls.push(toolCall);
 
-    if (toolCall.result) {
-      const resultMsg: ChatMessage = {
-        role: "tool",
-        content: toolCall.result,
-        tool_call_id: toolCall.id,
-        timestamp: Date.now(),
-        tokenEstimate: resultTokens,
-      };
-      session.messages.push(resultMsg);
-      session.totalTokens += resultTokens;
+      if (toolCall.result) {
+        const resultMsg: ChatMessage = {
+          role: "tool",
+          content: toolCall.result,
+          tool_call_id: toolCall.id,
+          timestamp: Date.now(),
+          tokenEstimate: resultTokens,
+        };
+        session.messages.push(resultMsg);
+        session.totalTokens += resultTokens;
+      }
+
+      session.lastUsed = Date.now();
+
+      this.pruneToolResults(session);
+      this._trimIfNeededInternal(session);
+    } finally {
+      release();
     }
-
-    session.lastUsed = Date.now();
-
-    this.pruneToolResults(session);
-    this.trimIfNeeded(session);
   }
 
   getMessagesForLLM(sessionId: string): ChatMessage[] {
@@ -379,7 +400,17 @@ export class ContextManager {
 
   // ── Compaction ───────────────────────────────────────────────────
 
-  compact(sessionId: string, keepRecent: number = 10): void {
+  async compact(sessionId: string, keepRecent: number = 10): Promise<void> {
+    const release = await this.sessionMutex.acquire("session");
+    try {
+      await this._compactInternal(sessionId, keepRecent);
+    } finally {
+      release();
+    }
+  }
+
+  // Internal version (no mutex — called from within already-wrapped methods)
+  private async _compactInternal(sessionId: string, keepRecent: number = 10): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
@@ -418,7 +449,7 @@ export class ContextManager {
 
     // Attempt LLM-based summarization if available
     if (this.summarizeFn && oldMessages.length >= 2) {
-      this.compactWithLlm(session, systemMsg, oldMessages, session.messages.slice(-keepRecent));
+      await this.compactWithLlm(session, systemMsg, oldMessages, session.messages.slice(-keepRecent));
     } else {
       // Fallback: improved local summary
       this.compactLocal(session, systemMsg, oldMessages, session.messages.slice(-keepRecent));
@@ -702,7 +733,8 @@ export class ContextManager {
 
   // ── Trimming ─────────────────────────────────────────────────────
 
-  private trimIfNeeded(session: AgentSession): void {
+  // Internal version (no mutex — called from within already-wrapped methods)
+  private async _trimIfNeededInternal(session: AgentSession): Promise<void> {
     const maxTokens = this.effectiveMaxTokens();
 
     // Check message count limit
@@ -723,14 +755,14 @@ export class ContextManager {
         ? session.messages.slice(1).reduce((s, m) => s + (m.tokenEstimate || 0), 0) / (session.messages.length - 1)
         : 200;
       const keepRecent = Math.max(4, Math.min(16, Math.floor(headroom / avgMsgTokens)));
-      this.compact(session.sessionId, keepRecent);
+      await this._compactInternal(session.sessionId, keepRecent);
       return;
     }
 
     // Emergency compaction at 90% — minimal keepRecent
     if (usagePct > 0.9) {
       logger.warn({ sessionId: session.sessionId, usagePct }, "Context near overflow — emergency compaction");
-      this.compact(session.sessionId, 4);
+      await this._compactInternal(session.sessionId, 4);
     }
   }
 

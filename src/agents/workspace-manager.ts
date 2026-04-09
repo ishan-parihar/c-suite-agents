@@ -99,6 +99,10 @@ function readWorkspaceFileWithCache(filePath: string, workspaceDir: string): { c
 
   try {
     const stat = fs.statSync(resolvedPath);
+    if (stat.size > 100 * 1024) {
+      logger.warn({ filePath: resolvedPath, size: stat.size }, "Workspace file too large, skipping");
+      return null;
+    }
     const identity = workspaceFileIdentity(stat);
 
     // Cache hit — identity unchanged
@@ -151,6 +155,11 @@ function resolveStatePath(workspaceDir: string): string {
 function readWorkspaceState(workspaceDir: string): WorkspaceState | null {
   const statePath = resolveStatePath(workspaceDir);
   try {
+    const stat = fs.statSync(statePath);
+    if (stat.size > 100 * 1024) {
+      logger.warn({ path: statePath, size: stat.size }, "workspace-state.json too large, returning null");
+      return null;
+    }
     const raw = fs.readFileSync(statePath, "utf-8");
     const state = JSON.parse(raw) as WorkspaceState;
     // Normalize: ensure lastFileChange exists for backward compatibility

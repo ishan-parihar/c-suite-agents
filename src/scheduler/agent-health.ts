@@ -20,6 +20,8 @@ export interface AgentHealth {
 const CONSECUTIVE_FAILURE_THRESHOLD = 3;
 const SILENT_THRESHOLD_MS = 30 * 60 * 1000;
 const DEGRADED_THRESHOLD_MS = 15 * 60 * 1000;
+const MAX_HEALTH_ENTRIES = 50;
+const HEALTH_ENTRY_TTL_MS = 24 * 60 * 60 * 1000;
 
 class AgentHealthRegistry {
   private health: Map<string, AgentHealth> = new Map();
@@ -43,6 +45,10 @@ class AgentHealthRegistry {
   private getOrInit(agentId: string): AgentHealth {
     let h = this.health.get(agentId);
     if (!h) {
+      // Evict oldest non-core entry if map is at capacity
+      if (this.health.size >= MAX_HEALTH_ENTRIES) {
+        this.evictOldest();
+      }
       h = {
         agentId,
         lastHeartbeat: 0,
@@ -57,6 +63,33 @@ class AgentHealthRegistry {
       this.health.set(agentId, h);
     }
     return h;
+  }
+
+  /** Remove entries not in core staff whose lastHeartbeat is older than 24h. */
+  cleanup(): void {
+    const coreIds = new Set(getCoreStaffIds());
+    const now = Date.now();
+    for (const [agentId, h] of this.health.entries()) {
+      if (!coreIds.has(agentId) && (now - h.lastHeartbeat) > HEALTH_ENTRY_TTL_MS) {
+        this.health.delete(agentId);
+      }
+    }
+  }
+
+  /** Evict the single entry with the oldest lastHeartbeat (used when map is at capacity). */
+  private evictOldest(): void {
+    const coreIds = new Set(getCoreStaffIds());
+    let oldestId: string | undefined;
+    let oldestTime = Infinity;
+    for (const [agentId, h] of this.health.entries()) {
+      if (!coreIds.has(agentId) && h.lastHeartbeat < oldestTime) {
+        oldestTime = h.lastHeartbeat;
+        oldestId = agentId;
+      }
+    }
+    if (oldestId) {
+      this.health.delete(oldestId);
+    }
   }
 
   recordHeartbeat(agentId: string, ok: boolean) {

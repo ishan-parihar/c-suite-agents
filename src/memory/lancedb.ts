@@ -140,8 +140,7 @@ export class Memory {
     const queryWords = this.extractWords(query);
     if (queryWords.size === 0) return [];
 
-    const rows = await this.events!.query().toArray() as any[];
-    const agentRows = rows.filter((r: any) => r.agent_id === agentId);
+    const agentRows = await this.events!.query().where(`agent_id = "${agentId}"`).toArray() as any[];
 
     const results: Array<{ row: any; matchCount: number }> = [];
 
@@ -178,10 +177,29 @@ export class Memory {
   async searchHybrid(agentId: string, query: string, topK = 15): Promise<any[]> {
     await this.ensureAgent(agentId);
 
-    const [vectorResults, keywordResults] = await Promise.all([
+    const results = await Promise.allSettled([
       this.searchVector(agentId, query, topK),
       this.searchKeyword(agentId, query, topK),
     ]);
+
+    const vectorResult = results[0];
+    const keywordResult = results[1];
+
+    let vectorResults: any[] = [];
+    let keywordResults: any[] = [];
+
+    if (vectorResult.status === "fulfilled") {
+      vectorResults = vectorResult.value;
+    }
+    if (keywordResult.status === "fulfilled") {
+      keywordResults = keywordResult.value;
+    }
+
+    if (vectorResult.status === "rejected" && keywordResult.status === "rejected") {
+      throw new Error(
+        `Hybrid search failed entirely. Vector: ${vectorResult.reason?.message ?? "unknown"}. Keyword: ${keywordResult.reason?.message ?? "unknown"}`,
+      );
+    }
 
     const seen = new Set<string>();
     const merged: any[] = [];

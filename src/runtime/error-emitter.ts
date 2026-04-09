@@ -143,7 +143,7 @@ export class ErrorEmitter {
 
   private constructor() {
     this.emitter = new EventEmitter();
-    this.emitter.setMaxListeners(0); // No listener limit warning
+    this.emitter.setMaxListeners(50);
     this.emitter.on("error", (err: unknown) => {
       logger.error({ err }, "ErrorBus: unhandled error event");
     });

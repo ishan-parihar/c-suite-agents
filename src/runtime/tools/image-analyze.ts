@@ -1,10 +1,10 @@
 // Image Analyze Tool — Analyzes images using vision-capable LLMs
 // Standalone implementation — no cross-dependencies with other tools
 
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import { lookup } from "node:dns/promises";
 import { homedir } from "node:os";
-import { join, extname, resolve, normalize } from "node:path";
+import { join, extname, resolve, normalize, sep } from "node:path";
 import OpenAI from "openai";
 import { logger } from "../../logger.js";
 import { loadConfig } from "../../config/loader.js";
@@ -106,7 +106,12 @@ function validateNotPrivateIP(url: URL): void {
  */
 async function validateResolvedIP(hostname: string): Promise<void> {
   try {
-    const { address } = await lookup(hostname);
+    const { address } = await Promise.race([
+      lookup(hostname),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("DNS lookup timeout (5s)")), 5000)
+      ),
+    ]);
     if (isPrivateIP(address)) {
       throw new Error(`DNS rebinding blocked: ${hostname} resolved to private/reserved IP ${address}`);
     }
@@ -157,9 +162,14 @@ async function imageToDataUrl(source: string): Promise<string> {
     resolve(join(homedir(), ".strategos", "media")),
     resolve(join(homedir(), ".local", "share", "strategos", "media")),
   ];
-  const resolved = resolve(source);
+  let resolved = resolve(source);
+  try {
+    resolved = realpathSync(resolved);
+  } catch {
+    throw new Error(`File not found: ${source}`);
+  }
 
-  if (!allowedBaseDirs.some((base) => resolved.startsWith(base))) {
+  if (!allowedBaseDirs.some((base) => resolved === base || resolved.startsWith(base + sep))) {
     throw new Error(`Path traversal blocked: ${source} (must be under ${allowedBaseDirs[0]} or ${allowedBaseDirs[1]})`);
   }
 
@@ -278,7 +288,7 @@ export function createImageAnalyzeTool(): AnyAgentTool | null {
           model,
           messages: [{ role: "user", content: contentParts }],
           max_tokens: 2048,
-        });
+        }, { timeout: 60000 });
 
         const description = response.choices[0]?.message?.content || "No description returned.";
         logger.info({ sources: sources.length, model }, "image.analyze completed");

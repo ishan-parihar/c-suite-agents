@@ -56,10 +56,15 @@ export function createCodeReadTool() {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };
       }
 
-      const resolvedPath = path.resolve(sourceWorkspace, file_path);
+      let resolvedPath = path.resolve(sourceWorkspace, file_path);
+      try {
+        resolvedPath = fs.realpathSync(resolvedPath);
+      } catch {
+        return { content: [{ type: "text", text: `Error: File not found: ${file_path}` }] };
+      }
 
-      // Verify resolved path starts with SOURCE_WORKSPACE
-      if (!resolvedPath.startsWith(sourceWorkspace)) {
+      // Verify resolved path is within SOURCE_WORKSPACE
+      if (!(resolvedPath === sourceWorkspace || resolvedPath.startsWith(sourceWorkspace + path.sep))) {
         return { content: [{ type: "text", text: "Error: Access denied. File is outside the source code workspace." }] };
       }
 

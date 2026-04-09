@@ -127,7 +127,22 @@ export class AgentExecutor {
     if (this.messageTimer) { clearTimeout(this.messageTimer); this.messageTimer = null; }
     if (this.proactiveTimer) { clearTimeout(this.proactiveTimer); this.proactiveTimer = null; }
     this.inactivityTracker.stop();
+    this.cleanupSessions().catch((err) => { logger.error({ err: err.message }, "cleanupSessions failed during shutdown"); });
     logger.info("Agent executor stopped");
+  }
+
+  async cleanupSessions(): Promise<void> {
+    try {
+      const sr = getSessionRegistry();
+      const activeSessions = await sr.list();
+      const activeIds = new Set(activeSessions.map((s) => s.session_id));
+      for (const sid of this.sessionsInitialized) {
+        if (!activeIds.has(sid)) {
+          this.sessionsInitialized.delete(sid);
+          this.sessionMap.delete(sid);
+        }
+      }
+    } catch { /* ignore */ }
   }
 
   private runMessageLoop() {
@@ -290,7 +305,7 @@ export class AgentExecutor {
       const instructionFiles = await this.discoverAndCacheInstructionFiles(agentId);
 
       // Pending system events
-      const pendingEvents = SystemEventQueue.peekLatest(agentId);
+      const pendingEvents = await SystemEventQueue.peekLatest(agentId);
 
       // Build heartbeat task prompt
       const lines: string[] = [];
@@ -353,8 +368,8 @@ export class AgentExecutor {
 
       // Handle silent ack
       if (result.isSilentAck) {
-        SystemEventQueue.clear(agentId);
-        const { shouldSkip } = SystemEventQueue.recordAck(agentId);
+        await SystemEventQueue.clear(agentId);
+        const { shouldSkip } = await SystemEventQueue.recordAck(agentId);
         if (shouldSkip) {
           logger.info({ agentId }, "heartbeat:sleep_mode_entered (too many passive cycles)");
         } else {
@@ -364,7 +379,7 @@ export class AgentExecutor {
       }
 
       // Substantive finding — reset ack counter
-      SystemEventQueue.resetAck(agentId);
+      await SystemEventQueue.resetAck(agentId);
 
       // Auto-store if substantive
       if (result.hasSubstantiveFinding) {
@@ -413,7 +428,7 @@ export class AgentExecutor {
           }
         }
 
-        SystemEventQueue.clear(agentId);
+        await SystemEventQueue.clear(agentId);
       }
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -518,7 +533,7 @@ export class AgentExecutor {
           case "compact":
             const sessionId = this.sessionMap.get(agentId);
             if (sessionId) {
-              this.runtime.compactSession(sessionId);
+              await this.runtime.compactSession(sessionId);
               logger.info({ agentId }, "policy:session_compacted");
             }
             break;

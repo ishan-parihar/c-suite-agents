@@ -933,9 +933,10 @@ export class SelfHealerClass {
     context: RecoveryContext,
   ): Promise<{ success: boolean; message: string }> {
     const timeout = this.recoveryTimeoutMs;
+    let timeoutId: ReturnType<typeof setTimeout>;
     const timeoutPromise = new Promise<{ success: false; message: string }>(
       (resolve) =>
-        setTimeout(
+        timeoutId = setTimeout(
           () =>
             resolve({
               success: false,
@@ -974,7 +975,7 @@ export class SelfHealerClass {
         break;
     }
 
-    return Promise.race([actionPromise, timeoutPromise]);
+    return Promise.race([actionPromise.finally(() => clearTimeout(timeoutId!)), timeoutPromise]);
   }
 
   // -----------------------------------------------------------------------
@@ -1170,10 +1171,10 @@ export class SelfHealerClass {
               success: true,
               message: `LLM failover to fallback-model initiated — runtime accessible with ${sessions.length} session(s)`,
             };
-          } catch {
+          } catch (err) {
             return {
-              success: true,
-              message: `Failover target logged: ${target} — model fallback will be used on next LLM call`,
+              success: false,
+              message: `Failover to ${target} failed: ${err instanceof Error ? err.message : String(err)}`,
             };
           }
         }
@@ -1416,7 +1417,7 @@ export class SelfHealerClass {
         };
       }
 
-      runtime.compactSession(sessionId);
+      await runtime.compactSession(sessionId);
 
       return {
         success: true,

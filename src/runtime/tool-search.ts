@@ -7,6 +7,19 @@ export interface ToolSearchResult {
   matchScore: number;
 }
 
+/**
+ * Check if `term` is a subsequence of `target` (characters appear in order, not necessarily contiguous).
+ * Hard-limited to 12 chars to prevent ReDoS-style abuse.
+ */
+function isSubsequence(term: string, target: string): boolean {
+  if (term.length > 12) return false;
+  let ti = 0;
+  for (let i = 0; i < target.length && ti < term.length; i++) {
+    if (target[i] === term[ti]) ti++;
+  }
+  return ti === term.length;
+}
+
 export class ToolSearch {
   private tools: ToolDefinition[];
 
@@ -34,13 +47,8 @@ export class ToolSearch {
             score += 2;
           }
 
-          try {
-            const fuzzy = new RegExp(term.split("").join(".*"), "i");
-            if (fuzzy.test(tool.name)) {
-              score += 3;
-            }
-          } catch {
-            // skip invalid regex terms
+          if (isSubsequence(term, tool.name)) {
+            score += 3;
           }
         }
 

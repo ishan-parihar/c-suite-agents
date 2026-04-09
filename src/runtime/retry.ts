@@ -85,6 +85,9 @@ export function computeBackoffDelay(
   maxDelayMs: number,
   jitter: number,
 ): number {
+  // Safety: clamp inputs to prevent zero-delay or negative results
+  minDelayMs = Math.max(1, minDelayMs);
+
   const exponent = attempt - 1;
   const base = minDelayMs * Math.pow(2, exponent);
 
@@ -96,7 +99,7 @@ export function computeBackoffDelay(
   const clamped = Math.max(minDelayMs, Math.min(maxDelayMs, withJitter));
 
   // Safety: guarantee finite, non-negative result
-  if (!Number.isFinite(clamped) || clamped < 0) {
+  if (!Number.isFinite(clamped) || isNaN(clamped) || clamped < 0) {
     return minDelayMs;
   }
 
@@ -180,6 +183,7 @@ export async function retryAsync<T>(
   options: RetryOptions,
 ): Promise<T> {
   const config = { ...DEFAULT_RETRY_CONFIG, ...options };
+  const minDelayMs = Math.max(1, config.minDelayMs);
   const maxAttempts = Math.max(1, config.attempts);
   const predicate = config.shouldRetry ?? isRetryableError;
 
@@ -202,9 +206,9 @@ export async function retryAsync<T>(
       // Determine delay: honour Retry-After first, then backoff
       const retryAfter = config.retryAfterMs?.(err);
       const delayMs =
-        retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter >= 0
+        retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter >= 1
           ? Math.min(retryAfter, config.maxDelayMs)
-          : computeBackoffDelay(attempt, config.minDelayMs, config.maxDelayMs, config.jitter);
+          : computeBackoffDelay(attempt, minDelayMs, config.maxDelayMs, config.jitter);
 
       // Fire callback
       config.onRetry?.({

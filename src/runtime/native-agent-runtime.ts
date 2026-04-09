@@ -90,6 +90,7 @@ export class NativeAgentRuntime {
   private mcpToolDefinitions: ToolDefinition[] = [];
   private agentToolScope: Map<string, string[]> = new Map();
   private agentSessions = new Map<string, string>();
+  private sessionInitPromises = new Map<string, Promise<string>>();
   private failoverState: FailoverState | null = null;
   private contextWindowInfo: ContextWindowInfo;
   private skillRegistries = new Map<string, SkillRegistry>();
@@ -302,18 +303,33 @@ export class NativeAgentRuntime {
     return sessionId;
   }
 
-  getOrCreateRuntimeSession(agentId: string, options?: {
+  async getOrCreateRuntimeSession(agentId: string, options?: {
     memoryInjection?: string;
     mode?: "full" | "heartbeat" | "message" | "minimal";
-  }): string {
+  }): Promise<string> {
     const existing = this.agentSessions.get(agentId);
     if (existing) {
       const session = this.contextManager.getSession(existing);
       if (session) return existing;
     }
-    const sessionId = this.createSession(agentId, options);
-    this.agentSessions.set(agentId, sessionId);
-    return sessionId;
+
+    let initPromise = this.sessionInitPromises.get(agentId);
+    if (!initPromise) {
+      initPromise = (async () => {
+        const sessionId = this.createSession(agentId, options);
+        this.agentSessions.set(agentId, sessionId);
+        return sessionId;
+      })().then(sessionId => {
+        this.sessionInitPromises.delete(agentId);
+        return sessionId;
+      }).catch((err) => {
+        this.sessionInitPromises.delete(agentId);
+        logger.error({ agentId, err: err.message }, "Session init failed");
+        throw err;
+      });
+      this.sessionInitPromises.set(agentId, initPromise);
+    }
+    return initPromise;
   }
 
   restoreSession(agentId: string, sessionId: string, options?: {
@@ -347,9 +363,9 @@ export class NativeAgentRuntime {
     const resolvedAgentId = session.agentId;
 
     const skillsBlock = await this.buildSkillsBlock(resolvedAgentId, message);
-    if (skillsBlock && !session.systemPrompt.includes("## Available Skills")) {
-      session.systemPrompt = session.systemPrompt + "\n\n" + skillsBlock;
-    }
+    const systemPrompt = skillsBlock && !session.systemPrompt.includes("## Available Skills")
+      ? session.systemPrompt + "\n\n" + skillsBlock
+      : session.systemPrompt;
 
     this.contextManager.addUserMessage(sessionId, message);
 
@@ -362,6 +378,14 @@ export class NativeAgentRuntime {
 
     for (let round = 0; round < (this.config.llm.maxToolRounds || 10); round++) {
       const messages = this.contextManager.getMessagesForLLM(sessionId);
+
+      // Inject augmented system prompt if skills were added
+      if (systemPrompt !== session.systemPrompt) {
+        const sysMsg = messages.find(m => m.role === "system");
+        if (sysMsg) {
+          sysMsg.content = systemPrompt;
+        }
+      }
 
       const response = await this.callLLMWithRetry(messages, undefined, session.agentId);
 
@@ -379,7 +403,7 @@ export class NativeAgentRuntime {
         .join("\n");
 
       if (response.toolCalls && response.toolCalls.length > 0 && this.toolExecutor) {
-        this.contextManager.recordAssistantToolCalls(sessionId, textContent, response.toolCalls);
+        await this.contextManager.recordAssistantToolCalls(sessionId, textContent, response.toolCalls);
 
         const toolResults: Array<{ id: string; name: string; args: string; result: string }> = [];
 
@@ -414,7 +438,7 @@ export class NativeAgentRuntime {
           }
 
           // Record tool call for loop detection
-          toolCallHistory = recordToolCall(toolCallHistory, tc.function.name, args, tc.id);
+          toolCallHistory = recordToolCall(toolCallHistory, tc.function.name, args, tc.id, this.loopDetectionConfig);
 
           // Check for tool call loops before execution
           const loopCheck = detectToolCallLoop(toolCallHistory, tc.function.name, args, this.loopDetectionConfig);
@@ -430,7 +454,7 @@ export class NativeAgentRuntime {
               result: `BLOCKED: ${loopCheck.message}`,
             });
             toolCallsExecuted++;
-            toolCallHistory = recordToolCallOutcome(toolCallHistory, tc.function.name, args, `BLOCKED: ${loopCheck.message}`, undefined, tc.id);
+            toolCallHistory = recordToolCallOutcome(toolCallHistory, tc.function.name, args, `BLOCKED: ${loopCheck.message}`, undefined, tc.id, this.loopDetectionConfig);
             continue;
           }
 
@@ -444,6 +468,7 @@ export class NativeAgentRuntime {
             result.success ? result.content : result.error ?? "Unknown error",
             undefined,
             tc.id,
+            this.loopDetectionConfig,
           );
 
           // Inject warning for non-critical loops
@@ -471,7 +496,7 @@ export class NativeAgentRuntime {
           if (truncated) {
             logger.warn({ tool: tr.name, originalLength, truncatedLength: truncatedResult.length }, "Tool result truncated for context safety");
           }
-          this.contextManager.recordToolCall(sessionId, {
+          await this.contextManager.recordToolCall(sessionId, {
             id: tr.id,
             name: tr.name,
             arguments: tr.args,
@@ -522,7 +547,7 @@ export class NativeAgentRuntime {
     }
 
     if (finalText) {
-      this.contextManager.addAssistantMessage(sessionId, finalText);
+      await this.contextManager.addAssistantMessage(sessionId, finalText);
     }
 
     const silentAck = isSilentAck(finalText);
@@ -568,8 +593,8 @@ export class NativeAgentRuntime {
     return this.sendMessage(sessionId, heartbeatPrompt, resolvedAgentId);
   }
 
-  compactSession(sessionId: string, keepRecent?: number): void {
-    this.contextManager.compact(sessionId, keepRecent);
+  async compactSession(sessionId: string, keepRecent?: number): Promise<void> {
+    await this.contextManager.compact(sessionId, keepRecent);
   }
 
   clearSession(sessionId: string): void {
@@ -651,7 +676,7 @@ export class NativeAgentRuntime {
     customInstructions?: string,
   ): Promise<string> {
     const totalTokens = messages.reduce(
-      (sum, m) => sum + (m.tokenEstimate ?? estimateTokens(m.content)),
+      (sum, m) => sum + (m.tokenEstimate ?? estimateTokens(m.content ?? "")),
       0,
     );
 
@@ -1168,7 +1193,7 @@ export class NativeAgentRuntime {
           args["agent_id"] = session.agentId;
         }
 
-        toolCallHistory = recordToolCall(toolCallHistory, callInfo.name, args, callId);
+        toolCallHistory = recordToolCall(toolCallHistory, callInfo.name, args, callId, this.loopDetectionConfig);
 
         const loopCheck = detectToolCallLoop(toolCallHistory, callInfo.name, args, this.loopDetectionConfig);
         if (loopCheck.stuck && loopCheck.level === "critical") {
@@ -1183,7 +1208,7 @@ export class NativeAgentRuntime {
             args: argsStr,
             result: blockedResult,
           });
-          toolCallHistory = recordToolCallOutcome(toolCallHistory, callInfo.name, args, blockedResult, undefined, callId);
+          toolCallHistory = recordToolCallOutcome(toolCallHistory, callInfo.name, args, blockedResult, undefined, callId, this.loopDetectionConfig);
           continue;
         }
 
@@ -1196,6 +1221,7 @@ export class NativeAgentRuntime {
             result.success ? result.content : result.error ?? "Unknown error",
             undefined,
             callId,
+            this.loopDetectionConfig,
           );
 
           if (loopCheck.stuck && loopCheck.level === "warning") {
@@ -1223,6 +1249,7 @@ export class NativeAgentRuntime {
             `Error: Tool execution failed: ${errMsg}`,
             undefined,
             callId,
+            this.loopDetectionConfig,
           );
           toolResults.push({
             id: callId,
@@ -1240,12 +1267,12 @@ export class NativeAgentRuntime {
         function: { name: tc.name, arguments: tc.inputChunks.join("") },
       }));
       if (assistantToolCalls.length > 0) {
-        this.contextManager.recordAssistantToolCalls(sessionId, null, assistantToolCalls);
+        await this.contextManager.recordAssistantToolCalls(sessionId, null, assistantToolCalls);
       }
 
       // Record tool results in context so they're available for the next stream round
       for (const tr of toolResults) {
-        this.contextManager.recordToolCall(sessionId, {
+        await this.contextManager.recordToolCall(sessionId, {
           id: tr.id,
           name: tr.name,
           arguments: tr.args,

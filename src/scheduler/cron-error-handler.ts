@@ -197,7 +197,29 @@ export class CronErrorHandlerClass {
     }
     this.unsubscribers = [];
 
+    this.cleanup();
+
     logger.info("CronErrorHandler: stopped");
+  }
+
+  /**
+   * Sweep stale entries from the jobStates Map.
+   * Removes jobs with zero consecutive failures and lastSuccessAt older than 7 days.
+   * Idempotent — safe to call at any time.
+   */
+  cleanup(): void {
+    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [jobId, state] of this.jobStates) {
+      if (state.consecutiveFailures === 0 && state.lastSuccessAt && (now - state.lastSuccessAt) > ONE_WEEK) {
+        this.jobStates.delete(jobId);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      logger.info({ cleaned }, "CronErrorHandler: stale job states cleaned");
+    }
   }
 
   // -----------------------------------------------------------------------

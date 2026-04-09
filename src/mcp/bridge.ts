@@ -2,6 +2,7 @@ import type { ToolDefinition, ToolResult, ToolExecutor } from "../runtime/tool-b
 import { buildToolDefinitions, mcpResponseToToolResult } from "../runtime/tool-bridge.js";
 import type { McpServerConnection } from "./client.js";
 import { logger } from "../logger.js";
+import { ErrorBus } from "../runtime/error-emitter.js";
 
 export interface BridgeResult {
   executor: ToolExecutor;
@@ -136,7 +137,16 @@ export function createBridge(
         { tool: name, err: lastErr?.message },
         "MCP tool execution failed after retries",
       );
-      return { success: false, content: "", error: lastErr?.message ?? "Unknown error" };
+      const errorMsg = lastErr?.message ?? "Unknown error";
+      ErrorBus.emit({
+        type: "tool:failed",
+        severity: "warn",
+        component: "mcp-bridge",
+        error: lastErr ?? new Error(errorMsg),
+        message: `MCP tool ${name} failed after ${MAX_RETRIES + 1} retries`,
+        context: { toolName: name, serverName: mcpEntry.conn.serverName },
+      });
+      return { success: false, content: "", error: errorMsg };
     }
 
     const impl = nativeToolImpls[name];
@@ -161,7 +171,16 @@ export function createBridge(
         { tool: name, err: err?.message },
         "Native tool execution failed",
       );
-      return { success: false, content: "", error: err?.message ?? String(err) ?? "Unknown error" };
+      const errorMsg = err?.message ?? String(err) ?? "Unknown error";
+      ErrorBus.emit({
+        type: "tool:failed",
+        severity: "warn",
+        component: "mcp-bridge",
+        error: err instanceof Error ? err : new Error(errorMsg),
+        message: `Native tool ${name} execution failed`,
+        context: { toolName: name },
+      });
+      return { success: false, content: "", error: errorMsg };
     }
   };
 

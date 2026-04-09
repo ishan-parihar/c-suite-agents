@@ -89,6 +89,11 @@ export async function discoverInstructionFiles(startDir: string): Promise<Instru
         continue;
       }
 
+      // Size guard — reject files > 100KB
+      if (stat.size > 100 * 1024) {
+        continue;
+      }
+
       // Read file content
       let content: string;
       try {

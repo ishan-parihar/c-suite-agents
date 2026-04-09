@@ -859,7 +859,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
         name: z.string().describe("Task name"),
         description: z.string().describe("Task description"),
         schedule_type: z.enum(["interval", "cron", "once", "on_event"]),
-        cron_expression: z.string().optional().describe("Cron expression (for schedule_type='cron')"),
+        cron_expression: z.string().regex(/^([0-9*/,.-]+)\s+([0-9*/,.-]+)\s+([0-9*/,.-]+)\s+([0-9*/,.-]+)\s+([0-9*/,.-]+)$/).max(100).optional().describe("Cron expression (for schedule_type='cron')"),
         interval_seconds: z.number().optional().describe("Interval in seconds (for schedule_type='interval')"),
         trigger_time: z.number().optional().describe("Unix timestamp ms (for schedule_type='once')"),
         event_name: z.string().optional().describe("Event name (for schedule_type='on_event')"),
@@ -1047,6 +1047,13 @@ export async function startStrategos(): Promise<StrategosRuntime> {
         const agentId = url.searchParams.get("agentId") || undefined;
         const { server: sessionServer, toolImpls: sessionToolImpls } = createSessionServer(agentId);
         const sseTransport = new SSEServerTransport("/mcp", res);
+
+        res.on('close', () => {
+          if (!sseTransports.has(sseTransport.sessionId)) {
+            sessionServer.close().catch(() => {});
+          }
+        });
+
         try {
           await sessionServer.connect(sseTransport);
           sseTransports.set(sseTransport.sessionId, { transport: sseTransport, server: sessionServer });
@@ -1083,9 +1090,11 @@ export async function startStrategos(): Promise<StrategosRuntime> {
         try {
           const MAX_BODY_SIZE = 1024 * 1024; // 1MB
           let body = "";
+          let aborted = false;
           req.on("data", chunk => {
             body += chunk;
             if (body.length > MAX_BODY_SIZE) {
+              aborted = true;
               req.destroy();
               if (!res.writableEnded) {
                 res.writeHead(413, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
@@ -1095,14 +1104,25 @@ export async function startStrategos(): Promise<StrategosRuntime> {
             }
           });
           req.on("end", async () => {
+            if (aborted) return;
             try {
               const parsed = JSON.parse(body);
+              if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+                if ("__proto__" in parsed) delete (parsed as any).__proto__;
+              }
               await transport.handlePostMessage(req, res, parsed);
             } catch {
               if (!res.writableEnded) {
                 res.writeHead(400, { "Content-Type": "application/json", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
                 res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null }));
               }
+            }
+          });
+          req.on("error", (err: Error) => {
+            logger.warn({ err: err.message }, "SSE POST stream error");
+            if (!res.writableEnded) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" }, id: null }));
             }
           });
         } catch (err: any) {
@@ -1128,6 +1148,10 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       resolve();
     }).on("error", reject);
 });
+  httpServer.headersTimeout = 10_000;
+  httpServer.requestTimeout = 15_000;
+  httpServer.timeout = 30_000;
+  httpServer.on("clientError", (err, socket) => { socket.destroy(); });
 
   // Also connect stdio transport if MCP_STDIO=1 (for direct CLI usage)
   let stdioServer: McpServer | null = null;

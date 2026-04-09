@@ -206,8 +206,13 @@ export function loadConfig(): StrategosConfig {
 
   if (fs.existsSync(CONFIG_FILE)) {
     try {
-      const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
-      fileConfig = JSON.parse(raw) as Record<string, unknown>;
+      const stat = fs.statSync(CONFIG_FILE);
+      if (stat.size > 100 * 1024) {
+        console.warn(`[strategos] WARN: Config file too large (${stat.size} bytes), skipping. Falling back to defaults + .env`);
+      } else {
+        const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
+        fileConfig = JSON.parse(raw) as Record<string, unknown>;
+      }
     } catch (err: unknown) {
       console.error(
         `[strategos] ERROR: Failed to parse ${CONFIG_FILE}: ${(err as Error).message}. Falling back to defaults + .env`,

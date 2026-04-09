@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "node:crypto";
 import { logger } from "../logger.js";
 
 export interface SessionEntry {
@@ -25,6 +26,7 @@ export class SessionPersistence {
   private maxFileSize: number;
   private maxFiles: number;
   private sessionsDir: string;
+  private sessionLocks = new Map<string, Promise<void>>();
 
   constructor(options: { dir: string; maxFileSize?: number; maxFiles?: number }) {
     this.dir = options.dir;
@@ -63,30 +65,42 @@ export class SessionPersistence {
     this.ensureDir();
     const filePath = this.sessionFilePath(sessionId);
 
-    if (fs.existsSync(filePath)) {
-      const stats = fs.statSync(filePath);
-      if (stats.size >= this.maxFileSize) {
-        await this.rotate(sessionId);
-      }
-    }
-
-    const line = JSON.stringify(entry) + "\n";
-    const tmpPath = `${filePath}.tmp`;
+    // Per-session mutex — serialize saves for the same session
+    const prev = this.sessionLocks.get(sessionId) || Promise.resolve();
+    let resolveLock: () => void;
+    const lock = new Promise<void>((r) => { resolveLock = r; });
+    this.sessionLocks.set(sessionId, lock);
 
     try {
-      let existing = "";
+      await prev; // Wait for previous save to complete
+
       if (fs.existsSync(filePath)) {
-        existing = fs.readFileSync(filePath, "utf-8");
+        const stats = fs.statSync(filePath);
+        if (stats.size >= this.maxFileSize) {
+          await this.rotate(sessionId);
+        }
       }
-      fs.writeFileSync(tmpPath, existing + line);
-      fs.renameSync(tmpPath, filePath);
-    } catch (err: any) {
+
+      const line = JSON.stringify(entry) + "\n";
+      const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
+
       try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // ignore cleanup errors
+        let existing = "";
+        if (fs.existsSync(filePath)) {
+          existing = fs.readFileSync(filePath, "utf-8");
+        }
+        fs.writeFileSync(tmpPath, existing + line);
+        fs.renameSync(tmpPath, filePath);
+      } catch (err: any) {
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {
+          // ignore cleanup errors
+        }
+        throw new Error(`Failed to save session entry for ${sessionId}: ${err.message}`);
       }
-      throw new Error(`Failed to save session entry for ${sessionId}: ${err.message}`);
+    } finally {
+      resolveLock!(); // Release lock for next waiter
     }
   }
 
@@ -108,6 +122,15 @@ export class SessionPersistence {
     const orderedFiles = [...rotatedFiles, this.sessionFilePath(sessionId)];
 
     for (const filePath of orderedFiles) {
+      try {
+        const fileStat = fs.statSync(filePath);
+        if (fileStat.size > 100 * 1024) {
+          logger.warn({ filePath, size: fileStat.size }, "Session file too large, skipping");
+          continue;
+        }
+      } catch {
+        continue;
+      }
       const content = fs.readFileSync(filePath, "utf-8");
       for (const line of content.split("\n")) {
         const trimmed = line.trim();
@@ -184,6 +207,11 @@ export class SessionPersistence {
             lastModified = stats.mtimeMs;
           }
 
+          if (stats.size > 100 * 1024) {
+            logger.warn({ filePath, size: stats.size }, "Session file too large, skipping read");
+            continue;
+          }
+
           const content = fs.readFileSync(filePath, "utf-8");
           for (const line of content.split("\n")) {
             if (line.trim()) {
@@ -204,6 +232,14 @@ export class SessionPersistence {
     }
 
     return summaries.sort((a, b) => b.lastModified - a.lastModified);
+  }
+
+  cleanupLocks(activeSessions?: Set<string>): void {
+    for (const [sessionId] of this.sessionLocks) {
+      if (!activeSessions || !activeSessions.has(sessionId)) {
+        this.sessionLocks.delete(sessionId);
+      }
+    }
   }
 
   async deleteSession(sessionId: string): Promise<void> {

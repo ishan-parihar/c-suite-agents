@@ -1,6 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { AsyncMutex } from "../async-mutex.js";
+
+const fileWriteMutex = new AsyncMutex();
 
 export interface FsWriteArgs {
   file_path: string;
@@ -51,8 +54,14 @@ export function createFsWriteTool() {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };
       }
 
-      const resolvedPath = path.resolve(workspaceDir, file_path);
-      if (!resolvedPath.startsWith(workspaceDir)) {
+      let resolvedPath = path.resolve(workspaceDir, file_path);
+      try {
+        resolvedPath = fs.realpathSync(resolvedPath);
+      } catch {
+        // File doesn't exist yet (write operations) — skip symlink check
+        // The containment check below still protects against prefix escape
+      }
+      if (!(resolvedPath === workspaceDir || resolvedPath.startsWith(workspaceDir + path.sep))) {
         return { content: [{ type: "text", text: "Error: Access denied. You can only write files within your workspace directory." }] };
       }
 
@@ -61,11 +70,20 @@ export function createFsWriteTool() {
         fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
 
         if (append && fs.existsSync(resolvedPath)) {
+          const release = await fileWriteMutex.acquire(resolvedPath);
+          try {
+          const fileStat = fs.statSync(resolvedPath);
+          if (fileStat.size > 100 * 1024) {
+            return { content: [{ type: "text", text: `Error: File too large to append (max 100KB): ${file_path}` }] };
+          }
           const existing = fs.readFileSync(resolvedPath, "utf-8");
           const tmpPath = `${resolvedPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
           fs.writeFileSync(tmpPath, existing + content, "utf-8");
           fs.renameSync(tmpPath, resolvedPath);
           return { content: [{ type: "text", text: `Appended ${content.length} characters to ${file_path}` }] };
+          } finally {
+            release();
+          }
         } else {
           // Atomic write: write to tmp file, then rename
           const tmpPath = `${resolvedPath}.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`;
