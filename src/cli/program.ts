@@ -25,7 +25,7 @@ import { runConfigureWizard } from "./configure.wizard.js";
 import { runMcpCommand } from "./mcp.js";
 import { runDaemon } from "./daemon.js";
 import { loadConfig, getConfigPath } from "../config/loader.js";
-import { readFileSync, existsSync, chmodSync } from "node:fs";
+import { readFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -41,15 +41,25 @@ function getVersion(): string {
   try {
     const pkgPath = join(__dirname, "../../package.json");
     if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      return pkg.version;
+      const stat = statSync(pkgPath);
+      if (stat.size > 100 * 1024) {
+        console.warn(`[strategos] WARN: package.json too large (${stat.size} bytes), skipping`);
+      } else {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        return pkg.version;
+      }
     }
   } catch { /* ignore */ }
   try {
     const pkgPath = join(process.cwd(), "package.json");
     if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      return pkg.version;
+      const stat = statSync(pkgPath);
+      if (stat.size > 100 * 1024) {
+        console.warn(`[strategos] WARN: package.json too large (${stat.size} bytes), skipping`);
+      } else {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        return pkg.version;
+      }
     }
   } catch { /* ignore */ }
   return "0.0.0";
@@ -248,17 +258,21 @@ async function showStatus(options: { json?: boolean; deep?: boolean }): Promise<
   }
 
   try {
-    const { execSync } = await import("node:child_process");
-    const s = execSync("systemctl is-active strategos 2>/dev/null || systemctl --user is-active strategos 2>/dev/null || echo inactive", { encoding: "utf-8" }).trim();
-    (status.service as { active: boolean; error: string | null }).active = s === "active";
+    const { spawnSync } = await import("node:child_process");
+    const systemResult = spawnSync("systemctl", ["is-active", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    const userResult = spawnSync("systemctl", ["--user", "is-active", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    const systemActive = systemResult.status === 0 && systemResult.stdout?.trim() === "active";
+    const userActive = userResult.status === 0 && userResult.stdout?.trim() === "active";
+    (status.service as { active: boolean; error: string | null }).active = systemActive || userActive;
   } catch {
     // not systemd
   }
 
   if (options.deep) {
     try {
-      const { execSync } = await import("node:child_process");
-      const uptime = execSync("systemctl show strategos -p ActiveEnterTimestamp --value 2>/dev/null || echo unknown", { encoding: "utf-8" }).trim();
+      const { spawnSync } = await import("node:child_process");
+      const result = spawnSync("systemctl", ["show", "strategos", "-p", "ActiveEnterTimestamp", "--value"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      const uptime = (result.status === 0 && result.stdout?.trim()) || "unknown";
       (status.service as { active: boolean; error: string | null; uptime?: string }).uptime = uptime;
     } catch { /* ignore */ }
   }

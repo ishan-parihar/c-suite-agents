@@ -108,7 +108,7 @@ export function createTtsSynthesizeTool(): AnyAgentTool | null {
           input: text.trim(),
           speed,
           response_format: "mp3",
-        });
+        }, { timeout: 120000 });
 
         const mediaDir = await ensureMediaDir();
         const timestamp = Date.now();

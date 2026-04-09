@@ -16,7 +16,7 @@ import { logger } from "./logger.js";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, unlinkSync } from "fs";
 import { createServer } from "http";
 import { initWorkspace, initAllWorkspaces } from "./agents/workspace-manager.js";
 import { initNativeRuntime, getNativeRuntime } from "./runtime/native-agent-runtime.js";
@@ -60,6 +60,10 @@ const healthServer = createServer(async (req, res) => {
 healthServer.listen(HEALTH_PORT, "127.0.0.1", () => {
   logger.info({ port: HEALTH_PORT }, "Health check server started");
 });
+healthServer.headersTimeout = 10_000;
+healthServer.requestTimeout = 15_000;
+healthServer.timeout = 30_000;
+healthServer.on("clientError", (err, socket) => { socket.destroy(); });
 
 // Register all components for health tracking
 registerComponent("runtime");
@@ -91,14 +95,29 @@ const webhookServer = createServer(async (req, res) => {
   let body: unknown = null;
   if (method === "POST" || method === "PUT" || method === "PATCH") {
     const chunks: Buffer[] = [];
+    let totalSize = 0;
+    const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB
     for await (const chunk of req) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalSize += buf.length;
+      if (totalSize > MAX_BODY_SIZE) {
+        res.writeHead(413, { "Content-Type": "text/plain" });
+        res.end("Payload too large");
+        return;
+      }
+      chunks.push(buf);
     }
     const raw = Buffer.concat(chunks);
     const contentType = req.headers["content-type"] || "";
     try {
       if (contentType.includes("application/json")) {
-        body = JSON.parse(raw.toString("utf-8"));
+        const parsed = JSON.parse(raw.toString("utf-8"));
+        // Prototype pollution guard
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          if ("__proto__" in parsed) delete (parsed as any).__proto__;
+          if ("constructor" in parsed) delete (parsed as any).constructor;
+        }
+        body = parsed;
       } else {
         body = raw.toString("utf-8");
       }
@@ -125,6 +144,10 @@ const webhookServer = createServer(async (req, res) => {
 
 webhookServer.listen(WEBHOOK_PORT, "127.0.0.1", async () => {
   logger.info({ port: WEBHOOK_PORT }, "Webhook server started");
+  webhookServer.headersTimeout = 10_000;
+  webhookServer.requestTimeout = 15_000;
+  webhookServer.timeout = 30_000;
+  webhookServer.on("clientError", (err, socket) => { socket.destroy(); });
   try {
     await webhookHandler.init();
     markHealthy("webhook");
@@ -143,14 +166,28 @@ const watchdogTimer = setInterval(() => {
 }, 30000).unref();
 
 async function main() {
+  // Single-instance enforcement via PID file check
+  const pidFile = join(homedir(), ".local/run/strategos.pid");
+  try {
+    const existingPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+    try {
+      process.kill(existingPid, 0); // Check if process exists
+      // Process exists — log and exit
+      console.error(`Strategos already running (PID ${existingPid}). Exiting.`);
+      process.exit(1);
+    } catch (e: any) {
+      if (e.code === "ESRCH") {
+        // Process dead, stale PID file — remove it
+        try { unlinkSync(pidFile); } catch {}
+      }
+    }
+  } catch { /* No PID file — safe to start */ }
+  // Write PID file AFTER this check passes
+  writeFileSync(pidFile, String(process.pid));
+
   let decayTimer: ReturnType<typeof setInterval> | null = null;
   let consolidateTimer: ReturnType<typeof setInterval> | null = null;
   try {
-    // Write PID file for systemd tracking
-    const pidFile = join(homedir(), ".local/run/strategos.pid");
-    await mkdir(join(homedir(), ".local/run"), { recursive: true });
-    await writeFile(pidFile, process.pid.toString());
-    logger.info({ pid: process.pid }, "PID file written");
 
     // ── NATIVE RUNTIME: Initialize all agent workspaces ──
     logger.info("Initializing agent workspaces (native runtime)...");
@@ -943,10 +980,15 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         getBoardMeetingScheduler()?.stop();
         stopHeartbeat();
 
-        // Notify users after stopping work
-        try {
-          await sendTelegramMessage("⚠️ **Strategos going offline** for restart. I'll be right back.", "info");
-        } catch { /* ignore */ }
+        // Stop Telegram bot (long-polling) before draining
+        if (telegramBot) {
+          try { await telegramBot.stop(); } catch { /* ignore */ }
+          logger.info("Telegram bot stopped");
+        }
+
+        // Drain in-flight work (LLM calls, tool executions, file writes)
+        logger.info("Draining in-flight work...");
+        await new Promise(r => setTimeout(r, 3000));
 
         // Clear all lifecycle timers
         if (decayTimer) clearInterval(decayTimer);
@@ -954,6 +996,9 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         clearInterval(watchdogTimer);
         if (healthProbeTimer) clearInterval(healthProbeTimer);
         clearTimeout(shutdownTimeout);
+
+        // Close MemoryFacade
+        try { const { getMemoryFacade } = await import("./memory/index.js"); const mf = await getMemoryFacade(); mf.close?.(); logger.info("MemoryFacade closed"); } catch { /* ignore */ }
 
         // Close kanban database
         if (rt.ctx.kanban) { await rt.ctx.kanban.close(); logger.info("Kanban database closed"); }
@@ -973,12 +1018,6 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         if (mcpShutdown) { try { await mcpShutdown(); logger.info("MCP server shutdown complete"); } catch { /* ignore */ } }
         for (const conn of mcpConnections) { try { await conn.dispose(); } catch { /* ignore */ } }
         logger.info({ count: mcpConnections.length }, "MCP connections closed");
-
-        // Stop Telegram bot (long-polling)
-        if (telegramBot) {
-          try { await telegramBot.stop(); } catch { /* ignore */ }
-          logger.info("Telegram bot stopped");
-        }
 
         // Notify systemd we're stopping
         if (process.env.NOTIFY_SOCKET) {
@@ -1009,6 +1048,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
 
     process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
     process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 
     process.on("unhandledRejection", (err: any) => {
       logger.error({ err: err?.message || err }, "Unhandled rejection — initiating graceful shutdown");

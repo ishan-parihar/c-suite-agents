@@ -1,7 +1,7 @@
 import { homedir, userInfo } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { ensureWorkspaceDirs } from "./onboard-helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -70,7 +70,10 @@ export async function installSystemdService(config: Record<string, unknown>): Pr
   console.log(`\n${BOLD}${CYAN}── Installing Systemd User Service ──${RESET}`);
 
   try {
-    execSync("systemctl --user is-system-running 2>/dev/null || true", { encoding: "utf-8" });
+    const checkResult = spawnSync("systemctl", ["--user", "is-system-running"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    if (checkResult.error || checkResult.status === null) {
+      throw new Error("systemd not available");
+    }
   } catch {
     console.log(`  ${warn("⚠ systemd user session not available — skipping service installation")}`);
     console.log(`  ${DIM}You can still run Strategos manually: node /opt/strategos/build/index.js${RESET}`);
@@ -86,10 +89,10 @@ export async function installSystemdService(config: Record<string, unknown>): Pr
     writeFileSync(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, "utf-8");
     console.log(`  ${success(`Service file written: ${SYSTEMD_SERVICE_PATH}`)}`);
 
-    execSync("systemctl --user daemon-reload", { encoding: "utf-8" });
+    spawnSync("systemctl", ["--user", "daemon-reload"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     console.log(`  ${success("Systemd daemon reloaded")}`);
 
-    execSync("systemctl --user enable strategos", { encoding: "utf-8" });
+    spawnSync("systemctl", ["--user", "enable", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     console.log(`  ${success("Service enabled (will start on login)")}`);
 
     return true;
@@ -112,10 +115,12 @@ export async function enableLinger(): Promise<boolean> {
   console.log(`\n${BOLD}${CYAN}── Configuring Systemd Linger ──${RESET}`);
 
   try {
-    const lingerStatus = execSync(
-      `loginctl show-user ${userInfo().username} -p Linger 2>/dev/null || echo "Linger=no"`,
-      { encoding: "utf-8" },
-    ).trim();
+    const lingerResult = spawnSync(
+      "loginctl",
+      ["show-user", userInfo().username, "-p", "Linger"],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const lingerStatus = lingerResult.stdout?.trim() || "Linger=no";
 
     if (lingerStatus === "Linger=yes") {
       console.log(`  ${success("Systemd linger already enabled")}`);
@@ -123,14 +128,16 @@ export async function enableLinger(): Promise<boolean> {
     }
 
     try {
-      execSync(`sudo loginctl enable-linger ${userInfo().username}`, {
+      spawnSync("sudo", ["loginctl", "enable-linger", userInfo().username], {
         encoding: "utf-8",
+        stdio: "inherit",
       });
       console.log(`  ${success("Systemd linger enabled (services survive logout)")}`);
       return true;
     } catch {
-      execSync(`loginctl enable-linger ${userInfo().username}`, {
+      spawnSync("loginctl", ["enable-linger", userInfo().username], {
         encoding: "utf-8",
+        stdio: "inherit",
       });
       console.log(`  ${success("Systemd linger enabled")}`);
       return true;
@@ -154,17 +161,19 @@ export async function enableLinger(): Promise<boolean> {
  */
 async function startService(): Promise<boolean> {
   try {
-    const status = execSync(
-      "systemctl --user is-active strategos 2>/dev/null || echo inactive",
-      { encoding: "utf-8" },
-    ).trim();
+    const statusResult = spawnSync(
+      "systemctl",
+      ["--user", "is-active", "strategos"],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const status = statusResult.status === 0 && statusResult.stdout?.trim() === "active" ? "active" : "inactive";
 
     if (status === "active") {
       console.log(`  ${success("Service already running — restarting to apply changes")}`);
-      execSync("systemctl --user restart strategos", { encoding: "utf-8" });
+      spawnSync("systemctl", ["--user", "restart", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     } else {
       console.log(`  ${success("Starting service...")}`);
-      execSync("systemctl --user start strategos", { encoding: "utf-8" });
+      spawnSync("systemctl", ["--user", "start", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     }
 
     return true;
@@ -204,21 +213,23 @@ export async function healthCheck(
   let userActive = false;
 
   try {
-    const systemStatus = execSync(
-      "systemctl is-active strategos 2>/dev/null || echo inactive",
-      { encoding: "utf-8" },
-    ).trim();
-    systemActive = systemStatus === "active";
+    const systemResult = spawnSync(
+      "systemctl",
+      ["is-active", "strategos"],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    systemActive = systemResult.status === 0 && systemResult.stdout?.trim() === "active";
   } catch {
     // systemctl not available
   }
 
   try {
-    const userStatus = execSync(
-      "systemctl --user is-active strategos 2>/dev/null || echo inactive",
-      { encoding: "utf-8" },
-    ).trim();
-    userActive = userStatus === "active";
+    const userResult = spawnSync(
+      "systemctl",
+      ["--user", "is-active", "strategos"],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    userActive = userResult.status === 0 && userResult.stdout?.trim() === "active";
   } catch {
     // systemctl not available
   }
@@ -237,22 +248,27 @@ export async function healthCheck(
 
   if (logFile && existsSync(logFile)) {
     try {
-      const content = readFileSync(logFile, "utf-8");
-      const lines = content.split("\n").filter(Boolean);
-      const lastLines = lines.slice(-20);
-      bootMessage = lastLines.some(
-        (line) =>
-          line.toLowerCase().includes("boot") ||
-          line.toLowerCase().includes("started") ||
-          line.toLowerCase().includes("initialized") ||
-          line.toLowerCase().includes("strategos"),
-      );
-
-      if (bootMessage) {
-        console.log(`  ${success("Boot message found in log")}`);
+      const logStat = statSync(logFile);
+      if (logStat.size > 100 * 1024) {
+        console.log(`${YELLOW}⚠ Setup log file too large (${(logStat.size / 1024).toFixed(1)}KB), skipping${RESET}`);
       } else {
-        errors.push("No boot message in log (service may not have fully started)");
-        console.log(`  ${warn("No boot message found in recent log entries")}`);
+        const content = readFileSync(logFile, "utf-8");
+        const lines = content.split("\n").filter(Boolean);
+        const lastLines = lines.slice(-20);
+        bootMessage = lastLines.some(
+          (line) =>
+            line.toLowerCase().includes("boot") ||
+            line.toLowerCase().includes("started") ||
+            line.toLowerCase().includes("initialized") ||
+            line.toLowerCase().includes("strategos"),
+        );
+
+        if (bootMessage) {
+          console.log(`  ${success("Boot message found in log")}`);
+        } else {
+          errors.push("No boot message in log (service may not have fully started)");
+          console.log(`  ${warn("No boot message found in recent log entries")}`);
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -275,11 +291,12 @@ export async function healthCheck(
       await new Promise((r) => setTimeout(r, pollInterval));
 
       try {
-        const userStatus = execSync(
-          "systemctl --user is-active strategos 2>/dev/null || echo inactive",
-          { encoding: "utf-8" },
-        ).trim();
-        if (userStatus === "active") {
+        const userResult = spawnSync(
+          "systemctl",
+          ["--user", "is-active", "strategos"],
+          { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+        );
+        if (userResult.status === 0 && userResult.stdout?.trim() === "active") {
           running = true;
           console.log(`  ${success("Service started after waiting")}`);
           break;

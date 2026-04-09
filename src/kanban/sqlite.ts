@@ -75,6 +75,7 @@ const CARD_COLUMNS = "id, board_id, column_id, title, description, priority, due
 
 export class Kanban {
   private constructor(private db: DBAny, private path: string) {}
+  private dbLock = Promise.resolve();
 
   static async init(path: string) {
     const resolved = resolve(path);
@@ -107,10 +108,21 @@ export class Kanban {
   }
 
   private async persist() {
-    const data = this.db.export();
-    const tmpPath = `${this.path}.tmp`;
-    await fs.writeFile(tmpPath, Buffer.from(data));
-    await fs.rename(tmpPath, this.path);
+    const prev = this.dbLock;
+    this.dbLock = (async () => {
+      try {
+        await prev;
+        const data = this.db.export();
+        const tmpPath = `${this.path}.tmp`;
+        await fs.writeFile(tmpPath, Buffer.from(data));
+        await fs.rename(tmpPath, this.path);
+      } finally {
+        // Always resolve to prevent lock chain breakage
+      }
+    })().catch(err => {
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, "Kanban persist failed");
+    });
+    await this.dbLock;
   }
 
   async close(): Promise<void> {

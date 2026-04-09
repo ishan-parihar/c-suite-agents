@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
+import { logger } from "../../logger.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +23,8 @@ const ALLOWED_COMMANDS = new Set([
   "python", "python3",
   "jq", "awk", "sed", "sort", "uniq", "cut", "tr",
 ]);
+
+const DANGEROUS_COMMANDS = new Set(["node", "nodejs", "python", "python3", "npx", "bun", "sed", "awk"]);
 
 export function createBashTool() {
   return {
@@ -68,6 +71,10 @@ export function createBashTool() {
         return { content: [{ type: "text", text: `Error: Command '${baseCommand}' is not in the allowlist. Allowed: ${[...ALLOWED_COMMANDS].join(", ")}` }] };
       }
 
+      if (DANGEROUS_COMMANDS.has(baseCommand)) {
+        logger.warn({ agent_id, command: baseCommand, args: cmdArgs }, "bash: dangerous command execution — agent has full code execution capability");
+      }
+
       const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
       const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
 
@@ -76,8 +83,14 @@ export function createBashTool() {
         if (cwd.includes("..")) {
           return { content: [{ type: "text", text: "Error: Path traversal not allowed in cwd." }] };
         }
-        workingDir = path.resolve(workspaceDir, cwd);
-        if (!workingDir.startsWith(workspaceDir)) {
+        let workingDir = path.resolve(workspaceDir, cwd);
+        try {
+          workingDir = fs.realpathSync(workingDir);
+        } catch {
+          // Directory doesn't exist yet — skip symlink check
+          // The containment check below still protects against prefix escape
+        }
+        if (!(workingDir === workspaceDir || workingDir.startsWith(workspaceDir + path.sep))) {
           return { content: [{ type: "text", text: "Error: cwd must be within your workspace directory." }] };
         }
       }
@@ -91,7 +104,13 @@ export function createBashTool() {
           cwd: workingDir,
           timeout: timeout_ms,
           maxBuffer: 1024 * 1024,
-          env: { ...process.env, HOME: homeDir },
+          env: {
+            PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
+            HOME: homeDir,
+            USER: process.env.USER || "strategos",
+            LANG: process.env.LANG || "en_US.UTF-8",
+            TERM: "dumb",
+          },
         });
 
         let output = "";

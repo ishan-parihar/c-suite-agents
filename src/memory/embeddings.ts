@@ -95,8 +95,12 @@ export class EmbeddingService {
 
   private async callEmbedding(model: string, text: string): Promise<number[]> {
     if (this.provider === "ollama") {
-      const result = await ollama.embed({ model, input: text });
-      return result.embeddings[0] as number[];
+      return Promise.race([
+        ollama.embed({ model, input: text }).then(r => r.embeddings[0] as number[]),
+        new Promise<number[]>((_, reject) =>
+          setTimeout(() => reject(new Error("Ollama embed timeout (30s)")), 30_000),
+        ),
+      ]);
     }
 
     // OpenAI-compatible providers (openai, qwen-proxy, etc.)
@@ -163,8 +167,12 @@ export class EmbeddingService {
 
   private async callBatchEmbedding(model: string, texts: string[]): Promise<number[][]> {
     if (this.provider === "ollama") {
-      const result = await ollama.embed({ model, input: texts });
-      return result.embeddings as number[][];
+      return Promise.race([
+        ollama.embed({ model, input: texts }).then(r => r.embeddings as number[][]),
+        new Promise<number[][]>((_, reject) =>
+          setTimeout(() => reject(new Error("Ollama batch embed timeout (30s)")), 30_000),
+        ),
+      ]);
     }
 
     // OpenAI-compatible providers

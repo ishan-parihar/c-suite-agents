@@ -285,7 +285,7 @@ function describeError(event: ErrorEvent): string {
     if (msg.toLowerCase().includes("auth") || msg.includes("401") || msg.includes("403")) {
       return "Authentication or authorization issue detected";
     }
-    if (msg.toLowerCase().includes("5") && /status.*(5\d{2})|5\d{2}/.test(msg)) {
+    if (msg.toLowerCase().includes("5") && /status\s*(5\d{2})|5\d{2}/.test(msg)) {
       return "Provider returned a server error";
     }
     return sanitizeMessage(msg);
@@ -511,6 +511,9 @@ export class AlertManagerClass {
   /** Whether the alert manager is currently running. */
   private running = false;
 
+  /** Promise guarding concurrent start() calls. */
+  private startPromise: Promise<void> | null = null;
+
   /** Resolved options. */
   private opts: {
     telegramChatId?: string;
@@ -564,7 +567,7 @@ export class AlertManagerClass {
   }
 
   // -----------------------------------------------------------------------
-  // start / stop
+  // start / stop / cleanup
   // -----------------------------------------------------------------------
 
   /**
@@ -572,44 +575,65 @@ export class AlertManagerClass {
    *
    * Idempotent — safe to call multiple times.
    */
-  start(): void {
-    if (this.running) {
-      return;
-    }
-    this.running = true;
+  start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = (async () => {
+      if (this.running) return;
+      this.running = true;
 
-    // Listen for all error-type events
-    const errorTypes: Array<ErrorEventType | "*"> = [
-      "error:detected",
-      "cron:failed",
-      "heartbeat:missed",
-      "tool:failed",
-      "provider:failed",
-      "persistence:failed",
-      "agent:error",
-      "gateway:down",
-    ];
+      const errorTypes: Array<ErrorEventType | "*"> = [
+        "error:detected",
+        "cron:failed",
+        "heartbeat:missed",
+        "tool:failed",
+        "provider:failed",
+        "persistence:failed",
+        "agent:error",
+        "gateway:down",
+      ];
 
-    for (const eventType of errorTypes) {
-      const unsub = ErrorBus.on(eventType, (event) =>
-        this.handleErrorEvent(event),
+      for (const eventType of errorTypes) {
+        const unsub = ErrorBus.on(eventType, (event) =>
+          this.handleErrorEvent(event),
+        );
+        this.unsubscribers.push(unsub);
+      }
+
+      const recoveryUnsub = ErrorBus.on("error:recovered", (event) =>
+        this.handleRecoveryEvent(event),
       );
-      this.unsubscribers.push(unsub);
+      this.unsubscribers.push(recoveryUnsub);
+
+      logger.info("AlertManager: started — monitoring error bus");
+    })();
+    return this.startPromise;
+  }
+
+  /**
+   * Sweep stale entries from the states Map.
+   * Removes entries with zero consecutive failures and lastEventAt older than 24 hours.
+   * Idempotent — safe to call at any time.
+   */
+  cleanup(): void {
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [key, state] of this.states) {
+      if (state.consecutiveFailures === 0 && state.lastEventAt && (now - state.lastEventAt) > ONE_DAY) {
+        this.states.delete(key);
+        cleaned++;
+      }
     }
-
-    // Listen for recovery events
-    const recoveryUnsub = ErrorBus.on("error:recovered", (event) =>
-      this.handleRecoveryEvent(event),
-    );
-    this.unsubscribers.push(recoveryUnsub);
-
-    logger.info("AlertManager: started — monitoring error bus");
+    if (cleaned > 0) {
+      logger.info({ cleaned }, "AlertManager: stale states cleaned");
+    }
   }
 
   /**
    * Unsubscribe from the ErrorBus and stop monitoring.
    *
    * Does NOT clear alert state — use `reset()` for that.
+   * Calls cleanup() to prune stale entries before stopping.
    * Idempotent — safe to call multiple times.
    */
   stop(): void {
@@ -626,6 +650,8 @@ export class AlertManagerClass {
       }
     }
     this.unsubscribers = [];
+
+    this.cleanup();
 
     logger.info("AlertManager: stopped");
   }

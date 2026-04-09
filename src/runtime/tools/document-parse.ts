@@ -1,10 +1,11 @@
 // Document Parse Tool — Extracts text content from various file types
 // Standalone implementation — no cross-dependencies with other tools
 
-import { statSync, type Stats } from "node:fs";
+import { realpathSync, statSync, type Stats } from "node:fs";
 import { promises as fs } from "node:fs";
-import { extname } from "node:path";
+import { extname, isAbsolute, resolve, sep } from "node:path";
 import { logger } from "../../logger.js";
+import { getAgentWorkspace } from "../../agents/workspace-manager.js";
 
 interface AnyAgentTool {
   name: string;
@@ -110,10 +111,24 @@ export function createDocumentParseTool(): AnyAgentTool | null {
 
         const maxLength = (args.max_length as number) || DEFAULT_MAX_LENGTH;
 
+        // Sandbox: resolve path and enforce workspace containment
+        const agentId = (args.agent_id as string) || "unknown";
+        const workspaceDir = getAgentWorkspace(agentId);
+        let resolvedPath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceDir, filePath);
+        try {
+          resolvedPath = realpathSync(resolvedPath);
+        } catch {
+          return { content: [{ type: "text", text: `Error: File not found: ${filePath}` }] };
+        }
+        if (!(resolvedPath === workspaceDir || resolvedPath.startsWith(workspaceDir + sep))) {
+          logger.warn({ agentId, filePath, workspaceDir }, "document.parse: path outside workspace");
+          return { content: [{ type: "text", text: `Error: File path must be within workspace directory.` }] };
+        }
+
         // Validate file exists
         let stats: Stats;
         try {
-          stats = statSync(filePath);
+          stats = statSync(resolvedPath);
         } catch {
           return { content: [{ type: "text", text: `Error: File not found: ${filePath}` }] };
         }
@@ -130,7 +145,7 @@ export function createDocumentParseTool(): AnyAgentTool | null {
         }
 
         // Determine file type by extension
-        const ext = extname(filePath);
+        const ext = extname(resolvedPath);
         const category = getFileTypeCategory(ext);
 
         if (category === null) {
@@ -139,7 +154,7 @@ export function createDocumentParseTool(): AnyAgentTool | null {
 
         // Read file content
         let extractedText: string;
-        const buffer = await fs.readFile(filePath);
+        const buffer = await fs.readFile(resolvedPath);
 
         switch (category) {
           case "pdf": {

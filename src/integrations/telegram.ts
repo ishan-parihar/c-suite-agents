@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import * as crypto from "node:crypto";
 import { ErrorBus } from "../runtime/error-emitter.js";
 import { GatewayError } from "../runtime/error-types.js";
+import { AsyncMutex } from "../runtime/async-mutex.js";
 
 type AgentRegistry = { agents: Map<string, { id: string; role: string; boardId: string }>; cards: Map<string, string> };
 
@@ -55,6 +56,7 @@ function markdownToTelegramHtml(md: string): string {
 
   const formatInline = (text: string): string => {
     let t = escapeHtml(text);
+    if (t.length > 4096) t = t.slice(0, 4096);
     t = t.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
     t = t.replace(/\*\*\*(.+?)\*\*\*/g, (_m, content) => `<b><i>${content}</i></b>`);
     t = t.replace(/\*\*(.+?)\*\*/g, (_m, content) => `<b>${content}</b>`);
@@ -297,6 +299,7 @@ const defaultTimeoutMs = parseInt(process.env.TG_ROUTE_TIMEOUT_MS || "1800000", 
 
 const chatAgentMap = new Map<string, string>();
 const chatRoutes = new Map<string, ChatRoute>();
+const chatMutex = new AsyncMutex();
 
 function getRoute(chatId: string): ChatRoute {
   const r = chatRoutes.get(chatId);
@@ -327,12 +330,26 @@ function persistState() {
  * Called on shutdown to prevent state loss between last route change and restart.
  */
 export function flushChatState(): void {
+  // Prune stale entries older than 7 days
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  for (const [chatId, route] of chatRoutes) {
+    if (route.lastActive && (now - route.lastActive) > SEVEN_DAYS) {
+      chatRoutes.delete(chatId);
+      chatAgentMap.delete(chatId);
+    }
+  }
   persistState();
 }
 
 function loadChatState(): Record<string, { agent_id: string; route?: { participants: string[]; mode: "single"|"meeting"|"threaded"; timeoutMs: number } }> {
   try {
     if (fs.existsSync(STATE_FILE)) {
+      const stat = fs.statSync(STATE_FILE);
+      if (stat.size > 100 * 1024) {
+        logger.warn({ path: STATE_FILE, size: stat.size }, "telegram-routes.json too large, using default state");
+        return {};
+      }
       return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
     }
   } catch (err: any) {
@@ -364,6 +381,11 @@ export function recordShutdownTimestamp() {
 function readShutdownTimestamp(): number | null {
   try {
     if (fs.existsSync(SHUTDOWN_TS_FILE)) {
+      const stat = fs.statSync(SHUTDOWN_TS_FILE);
+      if (stat.size > 100 * 1024) {
+        logger.warn({ path: SHUTDOWN_TS_FILE, size: stat.size }, "shutdown-timestamp.json too large, returning null");
+        return null;
+      }
       const data = JSON.parse(fs.readFileSync(SHUTDOWN_TS_FILE, "utf-8"));
       return data.timestamp ?? null;
     }
@@ -448,7 +470,10 @@ export async function startTelegram(rt: StrategosRuntime) {
   }
 
   try {
-    const bot = new Telegraf(cfg.telegramToken, { handlerTimeout: Infinity });
+    const bot = new Telegraf(cfg.telegramToken, {
+      handlerTimeout: 120_000,
+      telegram: { timeout: 15000 } as Record<string, unknown>,
+    });
     const registry: AgentRegistry = { agents: new Map(), cards: new Map() };
     const contextManager = new AgentContextManager(rt.ctx.kanban, rt.ctx.memory);
     
@@ -1657,7 +1682,10 @@ ${agentLines}`, { parse_mode: "HTML" });
         try {
           const messaging = await getMessagingSystem();
           unreadCount = await messaging.getUnreadCount(agentId);
-        } catch { unreadCount = 0; }
+        } catch (err) {
+          logger.warn({ agentId, err: (err as Error).message }, "Failed to get unread message count for /status");
+          unreadCount = -1;
+        }
 
         // Scheduled tasks
         let activeTasks = 0;
@@ -1733,7 +1761,7 @@ Send a message first to create a session, then try again.`, { parse_mode: "HTML"
         }
 
         const sessionId = agentSession.session_id || agentSession.sessionId;
-        runtime.compactSession(sessionId);
+        await runtime.compactSession(sessionId);
 
         await ctx.reply(`<b>🗜️ Session Compacted</b>
 
@@ -2137,7 +2165,7 @@ Example:
         let agentReply = "(no reply)";
 
         try {
-          const sid = runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
           const result = await runtime.sendMessage(sid, taskText, nativeAgentId);
           agentReply = result.text || "(empty response)";
         } catch (err: any) {
@@ -2276,7 +2304,7 @@ Escalates the message to the CEO with P1 priority.`, { parse_mode: "HTML" });
         const runtime = getNativeRuntime();
         const ceoNativeId = AGENT_ID_MAP["ceo-strategic"] || "ceo-strategic";
         try {
-          const ceoSid = runtime.getOrCreateRuntimeSession(ceoNativeId, { mode: "message" });
+          const ceoSid = await runtime.getOrCreateRuntimeSession(ceoNativeId, { mode: "message" });
           await runtime.sendMessage(ceoSid, `🚨 ESCALATION from ${activeAgentName}:\n\n${escalationMessage}`, ceoNativeId);
         } catch (err: any) {
           logger.warn({ err: err.message }, "Escalation: direct CEO runtime notify failed — messaging send succeeded");
@@ -2355,7 +2383,7 @@ Example:
         let agentReply = "(no reply)";
 
         try {
-          const sid = runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
           const result = await runtime.sendMessage(sid, messageText, nativeAgentId);
           agentReply = result.text || "(empty response)";
         } catch (err: any) {
@@ -2382,178 +2410,183 @@ Example:
       const chatId = ctx.chat.id.toString();
       if (chatId !== cfg.telegramChatId) return;
 
-      logger.info({ chatId }, "Media message received");
-      await ctx.sendChatAction("typing");
-
+      const release = await chatMutex.acquire(chatId);
       try {
-        // Import media pipeline
-        const { detectMedia, downloadTelegramFile, buildMediaContext, resolveMediaPlaceholder } = await import("./telegram-media.js");
-
-        // Detect media
-        const detected = detectMedia(ctx);
-        if (!detected.hasMedia) return;
-
-        logger.info({ mediaType: detected.mediaType, mediaCount: detected.mediaCount, caption: detected.caption }, "Media detected");
-
-        // Download media
-        const maxSizeBytes = ((cfg as any).media?.maxSizeMB ?? 100) * 1024 * 1024;
-        const media = await downloadTelegramFile(ctx, maxSizeBytes);
-        if (!media) {
-          await ctx.reply("⚠️ Could not download the file. It may be too large or unavailable.", { parse_mode: "HTML" });
-          return;
-        }
-
-        logger.info({ path: media.path, contentType: media.contentType, size: media.fileSize }, "Media downloaded");
-
-        // Try to parse documents for text
-        let parsedContent = "";
-        if (detected.mediaType === "document" && media.path) {
-          try {
-            const { createDocumentParseTool } = await import("../runtime/tools/document-parse.js");
-            const docTool = createDocumentParseTool();
-            if (docTool) {
-              const result = await docTool.execute("", { file_path: media.path, max_length: 50000 });
-              parsedContent = result.content?.[0]?.text ?? "";
-            }
-          } catch (e: any) {
-            logger.warn({ err: e.message }, "Document parsing failed — will send as file reference");
-          }
-        }
-
-        // Try to transcribe audio/voice
-        let transcript = "";
-        if ((detected.mediaType === "audio" || detected.mediaType === "voice") && media.path) {
-          try {
-            const { createAudioTranscribeTool } = await import("../runtime/tools/audio-transcribe.js");
-            const audioTool = createAudioTranscribeTool();
-            if (audioTool) {
-              const result = await audioTool.execute("", { file_path: media.path });
-              transcript = result.content?.[0]?.text ?? "";
-            } else {
-              transcript = "[Audio transcription not available — apex not configured]";
-            }
-          } catch (e: any) {
-            logger.warn({ err: e.message }, "Audio transcription failed");
-            transcript = `[Audio transcription failed: ${e.message}]`;
-          }
-        }
-
-        // Build media context for agent
-        const mediaSection = buildMediaContext([media], detected.caption);
-
-        // If it's a document and we parsed it, append the content
-        const fullMediaContext = parsedContent
-          ? `${mediaSection}\n\n📄 Document Content:\n${parsedContent}`
-          : transcript && !transcript.startsWith("[")
-            ? `${mediaSection}\n\n🎤 Transcription:\n${transcript}`
-            : transcript
-              ? `${mediaSection}\n\n⚠️ ${transcript}`
-              : mediaSection;
-
-        // Route to agents — same routing logic as text handler
-        let route = getRoute(chatId);
-        if (Date.now() - route.lastActive > route.timeoutMs && !boardMeetingActive) {
-          route = { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
-        }
-        setRoute(chatId, route);
-
-        const runtime = getNativeRuntime();
-
-        // Keep typing indicator active during processing
-        const typingInterval = setInterval(() => {
-          ctx.sendChatAction("typing").catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "sendChatAction failed"));
-        }, 5000);
+        logger.info({ chatId }, "Media message received");
+        await ctx.sendChatAction("typing");
 
         try {
-          // Fan-out to all participants concurrently
-          const replies = await Promise.allSettled(route.participants.map(async (agentId) => {
-            // Wake context per agent
-            let wakeCtx = "";
-            try {
-              const wc = await contextManager.getWakeContext(agentId);
-              wakeCtx = await contextManager.formatWakeContext(wc);
-            } catch (e) {
-              logger.warn({ err: e }, "Failed to build wake context");
-              wakeCtx = "[No context available]";
-            }
+          // Import media pipeline
+          const { detectMedia, downloadTelegramFile, buildMediaContext, resolveMediaPlaceholder } = await import("./telegram-media.js");
 
-            // Get persistent session via registry
-            try {
-              await sessionRegistry.getOrCreate(agentId, { chatId });
-            } catch (e: any) {
-              logger.warn({ agentId, err: e.message }, "sessionRegistry.getOrCreate failed");
-            }
+          // Detect media
+          const detected = detectMedia(ctx);
+          if (!detected.hasMedia) return;
 
-            // Build delta with media context
-            const delta = [
-              fullMediaContext,
-              detected.caption ? `[Caption: ${detected.caption}]` : "",
-              `[Media File: ${media.fileName || media.path}]`,
-              `---`,
-              `[User sent a media file. Process it using your available tools and respond appropriately.]`,
-            ].filter(Boolean).join('\n');
+          logger.info({ mediaType: detected.mediaType, mediaCount: detected.mediaCount, caption: detected.caption }, "Media detected");
 
-            // Send with native agent identity
-            const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
-            let reply = "(no reply)";
-            let sid: string | undefined;
-            try {
-              sid = runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
-              logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending media delta to native runtime...");
-              const result = await runtime.sendMessage(sid, delta, nativeAgentId);
-              logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
-              reply = result.text || "(empty response)";
-            } catch (err: any) {
-              logger.error({ agentId, err: err.message }, "Native runtime message failed");
-              reply = `(error contacting agent: ${err.message})`;
-            }
-
-            try {
-              if (sid) await sessionRegistry.touch(sid);
-            } catch (e: any) {
-              logger.warn({ agentId, err: e.message }, "session touch failed");
-            }
-
-            const prefix = getStaffById(agentId)?.avatar ? `${getStaffById(agentId)?.avatar} ${getStaffById(agentId)?.name}` : agentId;
-            return `${prefix}:\n${reply}`;
-          }));
-
-          // Clear typing indicator
-          clearInterval(typingInterval);
-
-          const successful = replies.filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled");
-          const failed = replies.filter(r => r.status === "rejected");
-
-          if (failed.length > 0) {
-            for (const f of failed) {
-              const err = (f as PromiseRejectedResult).reason;
-              logger.error({ err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined }, "Agent response rejected");
-            }
-            logger.warn({ failed: failed.length, total: replies.length }, "Partial agent response failure");
-          }
-          if (successful.length === 0) {
-            await ctx.reply("❌ No agents could process this file.", { parse_mode: "HTML" });
+          // Download media
+          const maxSizeBytes = ((cfg as any).media?.maxSizeMB ?? 100) * 1024 * 1024;
+          const media = await downloadTelegramFile(ctx, maxSizeBytes);
+          if (!media) {
+            await ctx.reply("⚠️ Could not download the file. It may be too large or unavailable.", { parse_mode: "HTML" });
             return;
           }
 
-          const combined = successful.map(r => r.value).join("\n\n");
-          logger.info({ textLength: combined.length, agentsOk: successful.length, agentsFailed: failed.length }, "Sending reply to Telegram...");
+          logger.info({ path: media.path, contentType: media.contentType, size: media.fileSize }, "Media downloaded");
 
-          // Convert markdown to HTML and send with smart chunking
-          const html = markdownToTelegramHtml(combined);
-          await sendTelegramHtmlChunks(ctx, html, combined);
-          logger.info("Media reply sent successfully");
+          // Try to parse documents for text
+          let parsedContent = "";
+          if (detected.mediaType === "document" && media.path) {
+            try {
+              const { createDocumentParseTool } = await import("../runtime/tools/document-parse.js");
+              const docTool = createDocumentParseTool();
+              if (docTool) {
+                const result = await docTool.execute("", { file_path: media.path, max_length: 50000 });
+                parsedContent = result.content?.[0]?.text ?? "";
+              }
+            } catch (e: any) {
+              logger.warn({ err: e.message }, "Document parsing failed — will send as file reference");
+            }
+          }
+
+          // Try to transcribe audio/voice
+          let transcript = "";
+          if ((detected.mediaType === "audio" || detected.mediaType === "voice") && media.path) {
+            try {
+              const { createAudioTranscribeTool } = await import("../runtime/tools/audio-transcribe.js");
+              const audioTool = createAudioTranscribeTool();
+              if (audioTool) {
+                const result = await audioTool.execute("", { file_path: media.path });
+                transcript = result.content?.[0]?.text ?? "";
+              } else {
+                transcript = "[Audio transcription not available — apex not configured]";
+              }
+            } catch (e: any) {
+              logger.warn({ err: e.message }, "Audio transcription failed");
+              transcript = `[Audio transcription failed: ${e.message}]`;
+            }
+          }
+
+          // Build media context for agent
+          const mediaSection = buildMediaContext([media], detected.caption);
+
+          // If it's a document and we parsed it, append the content
+          const fullMediaContext = parsedContent
+            ? `${mediaSection}\n\n📄 Document Content:\n${parsedContent}`
+            : transcript && !transcript.startsWith("[")
+              ? `${mediaSection}\n\n🎤 Transcription:\n${transcript}`
+              : transcript
+                ? `${mediaSection}\n\n⚠️ ${transcript}`
+                : mediaSection;
+
+          // Route to agents — same routing logic as text handler
+          let route = getRoute(chatId);
+          if (Date.now() - route.lastActive > route.timeoutMs && !boardMeetingActive) {
+            route = { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
+          }
+          setRoute(chatId, route);
+
+          const runtime = getNativeRuntime();
+
+          // Keep typing indicator active during processing
+          const typingInterval = setInterval(() => {
+            ctx.sendChatAction("typing").catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "sendChatAction failed"));
+          }, 5000);
+
+          try {
+            // Fan-out to all participants concurrently
+            const replies = await Promise.allSettled(route.participants.map(async (agentId) => {
+              // Wake context per agent
+              let wakeCtx = "";
+              try {
+                const wc = await contextManager.getWakeContext(agentId);
+                wakeCtx = await contextManager.formatWakeContext(wc);
+              } catch (e) {
+                logger.warn({ err: e }, "Failed to build wake context");
+                wakeCtx = "[No context available]";
+              }
+
+              // Get persistent session via registry
+              try {
+                await sessionRegistry.getOrCreate(agentId, { chatId });
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "sessionRegistry.getOrCreate failed");
+              }
+
+              // Build delta with media context
+              const delta = [
+                fullMediaContext,
+                detected.caption ? `[Caption: ${detected.caption}]` : "",
+                `[Media File: ${media.fileName || media.path}]`,
+                `---`,
+                `[User sent a media file. Process it using your available tools and respond appropriately.]`,
+              ].filter(Boolean).join('\n');
+
+              // Send with native agent identity
+              const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
+              let reply = "(no reply)";
+              let sid: string | undefined;
+              try {
+                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+                logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending media delta to native runtime...");
+                const result = await runtime.sendMessage(sid, delta, nativeAgentId);
+                logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
+                reply = result.text || "(empty response)";
+              } catch (err: any) {
+                logger.error({ agentId, err: err.message }, "Native runtime message failed");
+                reply = `(error contacting agent: ${err.message})`;
+              }
+
+              try {
+                if (sid) await sessionRegistry.touch(sid);
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "session touch failed");
+              }
+
+              const prefix = getStaffById(agentId)?.avatar ? `${getStaffById(agentId)?.avatar} ${getStaffById(agentId)?.name}` : agentId;
+              return `${prefix}:\n${reply}`;
+            }));
+
+            // Clear typing indicator
+            clearInterval(typingInterval);
+
+            const successful = replies.filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled");
+            const failed = replies.filter(r => r.status === "rejected");
+
+            if (failed.length > 0) {
+              for (const f of failed) {
+                const err = (f as PromiseRejectedResult).reason;
+                logger.error({ err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined }, "Agent response rejected");
+              }
+              logger.warn({ failed: failed.length, total: replies.length }, "Partial agent response failure");
+            }
+            if (successful.length === 0) {
+              await ctx.reply("❌ No agents could process this file.", { parse_mode: "HTML" });
+              return;
+            }
+
+            const combined = successful.map(r => r.value).join("\n\n");
+            logger.info({ textLength: combined.length, agentsOk: successful.length, agentsFailed: failed.length }, "Sending reply to Telegram...");
+
+            // Convert markdown to HTML and send with smart chunking
+            const html = markdownToTelegramHtml(combined);
+            await sendTelegramHtmlChunks(ctx, html, combined);
+            logger.info("Media reply sent successfully");
+          } catch (err: any) {
+            clearInterval(typingInterval);
+            logger.error({ err: err.message }, "Failed to process media message");
+            const safeMsg = err.message?.length < 100 && !err.message?.includes("ECONN") && !err.message?.includes("ETIMEDOUT") && !err.message?.includes("ENOENT")
+              ? "A processing error occurred"
+              : "A processing error occurred";
+            await ctx.reply(`❌ ${safeMsg}\n\nPlease try again or use /help for commands.`);
+          }
         } catch (err: any) {
-          clearInterval(typingInterval);
-          logger.error({ err: err.message }, "Failed to process media message");
-          const safeMsg = err.message?.length < 100 && !err.message?.includes("ECONN") && !err.message?.includes("ETIMEDOUT") && !err.message?.includes("ENOENT")
-            ? "A processing error occurred"
-            : "A processing error occurred";
-          await ctx.reply(`❌ ${safeMsg}\n\nPlease try again or use /help for commands.`);
+          logger.error({ err: err.message }, "Media processing failed");
+          await ctx.reply("❌ Failed to process the media file.", { parse_mode: "HTML" });
         }
-      } catch (err: any) {
-        logger.error({ err: err.message }, "Media processing failed");
-        await ctx.reply("❌ Failed to process the media file.", { parse_mode: "HTML" });
+      } finally {
+        release();
       }
     });
 
@@ -2564,162 +2597,167 @@ Example:
       
       if (chatId !== cfg.telegramChatId || !text || text.startsWith("/")) return;
       
-      logger.info({ chatId, text: text.substring(0, 100) }, "Message received");
-      await ctx.sendChatAction("typing");
-      
+      const release = await chatMutex.acquire(chatId);
       try {
-        // Determine route with timeout reset
-        let route = getRoute(chatId);
-        if (Date.now() - route.lastActive > route.timeoutMs && !boardMeetingActive) {
-          route = { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
-        }
-        setRoute(chatId, route);
-
-        const runtime = getNativeRuntime();
-
-        // Keep typing indicator active during processing
-        const typingInterval = setInterval(() => {
-          ctx.sendChatAction("typing").catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "sendChatAction failed"));
-        }, 5000);
-
+        logger.info({ chatId, text: text.substring(0, 100) }, "Message received");
+        await ctx.sendChatAction("typing");
+        
         try {
-          // Fan-out to all participants concurrently
-          const replies = await Promise.allSettled(route.participants.map(async (agentId) => {
-            // Wake context per agent
-            let wakeCtx = "";
-            try {
-              const wc = await contextManager.getWakeContext(agentId);
-              wakeCtx = await contextManager.formatWakeContext(wc);
-            } catch (e) { 
-              logger.warn({ err: e }, "Failed to build wake context"); 
-              wakeCtx = "[No context available]";
-            }
+          // Determine route with timeout reset
+          let route = getRoute(chatId);
+          if (Date.now() - route.lastActive > route.timeoutMs && !boardMeetingActive) {
+            route = { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs };
+          }
+          setRoute(chatId, route);
 
-            // Get persistent session via registry
-            try {
-              await sessionRegistry.getOrCreate(agentId, { chatId });
-            } catch (e: any) {
-              logger.warn({ agentId, err: e.message }, "sessionRegistry.getOrCreate failed");
-            }
+          const runtime = getNativeRuntime();
 
-            // Build delta
-            let memoryFacade: any;
-            try {
-              memoryFacade = await getMemoryFacade();
-            } catch (e: any) {
-              logger.warn({ agentId, err: e.message }, "MemoryFacade unavailable");
-            }
+          // Keep typing indicator active during processing
+          const typingInterval = setInterval(() => {
+            ctx.sendChatAction("typing").catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "sendChatAction failed"));
+          }, 5000);
 
-            // AUTO RECALL: Fetch relevant memories before responding
-            let recallText = "";
-            try {
-              recallText = await autoRecall({
-                agentId,
-                queryText: text,
-                trigger: "user_message",
-              });
-            } catch (e: any) {
-              logger.warn({ agentId, err: e.message }, "autoRecall failed");
-            }
-
-            let memoryInjection = "";
-            if (memoryFacade) {
+          try {
+            // Fan-out to all participants concurrently
+            const replies = await Promise.allSettled(route.participants.map(async (agentId) => {
+              // Wake context per agent
+              let wakeCtx = "";
               try {
-                memoryInjection = await memoryFacade.injectForTask(agentId, text);
-              } catch (e: any) {
-                logger.warn({ agentId, err: e.message }, "memory inject failed");
+                const wc = await contextManager.getWakeContext(agentId);
+                wakeCtx = await contextManager.formatWakeContext(wc);
+              } catch (e) { 
+                logger.warn({ err: e }, "Failed to build wake context"); 
+                wakeCtx = "[No context available]";
               }
+
+              // Get persistent session via registry
+              try {
+                await sessionRegistry.getOrCreate(agentId, { chatId });
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "sessionRegistry.getOrCreate failed");
+              }
+
+              // Build delta
+              let memoryFacade: any;
+              try {
+                memoryFacade = await getMemoryFacade();
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "MemoryFacade unavailable");
+              }
+
+              // AUTO RECALL: Fetch relevant memories before responding
+              let recallText = "";
+              try {
+                recallText = await autoRecall({
+                  agentId,
+                  queryText: text,
+                  trigger: "user_message",
+                });
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "autoRecall failed");
+              }
+
+              let memoryInjection = "";
+              if (memoryFacade) {
+                try {
+                  memoryInjection = await memoryFacade.injectForTask(agentId, text);
+                } catch (e: any) {
+                  logger.warn({ agentId, err: e.message }, "memory inject failed");
+                }
+              }
+
+              const delta = [
+                recallText,
+                memoryInjection,
+                `---`,
+                `[User Message]`,
+                text,
+                `[/User Message]`,
+                ``,
+                `[Context]`,
+                wakeCtx,
+                `[/Context]`,
+              ].filter(Boolean).join('\n');
+
+              // Send with native agent identity
+              const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
+              let reply = "(no reply)";
+              let sid: string | undefined;
+              try {
+                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+                logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending delta to native runtime...");
+                const result = await runtime.sendMessage(sid, delta, nativeAgentId);
+                logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
+                reply = result.text || "(empty response)";
+              } catch (err: any) {
+                logger.error({ agentId, err: err.message }, "Native runtime message failed");
+                reply = `(error contacting agent: ${err.message})`;
+              }
+
+              // AUTO STORE: Save the conversation turn
+              try {
+                await autoStore({
+                  agentId,
+                  inputText: text,
+                  outputText: reply,
+                  trigger: "user_message",
+                  context: {
+                    threadId: chatId,
+                  },
+                });
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "autoStore failed");
+              }
+
+              try {
+                if (sid) await sessionRegistry.touch(sid);
+              } catch (e: any) {
+                logger.warn({ agentId, err: e.message }, "session touch failed");
+              }
+
+              const prefix = getStaffById(agentId)?.avatar ? `${getStaffById(agentId)?.avatar} ${getStaffById(agentId)?.name}` : agentId;
+              return `${prefix}:\n${reply}`;
+            }));
+
+            // Clear typing indicator
+            clearInterval(typingInterval);
+
+            const successful = replies.filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled");
+            const failed = replies.filter(r => r.status === "rejected");
+
+            if (failed.length > 0) {
+              for (const f of failed) {
+                const err = (f as PromiseRejectedResult).reason;
+                logger.error({ err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined }, "Agent response rejected");
+              }
+              logger.warn({ failed: failed.length, total: replies.length }, "Partial agent response failure");
+            }
+            if (successful.length === 0) {
+              await ctx.reply("❌ No agents could respond right now. Please try again later.");
+              return;
             }
 
-            const delta = [
-              recallText,
-              memoryInjection,
-              `---`,
-              `[User Message]`,
-              text,
-              `[/User Message]`,
-              ``,
-              `[Context]`,
-              wakeCtx,
-              `[/Context]`,
-            ].filter(Boolean).join('\n');
-
-            // Send with native agent identity
-            const nativeAgentId = AGENT_ID_MAP[agentId] || agentId;
-            let reply = "(no reply)";
-            let sid: string | undefined;
-            try {
-              sid = runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
-              logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending delta to native runtime...");
-              const result = await runtime.sendMessage(sid, delta, nativeAgentId);
-              logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
-              reply = result.text || "(empty response)";
-            } catch (err: any) {
-              logger.error({ agentId, err: err.message }, "Native runtime message failed");
-              reply = `(error contacting agent: ${err.message})`;
-            }
-
-            // AUTO STORE: Save the conversation turn
-            try {
-              await autoStore({
-                agentId,
-                inputText: text,
-                outputText: reply,
-                trigger: "user_message",
-                context: {
-                  threadId: chatId,
-                },
-              });
-            } catch (e: any) {
-              logger.warn({ agentId, err: e.message }, "autoStore failed");
-            }
-
-            try {
-              if (sid) await sessionRegistry.touch(sid);
-            } catch (e: any) {
-              logger.warn({ agentId, err: e.message }, "session touch failed");
-            }
-
-            const prefix = getStaffById(agentId)?.avatar ? `${getStaffById(agentId)?.avatar} ${getStaffById(agentId)?.name}` : agentId;
-            return `${prefix}:\n${reply}`;
-          }));
-
-          // Clear typing indicator
-          clearInterval(typingInterval);
-
-          const successful = replies.filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled");
-          const failed = replies.filter(r => r.status === "rejected");
-
-          if (failed.length > 0) {
-            for (const f of failed) {
-              const err = (f as PromiseRejectedResult).reason;
-              logger.error({ err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined }, "Agent response rejected");
-            }
-            logger.warn({ failed: failed.length, total: replies.length }, "Partial agent response failure");
+            const combined = successful.map(r => r.value).join("\n\n");
+            logger.info({ textLength: combined.length, agentsOk: successful.length, agentsFailed: failed.length }, "Sending reply to Telegram...");
+            
+            // Convert markdown to HTML and send with smart chunking
+            const html = markdownToTelegramHtml(combined);
+            await sendTelegramHtmlChunks(ctx, html, combined);
+            logger.info("Reply sent successfully");
+          } catch (err: any) {
+            clearInterval(typingInterval);
+            logger.error({ err: err.message }, "Failed to process message");
+            const safeMsg = err.message?.length < 100 && !err.message?.includes("ECONN") && !err.message?.includes("ETIMEDOUT") && !err.message?.includes("ENOENT")
+              ? "A processing error occurred"
+              : "A processing error occurred";
+            await ctx.reply(`❌ ${safeMsg}\n\nPlease try again or use /help for commands.`);
           }
-          if (successful.length === 0) {
-            await ctx.reply("❌ No agents could respond right now. Please try again later.");
-            return;
-          }
-
-          const combined = successful.map(r => r.value).join("\n\n");
-          logger.info({ textLength: combined.length, agentsOk: successful.length, agentsFailed: failed.length }, "Sending reply to Telegram...");
-          
-          // Convert markdown to HTML and send with smart chunking
-          const html = markdownToTelegramHtml(combined);
-          await sendTelegramHtmlChunks(ctx, html, combined);
-          logger.info("Reply sent successfully");
         } catch (err: any) {
-          clearInterval(typingInterval);
-          logger.error({ err: err.message }, "Failed to process message");
-          const safeMsg = err.message?.length < 100 && !err.message?.includes("ECONN") && !err.message?.includes("ETIMEDOUT") && !err.message?.includes("ENOENT")
-            ? "A processing error occurred"
-            : "A processing error occurred";
-          await ctx.reply(`❌ ${safeMsg}\n\nPlease try again or use /help for commands.`);
+          logger.error({ err: err.message }, "Unexpected error in message handler");
+          await ctx.reply(`<b>❌ Unexpected error</b> - Please try again`, { parse_mode: "HTML" });
         }
-      } catch (err: any) {
-        logger.error({ err: err.message }, "Unexpected error in message handler");
-        await ctx.reply(`<b>❌ Unexpected error</b> - Please try again`, { parse_mode: "HTML" });
+      } finally {
+        release();
       }
     });
 

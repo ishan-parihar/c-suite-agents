@@ -10,6 +10,7 @@ import { Memory } from "../memory/lancedb.js";
 import { getSessionRegistry } from "./session-registry.js";
 import { autoStore, autoRecall } from "../memory/auto.js";
 import { ErrorBus } from "../runtime/error-emitter.js";
+import { AsyncMutex } from "../runtime/async-mutex.js";
 
 const MAX_THREAD_RETRIES = 3;
 
@@ -20,6 +21,7 @@ export class MessageProcessor {
   private isProcessing = false;
   private activeConversations = new Map<string, { thread_id: string; round: number; initiated_by: string; started_at: number }>();
   private failedThreads = new Map<string, number>();
+  private convMutex = new AsyncMutex();
 
   constructor(
     private kanban: Kanban,
@@ -85,6 +87,14 @@ export class MessageProcessor {
         await this.processAgent(agentId, messaging, contextManager);
       } catch (err: any) {
         logger.error({ agentId, err: err.message }, "Failed to process agent messages");
+        ErrorBus.emit({
+          type: "message:failed",
+          severity: "warn",
+          component: "message-processor",
+          error: err instanceof Error ? err : new Error(String(err)),
+          message: `Message processing failed for agent ${agentId}`,
+          context: { agentId },
+        });
       }
     }
   }
@@ -120,22 +130,27 @@ export class MessageProcessor {
     for (const msg of validResponses) {
       const tags = msg.tags || [];
       if (tags.includes("conversation")) {
-        const convKey = `${msg.thread_id}`;
-        const existing = this.activeConversations.get(convKey);
+        const convKey = `conv:${msg.thread_id}`;
+        const release = await this.convMutex.acquire(convKey);
+        try {
+          const existing = this.activeConversations.get(convKey);
 
-        if (!existing) {
-          // New conversation started
-          this.activeConversations.set(convKey, {
-            thread_id: msg.thread_id,
-            round: 1,
-            initiated_by: msg.from,
-            started_at: Date.now(),
-          });
-        } else if (existing.round >= 5) {
-          // Max rounds reached — inject conclusion reminder
-          msg.content = `[This conversation has reached the maximum of 5 rounds. Please provide a clear conclusion and end the conversation.]\n\n${msg.content}`;
-        } else {
-          existing.round++;
+          if (!existing) {
+            // New conversation started
+            this.activeConversations.set(convKey, {
+              thread_id: msg.thread_id,
+              round: 1,
+              initiated_by: msg.from,
+              started_at: Date.now(),
+            });
+          } else if (existing.round >= 5) {
+            // Max rounds reached — inject conclusion reminder
+            msg.content = `[This conversation has reached the maximum of 5 rounds. Please provide a clear conclusion and end the conversation.]\n\n${msg.content}`;
+          } else {
+            existing.round++;
+          }
+        } finally {
+          release();
         }
       }
     }
@@ -166,30 +181,35 @@ export class MessageProcessor {
         });
 
         // Check if this is a conversation conclusion
-        const convKey = `${msg.thread_id}`;
-        const conv = this.activeConversations.get(convKey);
-        if (conv && result.text) {
-          const hasConclusion = /CONCLUSION[:\s]|To conclude|In summary|Final decision|Here's the conclusion/i.test(result.text);
+        const convKey = `conv:${msg.thread_id}`;
+        const convRelease = await this.convMutex.acquire(convKey);
+        try {
+          const conv = this.activeConversations.get(convKey);
+          if (conv && result.text) {
+            const hasConclusion = /CONCLUSION[:\s]|To conclude|In summary|Final decision|Here's the conclusion/i.test(result.text);
 
-          if (hasConclusion || conv.round >= 5) {
-            this.activeConversations.delete(convKey);
+            if (hasConclusion || conv.round >= 5) {
+              this.activeConversations.delete(convKey);
 
-            // If initiating agent is the current active agent, deliver conclusion to user
-            if (conv.initiated_by === agentId) {
-              try {
-                const { sendTelegramMessage } = await import("../integrations/telegram.js");
-                const { getStaffById } = await import("../staff/core-staff.js");
-                const staff = getStaffById(agentId);
-                if (staff) {
-                  const prefix = `${staff.avatar} **${staff.name}** (${staff.title}):\n\n`;
-                  await sendTelegramMessage(`${prefix}${result.text.slice(0, 4000)}`);
-                  logger.info({ agentId, threadId: msg.thread_id }, "Conversation conclusion delivered to user");
+              // If initiating agent is the current active agent, deliver conclusion to user
+              if (conv.initiated_by === agentId) {
+                try {
+                  const { sendTelegramMessage } = await import("../integrations/telegram.js");
+                  const { getStaffById } = await import("../staff/core-staff.js");
+                  const staff = getStaffById(agentId);
+                  if (staff) {
+                    const prefix = `${staff.avatar} **${staff.name}** (${staff.title}):\n\n`;
+                    await sendTelegramMessage(`${prefix}${result.text.slice(0, 4000)}`);
+                    logger.info({ agentId, threadId: msg.thread_id }, "Conversation conclusion delivered to user");
+                  }
+                } catch (err: any) {
+                  logger.warn({ agentId, err: err.message }, "Failed to deliver conversation conclusion to user");
                 }
-              } catch (err: any) {
-                logger.warn({ agentId, err: err.message }, "Failed to deliver conversation conclusion to user");
               }
             }
           }
+        } finally {
+          convRelease();
         }
 
         // AUTO STORE: Save the conversation turn automatically
@@ -206,31 +226,36 @@ export class MessageProcessor {
 
         logger.info({ agentId, threadId: msg.thread_id }, "Agent responded to message");
       } catch (err: any) {
-        const threadKey = `${agentId}:${msg.thread_id}`;
-        const retries = (this.failedThreads.get(threadKey) || 0) + 1;
-        this.failedThreads.set(threadKey, retries);
+        const threadKey = `fail:${agentId}:${msg.thread_id}`;
+        const failRelease = await this.convMutex.acquire(threadKey);
+        try {
+          const retries = (this.failedThreads.get(threadKey) || 0) + 1;
+          this.failedThreads.set(threadKey, retries);
 
-        if (retries >= MAX_THREAD_RETRIES) {
-          logger.error(
-            { agentId, threadId: msg.thread_id, retries, err: err.message },
-            "Thread permanently failed — archiving after max retries"
-          );
-          await messaging.markAsRead(agentId, msg.thread_id);
-          this.failedThreads.delete(threadKey);
-          ErrorBus.emit({
-            type: "message:failed",
-            severity: "error",
-            component: "message-processor",
-            error: err instanceof Error ? err : new Error(err.message),
-            message: `Thread ${msg.thread_id} failed ${retries} times for ${agentId}`,
-            agentId,
-            context: { thread_id: msg.thread_id, retries, action: "archived" },
-          });
-        } else {
-          logger.warn(
-            { agentId, threadId: msg.thread_id, retries, err: err.message },
-            `Thread failed (attempt ${retries}/${MAX_THREAD_RETRIES})`
-          );
+          if (retries >= MAX_THREAD_RETRIES) {
+            logger.error(
+              { agentId, threadId: msg.thread_id, retries, err: err.message },
+              "Thread permanently failed — archiving after max retries"
+            );
+            await messaging.markAsRead(agentId, msg.thread_id);
+            this.failedThreads.delete(threadKey);
+            ErrorBus.emit({
+              type: "message:failed",
+              severity: "error",
+              component: "message-processor",
+              error: err instanceof Error ? err : new Error(err.message),
+              message: `Thread ${msg.thread_id} failed ${retries} times for ${agentId}`,
+              agentId,
+              context: { thread_id: msg.thread_id, retries, action: "archived" },
+            });
+          } else {
+            logger.warn(
+              { agentId, threadId: msg.thread_id, retries, err: err.message },
+              `Thread failed (attempt ${retries}/${MAX_THREAD_RETRIES})`
+            );
+          }
+        } finally {
+          failRelease();
         }
       }
     }

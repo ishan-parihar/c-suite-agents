@@ -2,10 +2,11 @@
 // Standalone implementation — no cross-dependencies with other tools
 
 import { spawn } from "node:child_process";
-import { statSync, readFileSync, existsSync } from "node:fs";
+import { statSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, dirname, basename, extname } from "node:path";
+import { join, resolve, dirname, basename, extname, isAbsolute, sep } from "node:path";
 import { logger } from "../../logger.js";
+import { getAgentWorkspace } from "../../agents/workspace-manager.js";
 
 interface AnyAgentTool {
   name: string;
@@ -133,13 +134,27 @@ export function createAudioTranscribeTool(): AnyAgentTool | null {
           return { content: [{ type: "text", text: "Error: file_path is required." }] };
         }
 
+        // Sandbox: resolve path and enforce workspace containment
+        const agentId = (args.agent_id as string) || "unknown";
+        const workspaceDir = getAgentWorkspace(agentId);
+        let resolvedPath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceDir, filePath);
         try {
-          statSync(filePath);
+          resolvedPath = realpathSync(resolvedPath);
+        } catch {
+          return { content: [{ type: "text", text: `Error: File not found: ${filePath}` }] };
+        }
+        if (!(resolvedPath === workspaceDir || resolvedPath.startsWith(workspaceDir + sep))) {
+          logger.warn({ agentId, filePath, workspaceDir }, "audio.transcribe: path outside workspace");
+          return { content: [{ type: "text", text: "Error: File path must be within workspace directory." }] };
+        }
+
+        try {
+          statSync(resolvedPath);
         } catch {
           return { content: [{ type: "text", text: `Error: File not found: ${filePath}` }] };
         }
 
-        const absPath = resolve(filePath);
+        const absPath = resolvedPath;
         const outDir = dirname(absPath);
         const stem = basename(absPath, extname(absPath));
         const txtOutput = join(outDir, stem + ".apex.txt");
@@ -163,6 +178,13 @@ export function createAudioTranscribeTool(): AnyAgentTool | null {
         if (!existsSync(txtOutput)) {
           logger.error({ txtOutput }, "audio.transcribe output file not found");
           return { content: [{ type: "text", text: `Error: Transcription output file not found: ${txtOutput}` }] };
+        }
+
+        // Size guard — reject files > 100KB
+        const txtStat = statSync(txtOutput);
+        if (txtStat.size > 100 * 1024) {
+          logger.error({ size: txtStat.size, path: txtOutput }, "audio.transcribe output file exceeds size limit");
+          return { content: [{ type: "text", text: "Error: Transcription output file too large (max 100KB)" }] };
         }
 
         const transcriptionText = readFileSync(txtOutput, "utf-8").trim();

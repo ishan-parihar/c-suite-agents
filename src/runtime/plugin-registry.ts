@@ -96,6 +96,11 @@ function discoverPluginDirs(): string[] {
 function loadPluginConfig(manifestName: string): Record<string, unknown> {
   if (!fs.existsSync(CONFIG_FILE)) return {};
   try {
+    const stat = fs.statSync(CONFIG_FILE);
+    if (stat.size > 100 * 1024) {
+      logger.warn({ path: CONFIG_FILE, size: stat.size }, "Config file too large, skipping");
+      return {};
+    }
     const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
     const config = JSON.parse(raw) as Record<string, unknown>;
     return (config[manifestName] as Record<string, unknown>) || {};
@@ -113,6 +118,11 @@ async function loadPluginInstance(dir: string): Promise<PluginInstance | null> {
 
   let manifest: PluginManifest | null;
   try {
+    const stat = fs.statSync(manifestPath);
+    if (stat.size > 100 * 1024) {
+      logger.warn({ dir, size: stat.size }, "plugin.json too large, skipping");
+      return null;
+    }
     const raw = fs.readFileSync(manifestPath, "utf-8");
     const parsed = JSON.parse(raw);
     manifest = validateManifest(parsed, dir);
@@ -192,6 +202,11 @@ export async function reloadPlugin(name: string): Promise<PluginInstance | null>
     const manifestPath = path.join(d, "plugin.json");
     if (!fs.existsSync(manifestPath)) return false;
     try {
+      const stat = fs.statSync(manifestPath);
+      if (stat.size > 100 * 1024) {
+        logger.warn({ dir: d, size: stat.size }, "plugin.json too large, skipping");
+        return false;
+      }
       const raw = fs.readFileSync(manifestPath, "utf-8");
       const m = JSON.parse(raw);
       return m.name === name;

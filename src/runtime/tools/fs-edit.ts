@@ -1,6 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { AsyncMutex } from "../async-mutex.js";
+
+const fileEditMutex = new AsyncMutex();
 
 export interface FsEditArgs {
   file_path: string;
@@ -51,12 +54,20 @@ export function createFsEditTool() {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };
       }
 
-      const resolvedPath = path.resolve(workspaceDir, file_path);
-      if (!resolvedPath.startsWith(workspaceDir)) {
+      let resolvedPath = path.resolve(workspaceDir, file_path);
+      try {
+        resolvedPath = fs.realpathSync(resolvedPath);
+      } catch {
+        // File doesn't exist yet (edit operations) — skip symlink check
+        // The containment check below still protects against prefix escape
+      }
+      if (!(resolvedPath === workspaceDir || resolvedPath.startsWith(workspaceDir + path.sep))) {
         return { content: [{ type: "text", text: "Error: Access denied." }] };
       }
 
       try {
+        const release = await fileEditMutex.acquire(resolvedPath);
+        try {
         const stat = fs.statSync(resolvedPath);
         if (stat.size > 100 * 1024) {
           return { content: [{ type: "text", text: `Error: File is too large (${(stat.size / 1024).toFixed(1)}KB). Maximum file size is 100KB. Read the file first to see its current content.` }] };
@@ -80,6 +91,9 @@ export function createFsEditTool() {
         fs.renameSync(tmpPath, resolvedPath);
 
         return { content: [{ type: "text", text: `Edited ${file_path}: replaced ${old_string.length} chars with ${new_string.length} chars.` }] };
+        } finally {
+          release();
+        }
       } catch (err: any) {
         if (err.code === "ENOENT") {
           return { content: [{ type: "text", text: `Error: File not found: ${file_path}` }] };

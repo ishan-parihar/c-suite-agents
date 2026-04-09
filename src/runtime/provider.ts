@@ -336,11 +336,18 @@ export class OpenAICompatibleProvider implements LLMProvider {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let totalBytes = 0;
+      const MAX_SSE_BODY_SIZE = 2 * 1024 * 1024; // 2MB
 
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+
+          totalBytes += value.length;
+          if (totalBytes > MAX_SSE_BODY_SIZE) {
+            throw new Error(`SSE response exceeded ${MAX_SSE_BODY_SIZE} bytes`);
+          }
 
           buffer += decoder.decode(value, { stream: true });
 
@@ -410,6 +417,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
         }
       } finally {
         reader.releaseLock();
+        try {
+          if (response.body && !response.body.locked) {
+            await response.body.cancel();
+          }
+        } catch { /* body already cancelled or unavailable */ }
       }
 
       yield { type: "done" };

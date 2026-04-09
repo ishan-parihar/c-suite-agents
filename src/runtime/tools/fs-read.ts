@@ -42,8 +42,13 @@ export function createFsReadTool() {
         return { content: [{ type: "text", text: `Error: Path traversal not allowed. Use paths relative to your workspace directory.` }] };
       }
 
-      const resolvedPath = path.resolve(workspaceDir, file_path);
-      if (!resolvedPath.startsWith(workspaceDir)) {
+      let resolvedPath = path.resolve(workspaceDir, file_path);
+      try {
+        resolvedPath = fs.realpathSync(resolvedPath);
+      } catch {
+        return { content: [{ type: "text", text: `Error: File not found: ${file_path}` }] };
+      }
+      if (!(resolvedPath === workspaceDir || resolvedPath.startsWith(workspaceDir + path.sep))) {
         return { content: [{ type: "text", text: `Error: Access denied. You can only read files within your workspace directory.` }] };
       }
 

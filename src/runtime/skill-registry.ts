@@ -67,13 +67,15 @@ export function parseSkillMarkdown(raw: string): {
 }
 
 function extractQuotedField(header: string, field: string): string | null {
-  const regex = new RegExp(`^\\s*${field}\\s*:\\s*["']([^"']*)["']`, "m");
+  const safeField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`^\\s*${safeField}\\s*:\\s*["']([^"']*)["']`, "m");
   const match = header.match(regex);
   return match ? match[1] : null;
 }
 
 function extractArrayField(header: string, field: string): string[] | null {
-  const regex = new RegExp(`^\\s*${field}\\s*:\\s*\\[([^\\]]*)\\]`, "m");
+  const safeField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`^\\s*${safeField}\\s*:\\s*\\[([^\\]]*)\\]`, "m");
   const match = header.match(regex);
   if (!match) return null;
 
@@ -197,6 +199,11 @@ export class SkillRegistry {
 
     for (const { filePath, directory } of skillFiles) {
       try {
+        const skillStat = fs.statSync(filePath);
+        if (skillStat.size > 100 * 1024) {
+          logger.warn({ filePath, size: skillStat.size }, "SKILL.md too large, skipping");
+          continue;
+        }
         const raw = fs.readFileSync(filePath, "utf-8");
         const parsed = parseSkillMarkdown(raw);
         if (!parsed) {

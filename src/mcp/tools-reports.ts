@@ -44,6 +44,8 @@ export interface Session {
 }
 
 export class ReportsAndSessions {
+  private persistLock = Promise.resolve();
+
   private constructor(private db: DBAny, private path: string) {}
 
   static async init(path: string = "reports_sessions.db"): Promise<ReportsAndSessions> {
@@ -118,15 +120,20 @@ export class ReportsAndSessions {
 
   private async persist() {
     if (!this.db) return;
-    const data = this.db.export();
-    const tmpPath = `${this.path}.tmp`;
-    try {
-      await fs.writeFile(tmpPath, Buffer.from(data));
-      await fs.rename(tmpPath, this.path);
-    } catch (err) {
-      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
-      throw err;
-    }
+    const prev = this.persistLock;
+    this.persistLock = (async () => {
+      await prev;
+      const data = this.db.export();
+      const tmpPath = `${this.path}.tmp`;
+      try {
+        await fs.writeFile(tmpPath, Buffer.from(data));
+        await fs.rename(tmpPath, this.path);
+      } catch (err) {
+        try { await fs.unlink(tmpPath); } catch { /* ignore */ }
+        throw err;
+      }
+    })();
+    await this.persistLock;
   }
 
   private queryAll(sql: string, params?: unknown[]): Record<string, unknown>[] {

@@ -235,6 +235,8 @@ export class BoardMeetingEngine {
   private activeMeeting: BoardMeeting | null = null;
   private readonly MAX_MEETINGS_IN_MEMORY = 100;
 
+  private persistLock = Promise.resolve();
+
   private constructor(dbPath: string) {
     this.dbPath = dbPath;
     this.db = null;
@@ -307,15 +309,30 @@ export class BoardMeetingEngine {
 
   private async persist(): Promise<void> {
     if (!this.db) return;
-    const data = this.db.export();
-    const tmpPath = `${this.dbPath}.tmp`;
-    try {
-      await fs.writeFile(tmpPath, Buffer.from(data));
-      await fs.rename(tmpPath, this.dbPath);
-    } catch (err) {
-      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
-      throw err;
-    }
+    const prev = this.persistLock;
+    let writeError: Error | null = null;
+    this.persistLock = (async () => {
+      try {
+        await prev;
+        const data = this.db.export();
+        const tmpPath = `${this.dbPath}.tmp`;
+        try {
+          await fs.writeFile(tmpPath, Buffer.from(data));
+          await fs.rename(tmpPath, this.dbPath);
+        } catch (err) {
+          try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+          throw err;
+        }
+      } catch (err) {
+        writeError = err as Error;
+      }
+    })();
+    await this.persistLock;
+    if (writeError) throw writeError;
+  }
+
+  async close(): Promise<void> {
+    await this.persist();
   }
 
   private queryOneRow(sql: string, params?: unknown[]): Record<string, unknown> | null {

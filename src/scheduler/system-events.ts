@@ -3,6 +3,7 @@
 // Based on OpenClaw's system-events.ts architecture
 
 import { logger } from "../logger.js";
+import { AsyncMutex } from "../runtime/async-mutex.js";
 export { currentTimeLine, isSilentAck, stripHeartbeatToken } from "../runtime/utils.js";
 
 export interface SystemEvent {
@@ -30,6 +31,9 @@ let nightHeartbeatCount = 0;
 
 let eventQueue: Map<string, SystemEvent[]> = new Map();
 
+// Module-level mutex for all mutable state access
+const moduleMutex = new AsyncMutex();
+
 function getAgentEvents(agentId: string): SystemEvent[] {
   return eventQueue.get(agentId) || [];
 }
@@ -44,95 +48,121 @@ function generateId(): string {
   return `evt-${Date.now()}-${++idCounter}`;
 }
 
+/** Internal unlocked version — callers must hold moduleMutex */
+function enqueueInternal(params: {
+  agentId: string;
+  text: string;
+  contextKey: string;
+  priority?: "P1" | "P2" | "P3" | "P4";
+}): SystemEvent {
+  const event: SystemEvent = {
+    id: generateId(),
+    agentId: params.agentId,
+    text: params.text,
+    contextKey: params.contextKey,
+    timestamp: Date.now(),
+    priority: params.priority || "P3",
+  };
+
+  const events = getAgentEvents(params.agentId);
+
+  // Enforce max events per agent — drop oldest
+  if (events.length >= MAX_EVENTS_PER_AGENT) {
+    const dropped = events.shift();
+    logger.warn({ eventId: dropped?.id, agentId: params.agentId }, "Event queue full, dropping oldest");
+  }
+
+  events.push(event);
+  setAgentEvents(params.agentId, events);
+
+  logger.info({ eventId: event.id, agentId: params.agentId, contextKey: params.contextKey }, "System event enqueued");
+  return event;
+}
+
 export class SystemEventQueue {
   /**
    * Enqueue a system event for an agent.
    * Events are peeked during the next heartbeat and injected into the prompt.
    */
-  static enqueue(params: {
+  static async enqueue(params: {
     agentId: string;
     text: string;
     contextKey: string;
     priority?: "P1" | "P2" | "P3" | "P4";
-  }): SystemEvent {
-    const event: SystemEvent = {
-      id: generateId(),
-      agentId: params.agentId,
-      text: params.text,
-      contextKey: params.contextKey,
-      timestamp: Date.now(),
-      priority: params.priority || "P3",
-    };
-
-    const events = getAgentEvents(params.agentId);
-
-    // Enforce max events per agent — drop oldest
-    if (events.length >= MAX_EVENTS_PER_AGENT) {
-      const dropped = events.shift();
-      logger.warn({ eventId: dropped?.id, agentId: params.agentId }, "Event queue full, dropping oldest");
+  }): Promise<SystemEvent> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      return enqueueInternal(params);
+    } finally {
+      release();
     }
-
-    events.push(event);
-    setAgentEvents(params.agentId, events);
-
-    logger.info({ eventId: event.id, agentId: params.agentId, contextKey: params.contextKey }, "System event enqueued");
-    return event;
   }
 
   /**
    * Enqueue with coalescence — replaces existing events with the same contextKey
    * instead of appending. Prevents 20 identical heartbeat blocks from stacking.
    */
-  static enqueueCoalesced(params: {
+  static async enqueueCoalesced(params: {
     agentId: string;
     text: string;
     contextKey: string;
     priority?: "P1" | "P2" | "P3" | "P4";
-  }): SystemEvent {
-    const events = getAgentEvents(params.agentId);
+  }): Promise<SystemEvent> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      const events = getAgentEvents(params.agentId);
 
-    // Check if an event with this contextKey already exists
-    const existingIndex = events.findIndex(e => e.contextKey === params.contextKey);
-    if (existingIndex !== -1) {
-      // Replace existing event with updated text and timestamp
-      const updated: SystemEvent = {
-        ...events[existingIndex],
-        text: params.text,
-        timestamp: Date.now(),
-        priority: params.priority || events[existingIndex].priority,
-      };
-      events[existingIndex] = updated;
-      setAgentEvents(params.agentId, events);
-      logger.debug({ agentId: params.agentId, contextKey: params.contextKey }, "System event coalesced (replaced)");
-      return updated;
+      // Check if an event with this contextKey already exists
+      const existingIndex = events.findIndex(e => e.contextKey === params.contextKey);
+      if (existingIndex !== -1) {
+        // Replace existing event with updated text and timestamp
+        const updated: SystemEvent = {
+          ...events[existingIndex],
+          text: params.text,
+          timestamp: Date.now(),
+          priority: params.priority || events[existingIndex].priority,
+        };
+        events[existingIndex] = updated;
+        setAgentEvents(params.agentId, events);
+        logger.debug({ agentId: params.agentId, contextKey: params.contextKey }, "System event coalesced (replaced)");
+        return updated;
+      }
+
+      // No existing event — add new one
+      return enqueueInternal(params);
+    } finally {
+      release();
     }
-
-    // No existing event — add new one
-    return this.enqueue(params);
   }
 
   /**
    * Peek at pending events for an agent without removing them.
    * Used by heartbeat runner to decide what to inject into the prompt.
    */
-  static peek(agentId: string): SystemEvent[] {
-    const events = getAgentEvents(agentId);
+  static async peek(agentId: string): Promise<SystemEvent[]> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      const events = getAgentEvents(agentId);
 
-    // Purge expired events
-    const now = Date.now();
-    const valid = events.filter(e => (now - e.timestamp) < EVENT_TTL_MS);
-    if (valid.length !== events.length) {
-      setAgentEvents(agentId, valid);
+      // Purge expired events
+      const now = Date.now();
+      const valid = events.filter(e => (now - e.timestamp) < EVENT_TTL_MS);
+      if (valid.length !== events.length) {
+        setAgentEvents(agentId, valid);
+      }
+
+      return valid;
+    } finally {
+      release();
     }
-
-    return valid;
   }
 
   /**
    * Peek events filtered by context type (e.g., only cron events).
    */
-  static peekByContext(agentId: string, contextPrefix: string): SystemEvent[] {
-    return this.peek(agentId).filter(e => e.contextKey.startsWith(contextPrefix));
+  static async peekByContext(agentId: string, contextPrefix: string): Promise<SystemEvent[]> {
+    const events = await this.peek(agentId);
+    return events.filter(e => e.contextKey.startsWith(contextPrefix));
   }
 
   /**
@@ -140,8 +170,8 @@ export class SystemEventQueue {
    * Prevents duplicate injection of the same event type into the prompt.
    * This is the PRIMARY method heartbeat should use — not peek().
    */
-  static peekLatest(agentId: string): SystemEvent[] {
-    const events = this.peek(agentId);
+  static async peekLatest(agentId: string): Promise<SystemEvent[]> {
+    const events = await this.peek(agentId);
     // Deduplicate by contextKey, keeping the most recent timestamp
     const map = new Map<string, SystemEvent>();
     for (const e of events) {
@@ -156,36 +186,47 @@ export class SystemEventQueue {
   /**
    * Check if any events exist for an agent.
    */
-  static hasEvents(agentId: string): boolean {
-    return this.peek(agentId).length > 0;
+  static async hasEvents(agentId: string): Promise<boolean> {
+    const events = await this.peek(agentId);
+    return events.length > 0;
   }
 
   /**
    * Clear all pending events for an agent after they've been processed.
    */
-  static clear(agentId: string): number {
-    const events = getAgentEvents(agentId);
-    const count = events.length;
-    if (count > 0) {
-      setAgentEvents(agentId, []);
-      logger.info({ agentId, count }, "System events cleared");
+  static async clear(agentId: string): Promise<number> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      const events = getAgentEvents(agentId);
+      const count = events.length;
+      if (count > 0) {
+        setAgentEvents(agentId, []);
+        logger.info({ agentId, count }, "System events cleared");
+      }
+      return count;
+    } finally {
+      release();
     }
-    return count;
   }
 
   /**
    * Clear specific events by context key.
    */
-  static clearByContext(agentId: string, contextKey: string): number {
-    const events = getAgentEvents(agentId);
-    const before = events.length;
-    const remaining = events.filter(e => e.contextKey !== contextKey);
-    setAgentEvents(agentId, remaining);
-    const cleared = before - remaining.length;
-    if (cleared > 0) {
-      logger.info({ agentId, contextKey, cleared }, "Events cleared by context");
+  static async clearByContext(agentId: string, contextKey: string): Promise<number> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      const events = getAgentEvents(agentId);
+      const before = events.length;
+      const remaining = events.filter(e => e.contextKey !== contextKey);
+      setAgentEvents(agentId, remaining);
+      const cleared = before - remaining.length;
+      if (cleared > 0) {
+        logger.info({ agentId, contextKey, cleared }, "Events cleared by context");
+      }
+      return cleared;
+    } finally {
+      release();
     }
-    return cleared;
   }
 
   /**
@@ -220,31 +261,41 @@ export class SystemEventQueue {
    * Record a HEARTBEAT_OK ack. Returns true if the agent should skip
    * the next heartbeat due to too many consecutive no-change cycles.
    */
-  static recordAck(agentId: string): { shouldSkip: boolean; consecutiveCount: number } {
-    const count = (consecutiveAcks.get(agentId) || 0) + 1;
-    consecutiveAcks.set(agentId, count);
-    lastAckTime.set(agentId, Date.now());
+  static async recordAck(agentId: string): Promise<{ shouldSkip: boolean; consecutiveCount: number }> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      const count = (consecutiveAcks.get(agentId) || 0) + 1;
+      consecutiveAcks.set(agentId, count);
+      lastAckTime.set(agentId, Date.now());
 
-    logger.debug({ agentId, count }, "Consecutive heartbeat ack recorded");
+      logger.debug({ agentId, count }, "Consecutive heartbeat ack recorded");
 
-    // After 3 consecutive acks: warn
-    // After 6: skip heartbeats until a real event resets the counter
-    if (count >= 6) {
-      logger.info({ agentId, count }, "Too many consecutive HEARTBEAT_OK — entering sleep mode");
-      return { shouldSkip: true, consecutiveCount: count };
+      // After 3 consecutive acks: warn
+      // After 6: skip heartbeats until a real event resets the counter
+      if (count >= 6) {
+        logger.info({ agentId, count }, "Too many consecutive HEARTBEAT_OK — entering sleep mode");
+        return { shouldSkip: true, consecutiveCount: count };
+      }
+
+      return { shouldSkip: false, consecutiveCount: count };
+    } finally {
+      release();
     }
-
-    return { shouldSkip: false, consecutiveCount: count };
   }
 
   /**
    * Reset the consecutive ack counter (called when the agent finds something actionable).
    */
-  static resetAck(agentId: string): void {
-    const prev = consecutiveAcks.get(agentId) || 0;
-    consecutiveAcks.set(agentId, 0);
-    if (prev > 0) {
-      logger.info({ agentId, prevCount: prev }, "Consecutive ack counter reset — agent found actionable item");
+  static async resetAck(agentId: string): Promise<void> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      const prev = consecutiveAcks.get(agentId) || 0;
+      consecutiveAcks.set(agentId, 0);
+      if (prev > 0) {
+        logger.info({ agentId, prevCount: prev }, "Consecutive ack counter reset — agent found actionable item");
+      }
+    } finally {
+      release();
     }
   }
 
@@ -271,18 +322,23 @@ export class SystemEventQueue {
    * Check if this heartbeat should fire. During night hours, only fires
    * every Nth call (default: every 8th = every 2 hours at 15min intervals).
    */
-  static shouldFireHeartbeat(): boolean {
-    if (this.isActiveHours()) return true;
+  static async shouldFireHeartbeat(): Promise<boolean> {
+    const release = await moduleMutex.acquire("system-events");
+    try {
+      if (this.isActiveHours()) return true;
 
-    nightHeartbeatCount++;
-    if (nightHeartbeatCount >= NIGHT_SKIP_INTERVAL) {
-      nightHeartbeatCount = 0;
-      logger.debug("Night heartbeat window — firing (every 2h)");
-      return true;
+      nightHeartbeatCount++;
+      if (nightHeartbeatCount >= NIGHT_SKIP_INTERVAL) {
+        nightHeartbeatCount = 0;
+        logger.debug("Night heartbeat window — firing (every 2h)");
+        return true;
+      }
+
+      logger.debug("Night heartbeat window — skipping (count: " + nightHeartbeatCount + "/" + NIGHT_SKIP_INTERVAL + ")");
+      return false;
+    } finally {
+      release();
     }
-
-    logger.debug("Night heartbeat window — skipping (count: " + nightHeartbeatCount + "/" + NIGHT_SKIP_INTERVAL + ")");
-    return false;
   }
 }
 

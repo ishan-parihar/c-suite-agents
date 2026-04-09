@@ -45,10 +45,29 @@ export class MemoryRetriever {
   }
 
   async hybridSearch(query: MemoryQuery): Promise<MemoryEntry[]> {
-    const [vectorResults, keywordResults] = await Promise.all([
+    const results = await Promise.allSettled([
       this.search(query),
       this.searchKeyword(query),
     ]);
+
+    const vectorResult = results[0];
+    const keywordResult = results[1];
+
+    let vectorResults: MemoryEntry[] = [];
+    let keywordResults: MemoryEntry[] = [];
+
+    if (vectorResult.status === "fulfilled") {
+      vectorResults = vectorResult.value;
+    }
+    if (keywordResult.status === "fulfilled") {
+      keywordResults = keywordResult.value;
+    }
+
+    if (vectorResult.status === "rejected" && keywordResult.status === "rejected") {
+      throw new Error(
+        `Hybrid search failed entirely. Vector: ${vectorResult.reason?.message ?? "unknown"}. Keyword: ${keywordResult.reason?.message ?? "unknown"}`,
+      );
+    }
 
     const seen = new Set<string>();
     const merged: MemoryEntry[] = [];

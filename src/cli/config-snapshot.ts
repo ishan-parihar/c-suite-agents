@@ -52,6 +52,16 @@ export function readConfigSnapshot(configPath?: string): ConfigSnapshot {
 
   let raw: string;
   try {
+    const stat = fs.statSync(resolvedPath);
+    if (stat.size > 100 * 1024) {
+      return {
+        exists: true,
+        valid: false,
+        config: null,
+        error: `Config file too large (${stat.size} bytes), refusing to read`,
+        path: resolvedPath,
+      };
+    }
     raw = fs.readFileSync(resolvedPath, "utf-8");
   } catch (err: unknown) {
     return {

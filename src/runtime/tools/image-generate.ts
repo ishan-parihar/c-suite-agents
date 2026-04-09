@@ -97,7 +97,7 @@ export function createImageGenerateTool(): AnyAgentTool | null {
           n: count,
           size: size as "1024x1024" | "1024x1792" | "1792x1024",
           response_format: "b64_json",
-        });
+        }, { timeout: 120000 });
 
         const mediaDir = await ensureMediaDir();
         const savedPaths: string[] = [];

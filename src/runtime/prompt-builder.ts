@@ -48,6 +48,11 @@ function loadHeartbeatInstructions(agentId: string): string {
   try {
     const agentDir = path.join(AGENTS_DIR, agentId);
     const heartbeatPath = path.join(agentDir, CORE_FILES.HEARTBEAT);
+    const stat = fs.statSync(heartbeatPath);
+    if (stat.size > 100 * 1024) {
+      logger.warn({ path: heartbeatPath, size: stat.size }, "HEARTBEAT.md too large, skipping to avoid token waste");
+      return "";
+    }
     const content = fs.readFileSync(heartbeatPath, "utf-8");
     return content.trim();
   } catch {

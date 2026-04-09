@@ -532,7 +532,7 @@ ${timeLine}
 
       // Push result to system event queue for heartbeat injection
       // This ensures the agent sees the task result in its next heartbeat
-      SystemEventQueue.enqueue({
+      await SystemEventQueue.enqueue({
         agentId: task.agent_id,
         text: `[Task: ${task.name}]\n${result.text.slice(0, 500)}`,
         contextKey: `cron:${task.id}`,

@@ -1,6 +1,6 @@
 import fs, { accessSync, constants } from "node:fs";
 import path, { join, delimiter } from "node:path";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { loadConfig, getConfigPath } from "../config/loader.js";
 
 // ── Safe executable resolution (no shell injection) ─────────────────────
@@ -356,10 +356,12 @@ function checkConfigPermissions() {
  */
 function checkSystemdService() {
   try {
-    const status = execSync(
-      "systemctl is-active strategos 2>/dev/null || echo inactive",
-      { encoding: "utf-8" },
-    ).trim();
+    const result = spawnSync(
+      "systemctl",
+      ["is-active", "strategos"],
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const status = result.status === 0 && result.stdout?.trim() === "active" ? "active" : "inactive";
     if (status === "active") {
       check("PASS", "Systemd service 'strategos' is active");
     } else {

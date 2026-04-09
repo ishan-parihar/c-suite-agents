@@ -111,6 +111,11 @@ export class MemoryFacade {
   async stats(): Promise<Record<MemoryScope, { total: number; perAgent: Record<string, number> }>> {
     return this.retriever.stats();
   }
+
+  close(): void {
+    this.store.close();
+    logger.info("MemoryFacade closed");
+  }
 }
 
 let facade: MemoryFacade | null = null;
