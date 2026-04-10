@@ -178,7 +178,7 @@ export class SkillRegistry {
   /**
    * Discover all SKILL.md files in a workspace directory.
    * Looks in <workspaceDir>/skills/ subdirectory following the convention:
-   * ~/.strategos/agents/<agent-name>/skills/<skill-name>/SKILL.md
+   * ~/.operant/agents/<agent-name>/skills/<skill-name>/SKILL.md
    *
    * Uses mtime-based caching to avoid repeated file reads.
    */

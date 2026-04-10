@@ -1,4 +1,4 @@
-// Core Staff Templates — LifeOS Agents
+// Core Staff Templates — Operant Agents
 
 export type CoreStaffRole = {
   id: string;
@@ -85,7 +85,7 @@ export function getDirectReports(managerId: string): CoreStaffRole[] { return Ob
 
 export function getOrgChart(): string {
   const lines: string[] = [];
-  lines.push("🏢 **Strategos Organization**\n");
+  lines.push("🏢 **Operant Organization**\n");
   lines.push("👤 **Board Chair** — Ishan Parihar\n");
   const ceo = CORE_STAFF_ROLES["ceo-strategic"];
   lines.push(`  └─ ${ceo.avatar} **${ceo.name}** — ${ceo.title}`);

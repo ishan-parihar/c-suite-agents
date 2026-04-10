@@ -1,6 +1,6 @@
 import { loadConfig, getConfigPath } from "./config/loader.js";
 
-// Load config once at module initialization (defaults < .env < ~/.strategos/config.json)
+// Load config once at module initialization (defaults < .env < ~/.operant/config.json)
 let _config: ReturnType<typeof loadConfig> | null = null;
 
 function getConfig() {
@@ -8,7 +8,7 @@ function getConfig() {
     try {
       _config = loadConfig();
     } catch (err: unknown) {
-      console.error(`[strategos] Config load failed: ${(err as Error).message}. Using defaults.`);
+      console.error(`[operant] Config load failed: ${(err as Error).message}. Using defaults.`);
       _config = loadConfig(); // Will succeed with defaults even if file is bad
     }
   }

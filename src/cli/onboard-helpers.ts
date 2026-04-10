@@ -10,8 +10,8 @@ import { readFileSync, statSync } from "node:fs";
 
 const SAFE_BASES = [
   process.env.HOME || homedir(),
-  resolve(process.env.HOME || homedir(), '.local', 'share', 'strategos'),
-  resolve(process.env.HOME || homedir(), '.strategos'),
+  resolve(process.env.HOME || homedir(), '.local', 'share', 'operant'),
+  resolve(process.env.HOME || homedir(), '.operant'),
 ];
 
 function isPathSafe(dirPath: string): boolean {
@@ -124,7 +124,7 @@ export function readPackageVersion(): string {
       if (existsSync(path)) {
         const stat = statSync(path);
         if (stat.size > 100 * 1024) {
-          console.warn(`[strategos] WARN: package.json too large (${stat.size} bytes), skipping`);
+          console.warn(`[operant] WARN: package.json too large (${stat.size} bytes), skipping`);
           continue;
         }
         const pkg = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
@@ -240,7 +240,7 @@ export async function handleReset(
       if (existsSync(configPath)) {
         const stat = statSync(configPath);
         if (stat.size > 100 * 1024) {
-          console.warn(`[strategos] WARN: Config file too large (${stat.size} bytes), skipping full reset`);
+          console.warn(`[operant] WARN: Config file too large (${stat.size} bytes), skipping full reset`);
         } else {
         const raw = readFileSync(configPath, "utf-8");
         const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -281,7 +281,7 @@ export async function handleReset(
   // Remove directories
   for (const dir of dirsToRemove) {
     if (!isPathSafe(dir)) {
-      console.error(`  Skipping unsafe path: ${dir} (not within Strategos directories)`);
+      console.error(`  Skipping unsafe path: ${dir} (not within Operant directories)`);
       continue;
     }
     rmSync(dir, { recursive: true, force: true });

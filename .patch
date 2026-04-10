@@ -1,7 +1,7 @@
 *** Begin Patch
 *** Add File: package.json
 +{
-+  "name": "strategos",
++  "name": "operant",
 +  "version": "0.1.0",
 +  "private": true,
 +  "type": "module",

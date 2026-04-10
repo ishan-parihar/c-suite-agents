@@ -12,6 +12,8 @@ export type FailoverReason =
   | "rate_limit"
   | "api_error"
   | "context_overflow"
+  | "auth_error"
+  | "billing_error"
   | "unknown";
 
 export interface ModelEntry {
@@ -121,7 +123,7 @@ export function classifyFailoverReason(err: unknown): FailoverReason {
 
     // Generic API errors (5xx, connection failures)
     if (
-      message.includes("5") && /status\s*code|http\s*\d+|server\s+error/i.test(message) ||
+      (message.includes("5") && /status\s*code|http\s*\d+|server\s+error/i.test(message)) ||
       message.includes("econnrefused") ||
       message.includes("econnreset") ||
       message.includes("enotfound") ||
@@ -214,4 +216,195 @@ export function resetFailover(state: FailoverState): void {
   state.lastError = undefined;
   state.lastReason = undefined;
   state.attemptCount = 0;
+}
+
+// ── Auth Profile Rotation & Billing Backoff ──────────────────────────
+
+/** Minimum backoff for billing errors: 1 hour */
+const BILLING_BACKOFF_MIN_MS = 60 * 60 * 1000;
+
+/** Maximum backoff for billing errors: 24 hours */
+const BILLING_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
+
+/** Backoff state for a single provider/model combination */
+export interface BillingBackoffState {
+  /** When the cooldown expires (ms timestamp). 0 = no active cooldown. */
+  cooldownUntil: number;
+  /** Number of consecutive billing errors (used for exponential backoff). */
+  consecutiveErrors: number;
+  /** Last billing error message for debugging. */
+  lastError?: string;
+}
+
+/** Registry of billing backoff states keyed by provider+model */
+export type BillingBackoffRegistry = Map<string, BillingBackoffState>;
+
+/**
+ * Create a backoff registry. Call once at startup.
+ */
+export function createBillingBackoffRegistry(): BillingBackoffRegistry {
+  return new Map<string, BillingBackoffState>();
+}
+
+/**
+ * Get or create the backoff state for a provider+model key.
+ */
+function getBackoffState(registry: BillingBackoffRegistry, key: string): BillingBackoffState {
+  const existing = registry.get(key);
+  if (existing) return existing;
+  const state: BillingBackoffState = { cooldownUntil: 0, consecutiveErrors: 0 };
+  registry.set(key, state);
+  return state;
+}
+
+/**
+ * Check if a provider/model is currently in billing cooldown.
+ * Returns the remaining ms until cooldown expires, or 0 if available.
+ */
+export function getBillingBackoffRemainingMs(
+  registry: BillingBackoffRegistry,
+  provider: string,
+  model: string,
+): number {
+  const key = `${provider}:${model}`;
+  const state = registry.get(key);
+  if (!state || state.cooldownUntil === 0) return 0;
+  const remaining = state.cooldownUntil - Date.now();
+  if (remaining <= 0) {
+    // Cooldown expired — reset
+    state.cooldownUntil = 0;
+    state.consecutiveErrors = Math.max(0, state.consecutiveErrors - 1);
+    return 0;
+  }
+  return remaining;
+}
+
+/**
+ * Record a billing error and compute the backoff duration.
+ * Uses exponential backoff: 1h, 2h, 4h, 8h, capped at 24h.
+ */
+export function recordBillingError(
+  registry: BillingBackoffRegistry,
+  provider: string,
+  model: string,
+  errorMessage: string,
+): { cooldownMs: number; backoffUntil: number } {
+  const key = `${provider}:${model}`;
+  const state = getBackoffState(registry, key);
+  state.consecutiveErrors++;
+  state.lastError = errorMessage;
+
+  // Exponential backoff: 1h * 2^(n-1), capped at 24h
+  const backoffMs = Math.min(
+    BILLING_BACKOFF_MIN_MS * Math.pow(2, state.consecutiveErrors - 1),
+    BILLING_BACKOFF_MAX_MS,
+  );
+
+  state.cooldownUntil = Date.now() + backoffMs;
+
+  return { cooldownMs: backoffMs, backoffUntil: state.cooldownUntil };
+}
+
+/**
+ * Clear billing backoff for a provider/model (called on successful request).
+ */
+export function clearBillingBackoff(
+  registry: BillingBackoffRegistry,
+  provider: string,
+  model: string,
+): void {
+  const key = `${provider}:${model}`;
+  const state = registry.get(key);
+  if (state) {
+    state.cooldownUntil = 0;
+    state.consecutiveErrors = 0;
+    state.lastError = undefined;
+  }
+}
+
+/**
+ * Classify whether an error is a billing-related error.
+ * Detects: 402 status, "insufficient funds", "billing", "payment", "credit", etc.
+ */
+export function isBillingError(err: unknown): boolean {
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    if (
+      message.includes("insufficient") ||
+      message.includes("billing") ||
+      message.includes("payment") ||
+      message.includes("credit") ||
+      message.includes("subscription") ||
+      message.includes("account balance") ||
+      message.includes("top up") ||
+      message.includes("quota exceeded") ||
+      message.includes("usage limit") ||
+      message.includes("spending limit")
+    ) {
+      return true;
+    }
+    // OpenAI APIError with status 402
+    if ("status" in err && (err as Record<string, unknown>).status === 402) return true;
+  }
+  if (err !== null && typeof err === "object") {
+    const maybeErr = err as { status?: number; code?: string; message?: string };
+    if (maybeErr.status === 402) return true;
+    if (maybeErr.code === "billing_error" || maybeErr.code === "insufficient_funds") return true;
+    if (maybeErr.message && /insufficient|billing|payment|credit|subscription/i.test(maybeErr.message)) return true;
+  }
+  return false;
+}
+
+/**
+ * Classify whether an error is an auth-related error (401/403).
+ */
+export function isAuthError(err: unknown): boolean {
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    if (
+      message.includes("unauthorized") ||
+      message.includes("invalid api key") ||
+      message.includes("invalid_api_key") ||
+      message.includes("authentication") ||
+      message.includes("access denied") ||
+      message.includes("forbidden") ||
+      message.includes("permission denied") ||
+      message.includes("api key not valid")
+    ) {
+      return true;
+    }
+    if ("status" in err) {
+      const status = (err as Record<string, unknown>).status as number | undefined;
+      if (status === 401 || status === 403) return true;
+    }
+  }
+  if (err !== null && typeof err === "object") {
+    const maybeErr = err as { status?: number; code?: string };
+    if (maybeErr.status === 401 || maybeErr.status === 403) return true;
+    if (maybeErr.code === "invalid_api_key" || maybeErr.code === "authentication_error") return true;
+  }
+  return false;
+}
+
+/**
+ * Enhanced shouldFailover that includes auth/billing classification.
+ * - billing_error: do NOT failover (back off instead, same provider has billing issue)
+ * - auth_error: DO failover if there are alternate auth profiles in the chain
+ */
+export function shouldFailoverWithAuthAndBilling(
+  err: unknown,
+): { should: boolean; reason: FailoverReason; skipFailover: boolean } {
+  // Check billing first
+  if (isBillingError(err)) {
+    return { should: false, reason: "billing_error", skipFailover: true };
+  }
+
+  // Check auth errors
+  if (isAuthError(err)) {
+    return { should: true, reason: "auth_error", skipFailover: false };
+  }
+
+  // Use existing logic for other errors
+  const { should, reason } = shouldFailover(err);
+  return { should, reason, skipFailover: !should };
 }

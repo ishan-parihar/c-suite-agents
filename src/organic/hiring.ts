@@ -147,6 +147,8 @@ export class HiringSystem {
     }).catch(async (err) => {
       try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
       throw err;
+    }).finally(() => {
+      this.persistLock = Promise.resolve();
     });
     await this.persistLock;
   }

@@ -1,12 +1,12 @@
 // Plugin System Foundation — Discovery-based plugin loading
 // Inspired by OpenClaw's extensions/ pattern
-// Plugins extend Strategos without modifying core code
+// Plugins extend Operant without modifying core code
 
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { logger } from "../logger.js";
-import { STRATEGOS_HOME } from "../agents/workspace-manager.js";
+import { OPERANT_HOME } from "../agents/workspace-manager.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -34,8 +34,8 @@ export interface PluginInstance {
 
 // ── Plugin Registry ────────────────────────────────────────────────────
 
-const PLUGINS_DIR = path.join(STRATEGOS_HOME, "plugins");
-const CONFIG_FILE = path.join(STRATEGOS_HOME, "plugins.json");
+const PLUGINS_DIR = path.join(OPERANT_HOME, "plugins");
+const CONFIG_FILE = path.join(OPERANT_HOME, "plugins.json");
 
 const pluginRegistry = new Map<string, PluginInstance>();
 

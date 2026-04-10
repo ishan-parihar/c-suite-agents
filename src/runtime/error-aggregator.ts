@@ -1,5 +1,5 @@
 /**
- * Error Aggregator for Strategos.
+ * Error Aggregator for Operant.
  *
  * Deduplicates, rate-limits, and aggregates errors from the ErrorBus.
  * Prevents alert storms when the same error fires repeatedly.

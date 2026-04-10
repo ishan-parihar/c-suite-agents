@@ -6,7 +6,7 @@ import { SelfHealerClass } from "../runtime/self-healer.js";
 import { HeartbeatMonitorClass } from "../scheduler/heartbeat-monitor.js";
 import { CronErrorHandlerClass } from "../scheduler/cron-error-handler.js";
 import {
-  StrategosError,
+  OperantError,
   ProviderError,
   ToolExecutionError,
   PersistenceError,
@@ -32,8 +32,8 @@ describe("Error Observability Integration", () => {
   });
 
   describe("Error Types", () => {
-    test("StrategosError has all required properties", () => {
-      const err = new StrategosError("test", {
+    test("OperantError has all required properties", () => {
+      const err = new OperantError("test", {
         code: "TEST_001",
         component: "test",
         severity: "error",
@@ -130,7 +130,7 @@ describe("Error Observability Integration", () => {
   });
 
   describe("classifyError", () => {
-    test("typed StrategosError uses declared severity", () => {
+    test("typed OperantError uses declared severity", () => {
       const err = new HeartbeatError("missed", { agentId: "ceo" });
       const result = classifyError(err);
       expect(result.severity).toBe("warn");
@@ -252,7 +252,7 @@ describe("Error Observability Integration", () => {
       expect(stats.byComponent.tools).toBeGreaterThanOrEqual(2);
     });
 
-    test("createErrorEvent builds event from StrategosError", () => {
+    test("createErrorEvent builds event from OperantError", () => {
       const err = new ProviderError("timeout", { failoverReason: "timeout", provider: "openai" });
       const evt = createErrorEvent("provider:failed", err, { component: "llm", agentId: "ceo" });
       expect(evt.type).toBe("provider:failed");

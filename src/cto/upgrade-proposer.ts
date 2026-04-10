@@ -2,7 +2,7 @@
 // Consumed by CTO agent for Telegram delivery to the Board Chair
 
 import { logger } from "../logger.js";
-import { LifeOSClient, lifeos } from "../lifeos/client.js";
+import { OperantClient, operant } from "../operant/client.js";
 import { v4 as uuidv4 } from "uuid";
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ export interface UpgradeProposal {
 
 // ── Database field type maps ────────────────────────────────────────────────
 
-// Notion property names as they appear in LifeOS databases
+// Notion property names as they appear in Operant databases
 interface TechDebtRecord {
   category?: string;
   severity?: string;
@@ -97,7 +97,7 @@ function extractTitle(record: Record<string, unknown>): string {
 }
 
 /**
- * Map LifeOS severity strings to our P1-P4 scale.
+ * Map Operant severity strings to our P1-P4 scale.
  */
 function mapSeverity(raw: string): "P1" | "P2" | "P3" | "P4" {
   const lower = raw.toLowerCase();
@@ -220,7 +220,7 @@ function buildSummary(items: ProposalItem[]): string {
 /**
  * Query tech_debt database for detected or analyzed items.
  */
-async function gatherTechDebt(client: LifeOSClient): Promise<ProposalItem[]> {
+async function gatherTechDebt(client: OperantClient): Promise<ProposalItem[]> {
   const items: ProposalItem[] = [];
 
   try {
@@ -268,7 +268,7 @@ async function gatherTechDebt(client: LifeOSClient): Promise<ProposalItem[]> {
 /**
  * Query upgrade_log database for pending upgrades.
  */
-async function gatherPendingUpgrades(client: LifeOSClient): Promise<ProposalItem[]> {
+async function gatherPendingUpgrades(client: OperantClient): Promise<ProposalItem[]> {
   const items: ProposalItem[] = [];
 
   try {
@@ -315,7 +315,7 @@ async function gatherPendingUpgrades(client: LifeOSClient): Promise<ProposalItem
 /**
  * Query system_health for recent entries with degraded health.
  */
-async function gatherSystemHealth(client: LifeOSClient): Promise<ProposalItem[]> {
+async function gatherSystemHealth(client: OperantClient): Promise<ProposalItem[]> {
   const items: ProposalItem[] = [];
 
   try {
@@ -379,12 +379,12 @@ async function gatherSystemHealth(client: LifeOSClient): Promise<ProposalItem[]>
 // ── Main Export ─────────────────────────────────────────────────────────────
 
 /**
- * Generate a daily upgrade proposal by querying LifeOS databases.
+ * Generate a daily upgrade proposal by querying Operant databases.
  *
  * Queries tech_debt (detected/analyzed), upgrade_log (pending), and
  * system_health (recent entries with degraded health).
  *
- * If LifeOS is unavailable, returns a minimal proposal with empty items.
+ * If Operant is unavailable, returns a minimal proposal with empty items.
  */
 export async function generateDailyUpgradeProposal(): Promise<UpgradeProposal> {
   const proposalId = uuidv4();
@@ -395,11 +395,11 @@ export async function generateDailyUpgradeProposal(): Promise<UpgradeProposal> {
   let healthItems: ProposalItem[] = [];
 
   try {
-    techDebtItems = await gatherTechDebt(lifeos);
-    upgradeItems = await gatherPendingUpgrades(lifeos);
-    healthItems = await gatherSystemHealth(lifeos);
+    techDebtItems = await gatherTechDebt(operant);
+    upgradeItems = await gatherPendingUpgrades(operant);
+    healthItems = await gatherSystemHealth(operant);
   } catch (err) {
-    logger.error({ err }, "Failed to gather upgrade proposal data from LifeOS");
+    logger.error({ err }, "Failed to gather upgrade proposal data from Operant");
   }
 
   const allItems = [...techDebtItems, ...upgradeItems, ...healthItems];

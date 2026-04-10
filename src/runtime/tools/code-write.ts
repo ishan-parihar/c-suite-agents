@@ -41,7 +41,7 @@ export function createCodeWriteTool() {
     },
     permissionTier: "write" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { file_path, content, agent_id, append = false } = args as CodeWriteArgs;
+      const { file_path, content, agent_id, append = false } = args as unknown as CodeWriteArgs;
 
       if (agent_id !== "cto-technical") {
         return { content: [{ type: "text", text: "Error: code.write is only available to the CTO agent." }] };

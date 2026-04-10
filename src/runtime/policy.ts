@@ -319,7 +319,7 @@ export class PolicyEngine {
 // ── Pre-built Policies ──────────────────────────────────────────────
 
 /**
- * Return a set of pre-built policy rules relevant to Strategos operations.
+ * Return a set of pre-built policy rules relevant to Operant operations.
  * These cover common operational scenarios: stale cards, message backlogs,
  * consecutive failures, and session compaction.
  *

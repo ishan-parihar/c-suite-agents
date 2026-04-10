@@ -41,14 +41,14 @@ export function createFsEditTool() {
     },
     permissionTier: "write" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { file_path, agent_id, old_string, new_string } = args as FsEditArgs;
+      const { file_path, agent_id, old_string, new_string } = args as unknown as FsEditArgs;
 
       if (!agent_id) {
         return { content: [{ type: "text", text: "Error: agent_id is required" }] };
       }
 
       const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      const workspaceDir = path.join(homeDir, ".operant", "agents", agent_id);
 
       if (file_path.includes("..")) {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };

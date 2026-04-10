@@ -1,12 +1,12 @@
-# Strategos
+# Operant
 
-**v0.4.0** — Multi-agent orchestration system with LifeOS integration
+**v0.5.0** — Multi-agent orchestration system with LifeOS integration
 
 A self-managing team of AI C-suite agents that run your life and business through Kanban boards, board meetings, async messaging, vector memory, and operational resilience — all accessible via Telegram.
 
 ## Architecture
 
-Strategos implements an **organic operations model** — 8 autonomous C-suite agents with distinct roles, databases, and Kanban boards, coordinated like a real executive team:
+Operant implements an **organic operations model** — 8 autonomous C-suite agents with distinct roles, databases, and Kanban boards, coordinated like a real executive team:
 
 ```
 👤 Board Chair — You (Ishan Parihar)
@@ -43,7 +43,13 @@ Each agent has its own **Kanban board**, **LifeOS database access**, **vector me
 - **Model fallback chains** with automatic failover on provider errors
 - **Retry with exponential backoff** for transient failures
 - Session context management with adaptive compaction and pruning
-- SSE streaming support with prompt cache tracking
+- **WebSocket-first transport** — bidirectional streaming, instant message delivery, graceful reconnection
+  - WS endpoint: `ws://127.0.0.1:3001/ws` (same port as HTTP)
+  - Frame protocol: auth, message, stream_chunk, tool_call, cancel, ping/pong
+  - Agent SDK: `import { WsClient } from 'operant/transport'`
+  - Exponential backoff reconnection (1s → 30s max with jitter)
+  - Offline queue (10k max) with seq-based reconnect replay
+- SSE streaming support (deprecated, backward-compatible fallback) with prompt cache tracking
 - JSONL session persistence with atomic writes and rotation
 
 ### Operational Resilience (v0.4.0)
@@ -59,15 +65,60 @@ Each agent has its own **Kanban board**, **LifeOS database access**, **vector me
 - **Image generation** — AI image creation via configured provider
 - **Text-to-speech** — voice synthesis with streaming download and 10MB limit
 
+### WebSocket Transport (v0.5.0)
+
+Operant now supports **WebSocket-first bidirectional communication** for agent-to-server messaging, replacing the previous HTTP/SSE polling model.
+
+**Server endpoint:** `ws://127.0.0.1:3001/ws`
+
+**Client→Server frames:**
+| Type | Description |
+|---|---|
+| `auth` | Authenticate with agentId |
+| `tool_response` | Return tool execution result |
+| `cancel` | Cancel in-progress stream |
+| `ping` | Heartbeat ping |
+
+**Server→Client frames:**
+| Type | Description |
+|---|---|
+| `auth_ok` | Authentication success |
+| `auth_error` | Authentication failure |
+| `message` | Instant message push |
+| `stream_chunk` | LLM streaming token |
+| `stream_end` | Stream completion |
+| `tool_call` | Tool execution request |
+| `pong` | Heartbeat response |
+| `reconnect_hint` | Reconnection state hint |
+
+**Agent SDK usage:**
+```typescript
+import { WsClient } from './src/transport/ws-client';
+
+const client = new WsClient('ws://127.0.0.1:3001/ws', 'agent-id');
+client.on('message', (msg) => console.log('Received:', msg));
+client.on('tool_call', (tc) => { /* execute tool */ });
+client.connect();
+```
+
+**Features:**
+- 30s heartbeat with 60s idle timeout detection
+- Offline queue (10k messages) with reconnect replay
+- Exponential backoff reconnection (1s→2s→4s→...→30s max + jitter)
+- Rate limiting: 1000 msg/min per agent
+- Health endpoint: `GET /health/transport`
+
+> ⚠️ **SSE Deprecation:** SSE transport (`GET/POST /mcp`) is deprecated but remains functional as a backward-compatible fallback. Migrate to WS for unlimited conversation duration and instant delivery.
+
 ### CLI
-- `strategos onboard` — interactive setup wizard (quickstart or advanced)
-- `strategos doctor` — comprehensive health diagnostics
-- `strategos configure` — section-based interactive config editor (LLM, Telegram, MCP, embedding, paths, logging)
-- `strategos mcp` — MCP server management (list, add, remove, enable/disable, status)
-- `strategos daemon` — systemd service management (install, start, stop, restart, status, uninstall)
-- `strategos status` — system status overview
-- `strategos reset` — configuration reset with scope control
-- `strategos migrate` — config migration for version upgrades
+- `operant onboard` — interactive setup wizard (quickstart or advanced)
+- `operant doctor` — comprehensive health diagnostics
+- `operant configure` — section-based interactive config editor (LLM, Telegram, MCP, embedding, paths, logging)
+- `operant mcp` — MCP server management (list, add, remove, enable/disable, status)
+- `operant daemon` — systemd service management (install, start, stop, restart, status, uninstall)
+- `operant status` — system status overview
+- `operant reset` — configuration reset with scope control
+- `operant migrate` — config migration for version upgrades
 
 ### Telegram Commands
 | Command | Description |
@@ -88,12 +139,12 @@ Each agent has its own **Kanban board**, **LifeOS database access**, **vector me
 ### Quick Install (Production)
 
 ```bash
-git clone https://github.com/ishan-parihar/strategos.git
-cd strategos
+git clone https://github.com/ishan-parihar/operant.git
+cd operant
 sudo ./install.sh
-sudo nano /opt/strategos/.env    # Configure Telegram bot token
-sudo systemctl start strategos
-sudo systemctl enable strategos
+sudo nano /opt/operant/.env    # Configure Telegram bot token
+sudo systemctl start operant
+sudo systemctl enable operant
 sudo ./verify-install.sh
 ```
 
@@ -158,19 +209,19 @@ npm run test:coverage       # Run with coverage
 All settings are managed interactively:
 
 ```bash
-strategos configure         # Full interactive wizard
-strategos configure --section llm        # LLM provider only
-strategos configure --section telegram   # Telegram only
-strategos configure --section mcp        # MCP servers only
-strategos configure --section embedding  # Embedding model only
-strategos doctor            # Run health diagnostics
+operant configure         # Full interactive wizard
+operant configure --section llm        # LLM provider only
+operant configure --section telegram   # Telegram only
+operant configure --section mcp        # MCP servers only
+operant configure --section embedding  # Embedding model only
+operant doctor            # Run health diagnostics
 ```
 
-Config file: `~/.strategos/config.json`
+Config file: `~/.operant/config.json`
 
 ## Documentation
 
-- [Architecture](docs/strategos-architecture.md) — System architecture
+- [Architecture](docs/operant-architecture.md) — System architecture
 - [Organic Operations](docs/organic-operations-model.md) — Agent behavior model
 - [Operational Model](docs/operational-model.md) — Core staff + board meetings
 - [LifeOS Staff](docs/lifeos-core-staff.md) — Agent roles & database access
@@ -181,20 +232,20 @@ Config file: `~/.strategos/config.json`
 
 ```bash
 # Service
-sudo journalctl -u strategos -f      # Follow logs
-sudo systemctl status strategos       # Check status
-sudo systemctl restart strategos      # Restart
+sudo journalctl -u operant -f      # Follow logs
+sudo systemctl status operant       # Check status
+sudo systemctl restart operant      # Restart
 
 # Diagnostics
-strategos doctor                      # Full health check
-strategos daemon status               # Service status
+operant doctor                      # Full health check
+operant daemon status               # Service status
 
 # LLM / Embeddings
 sudo systemctl restart ollama         # Restart Ollama
 ollama list                           # Check available models
 
 # Manual run
-sudo -u strategos node /opt/strategos/build/index.js
+sudo -u operant node /opt/operant/build/index.js
 ```
 
 ## License

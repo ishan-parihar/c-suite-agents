@@ -106,8 +106,10 @@ function validateNotPrivateIP(url: URL): void {
  */
 async function validateResolvedIP(hostname: string): Promise<string[] | null> {
   try {
+    const lookupPromise = lookup(hostname, { all: true });
+    lookupPromise.catch(() => {});
     const results = await Promise.race([
-      lookup(hostname, { all: true }),
+      lookupPromise,
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("DNS lookup timeout (5s)")), 5000)
       ),
@@ -182,8 +184,8 @@ async function imageToDataUrl(source: string): Promise<string> {
   }
 
   const allowedBaseDirs = [
-    resolve(join(homedir(), ".strategos", "media")),
-    resolve(join(homedir(), ".local", "share", "strategos", "media")),
+    resolve(join(homedir(), ".operant", "media")),
+    resolve(join(homedir(), ".local", "share", "operant", "media")),
   ];
   let resolved = resolve(source);
   try {
@@ -208,7 +210,7 @@ async function imageToDataUrl(source: string): Promise<string> {
 }
 
 /**
- * Resolve API configuration from env vars or Strategos config.
+ * Resolve API configuration from env vars or Operant config.
  * Returns { client, model } or null if no API key is available.
  */
 function resolveApiConfig(): { client: OpenAI; model: string } | null {
@@ -223,7 +225,7 @@ function resolveApiConfig(): { client: OpenAI; model: string } | null {
     return { client, model: "gpt-4o" };
   }
 
-  // Fallback to Strategos config
+  // Fallback to Operant config
   try {
     const config = loadConfig();
     if (config.llm?.apiKey && config.llm.model) {

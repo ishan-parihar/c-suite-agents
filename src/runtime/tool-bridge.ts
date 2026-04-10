@@ -1,4 +1,4 @@
-// Tool Bridge — Maps Strategos MCP tools to LLM tool-calling format
+// Tool Bridge — Maps Operant MCP tools to LLM tool-calling format
 // Provides tool definitions (JSON Schema) and execution wrappers
 
 import { z } from "zod";
@@ -821,7 +821,7 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
           interval_seconds: { type: "number", description: "Seconds between runs for schedule_type='interval' (e.g., 86400 = daily)" },
           trigger_time: { type: "number", description: "Unix timestamp (ms) for schedule_type='once'" },
           event_name: { type: "string", description: "Event name for schedule_type='on_event' (use with cron.trigger)" },
-          action: { type: "string", enum: ["query_database", "check_kanban", "send_report", "call_agent", "custom_prompt", "telegram_notify"], description: "What action to perform: 'query_database' (query LifeOS), 'check_kanban' (review board), 'send_report' (generate status report), 'call_agent' (message another agent), 'custom_prompt' (run custom instructions), 'telegram_notify' (send Telegram notification - CEO only)" },
+          action: { type: "string", enum: ["query_database", "check_kanban", "send_report", "call_agent", "custom_prompt", "telegram_notify"], description: "What action to perform: 'query_database' (query Operant), 'check_kanban' (review board), 'send_report' (generate status report), 'call_agent' (message another agent), 'custom_prompt' (run custom instructions), 'telegram_notify' (send Telegram notification - CEO only)" },
           action_params: { type: "object", description: "Parameters for the action. For custom_prompt: { prompt: 'your instructions' }. For call_agent: { to_agent: 'agent-id', message: 'message text' }. For telegram_notify: { text: 'notification text' }. For query_database: { query: 'what to look for' }. Add priority: 'P1'|'P2'|'P3'|'P4' to set report priority (default P3). Add notify_user: true to deliver results to user via Telegram (CEO only) or to CEO internally (non-CEO)." },
         },
         required: ["name", "description", "schedule_type", "action"],

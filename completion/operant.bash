@@ -1,9 +1,9 @@
 #!/bin/bash
-# Strategos CLI bash completion
-# Install: source completion/strategos.bash
-# Or copy to /etc/bash_completion.d/strategos
+# Operant CLI bash completion
+# Install: source completion/operant.bash
+# Or copy to /etc/bash_completion.d/operant
 
-_strategos_completions() {
+_operant_completions() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
     local commands="onboard doctor status help version"
@@ -45,5 +45,5 @@ _strategos_completions() {
     esac
 }
 
-complete -F _strategos_completions strategos
-complete -F _strategos_completions node  # for "node build/index.js" usage
+complete -F _operant_completions operant
+complete -F _operant_completions node  # for "node build/index.js" usage

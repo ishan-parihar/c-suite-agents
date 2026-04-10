@@ -35,7 +35,7 @@ export interface MediaDetectionResult {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-const MEDIA_DIR = path.join(os.homedir(), ".strategos", "media", "inbound");
+const MEDIA_DIR = path.join(os.homedir(), ".operant", "media", "inbound");
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 
 const EXTENSION_TO_MIME: Record<string, string> = {
@@ -208,7 +208,7 @@ export function detectMedia(ctx: any): MediaDetectionResult {
 /**
  * Downloads a file from Telegram given a Telegraf context.
  * Uses native fetch() with SSRF protection (api.telegram.org only).
- * Saves to ~/.strategos/media/inbound/ with timestamped naming.
+ * Saves to ~/.operant/media/inbound/ with timestamped naming.
  */
 export async function downloadTelegramFile(
   ctx: any,

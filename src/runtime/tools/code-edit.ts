@@ -41,7 +41,7 @@ export function createCodeEditTool() {
     },
     permissionTier: "write" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { file_path, agent_id, old_string, new_string } = args as CodeEditArgs;
+      const { file_path, agent_id, old_string, new_string } = args as unknown as CodeEditArgs;
 
       if (agent_id !== "cto-technical") {
         return { content: [{ type: "text", text: "Error: code.edit is only available to the CTO agent." }] };

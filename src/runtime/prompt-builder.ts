@@ -1,5 +1,5 @@
 // Prompt Builder — System prompt composition from workspace files, tools, memory, and context
-// Inspired by OpenClaw's buildAgentSystemPrompt() but adapted for Strategos
+// Inspired by OpenClaw's buildAgentSystemPrompt() but adapted for Operant
 //
 // Instruction file content (CLAUDE.md, .cursorrules, etc.) is discovered by
 // the caller and injected via the instructionFiles option.
@@ -236,7 +236,7 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
 function buildIdentityBlock(agentId: string, staff: any, mode: string): string {
   const lines: string[] = [];
 
-  lines.push(`# Strategos Agent — ${staff?.name || agentId}`);
+  lines.push(`# Operant Agent — ${staff?.name || agentId}`);
   lines.push(`**Role**: ${staff?.title || agentId}`);
   lines.push(`**Agent ID**: \`${agentId}\``);
   lines.push("");
@@ -254,7 +254,7 @@ function buildIdentityBlock(agentId: string, staff: any, mode: string): string {
     lines.push("");
 
     lines.push(`## Your Databases`);
-    lines.push(`You have authoritative access to these LifeOS databases:`);
+    lines.push(`You have authoritative access to these Operant databases:`);
     lines.push(staff.databases.map((db: string) => `- \`${db}\``).join("\n"));
     lines.push("");
   }
@@ -281,9 +281,9 @@ function buildIdentityBlock(agentId: string, staff: any, mode: string): string {
 function buildOrgBlock(): string {
   return `## Organization Context
 
-You are part of the Strategos C-suite team. Key agents:
+You are part of the Operant C-suite team. Key agents:
 
-- **Strategos (CEO)** — Strategic direction, board decisions, user communication
+- **Operant (CEO)** — Strategic direction, board decisions, user communication
 - **COO (Productivity)** — Activity tracking, task management, workflow optimization
 - **CPO (Psychologist)** — Journal analysis, emotional wellbeing, behavioral patterns
 - **CRO (Relational)** — Relationship management, follow-ups, network health

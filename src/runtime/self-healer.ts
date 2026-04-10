@@ -89,6 +89,7 @@ class CircuitBreaker {
 
   /** Record a success for this circuit. */
   recordSuccess(): void {
+    if (this.state === "open") return; // Ignore stale successes while circuit is open
     this.successes++;
     if (this.state === "half-open") {
       if (this.successes >= this.opts.successThreshold) {
@@ -973,9 +974,16 @@ export class SelfHealerClass {
       case "alert-only":
         actionPromise = this.doAlertOnly(action, context);
         break;
+      default:
+        actionPromise = Promise.resolve({
+          success: false,
+          message: `Unknown action type: ${(action as any).type}`,
+        });
     }
 
-    return Promise.race([actionPromise.finally(() => clearTimeout(timeoutId!)), timeoutPromise]);
+    const guardedAction = actionPromise.finally(() => clearTimeout(timeoutId!));
+    guardedAction.catch(() => {});
+    return Promise.race([guardedAction, timeoutPromise]);
   }
 
   // -----------------------------------------------------------------------
@@ -1080,7 +1088,7 @@ export class SelfHealerClass {
       }
 
       case "kanban": {
-        // Kanban is only accessible through the StrategosRuntime ctx (not
+        // Kanban is only accessible through the OperantRuntime ctx (not
         // exposed via NativeAgentRuntime). Log best-effort check.
         logger.info({ subsystem: "kanban" },
           "SelfHealer: reconnect kanban — no singleton kanban getter, logged",
@@ -1256,7 +1264,7 @@ export class SelfHealerClass {
 
 
       case "kanban": {
-        // Kanban is only accessible through the StrategosRuntime ctx (not
+        // Kanban is only accessible through the OperantRuntime ctx (not
         // exposed via NativeAgentRuntime). Log best-effort check.
         logger.info({ subsystem: "kanban" },
           "SelfHealer: flush-and-reinit kanban — no singleton kanban getter, logged",

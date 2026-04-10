@@ -33,7 +33,7 @@ const upgradeMutex = new AsyncMutex();
 function getDbPath(): string {
   const dataDir = path.join(
     process.env.HOME || process.env.USERPROFILE || "/root",
-    ".strategos",
+    ".operant",
     "data"
   );
   fs.mkdirSync(dataDir, { recursive: true });

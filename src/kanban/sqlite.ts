@@ -1,6 +1,6 @@
-import initSqlJs from "sql.js";
+import Database from "better-sqlite3";
 import * as fs from "node:fs/promises";
-import { resolve } from "node:path";
+import * as path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
 import { getDirectReports } from "../staff/core-staff.js";
@@ -9,8 +9,6 @@ import { validateAgentIdentity } from "../auth/session.js";
 function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
 }
-
-type DBAny = any;
 
 export type CardStatus = "Backlog"|"Todo"|"In Progress"|"Blocked"|"Review"|"Done";
 
@@ -36,61 +34,28 @@ export interface KanbanBoard {
   columns: Array<{ id: string; name: string; cards: KanbanCard[] }>;
 }
 
-/** sql.js .get() returns arrays; map to named KanbanCard object. */
-function mapCard(row: unknown[], columnName: string): KanbanCard {
-  return {
-    id: row[0] as string,
-    board_id: row[1] as string,
-    column_id: row[2] as string,
-    title: row[3] as string,
-    description: row[4] as string,
-    priority: row[5] as string,
-    due: row[6] as string | null,
-    tags: safeJsonParse(row[7] as string, []),
-    assignee_agent_id: row[8] as string,
-    project_id: row[9] as string | null,
-    last_update: row[10] as string,
-    status: columnName as CardStatus
-  };
-}
-
-/** sql.js .get() returns arrays; map to partial card (no status). */
-function mapCardPartial(row: unknown[]): Omit<KanbanCard, 'status'> {
-  return {
-    id: row[0] as string,
-    board_id: row[1] as string,
-    column_id: row[2] as string,
-    title: row[3] as string,
-    description: row[4] as string,
-    priority: row[5] as string,
-    due: row[6] as string | null,
-    tags: safeJsonParse(row[7] as string, []),
-    assignee_agent_id: row[8] as string,
-    project_id: row[9] as string | null,
-    last_update: row[10] as string,
-  };
-}
-
-const CARD_COLUMNS = "id, board_id, column_id, title, description, priority, due, tags, assignee_agent_id, project_id, last_update";
-
 export class Kanban {
-  private constructor(private db: DBAny, private path: string) {}
-  private dbLock = Promise.resolve();
+  private db: Database.Database;
 
-  static async init(path: string) {
-    const resolved = resolve(path);
+  private constructor(db: Database.Database) {
+    this.db = db;
+  }
+
+  static async init(dbPath: string) {
+    const resolved = path.resolve(dbPath);
     if (!resolved.endsWith(".db") && !resolved.endsWith(".sqlite")) {
-      throw new Error(`Invalid database path: ${path}`);
+      throw new Error(`Invalid database path: ${dbPath}`);
     }
-    const SQL = await initSqlJs({ locateFile: (f: string) => `node_modules/sql.js/dist/${f}` });
-    let db: DBAny;
-    try {
-      const buf = await fs.readFile(resolved);
-      db = new SQL.Database(new Uint8Array(buf));
-    } catch {
-      db = new SQL.Database();
-    }
-    db.run(`
+
+    const dir = path.dirname(resolved);
+    await fs.mkdir(dir, { recursive: true });
+
+    const db = new Database(resolved);
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    db.pragma("foreign_keys = ON");
+
+    db.exec(`
       CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, agent_id TEXT, name TEXT);
       CREATE TABLE IF NOT EXISTS columns (id TEXT PRIMARY KEY, board_id TEXT, name TEXT, ord INTEGER);
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, board_id TEXT, column_id TEXT, title TEXT, description TEXT, priority TEXT, due TEXT, tags TEXT, assignee_agent_id TEXT, project_id TEXT, last_update TEXT);
@@ -102,153 +67,103 @@ export class Kanban {
       CREATE INDEX IF NOT EXISTS idx_activity_card ON card_activity(card_id);
       CREATE INDEX IF NOT EXISTS idx_boards_agent ON boards(agent_id);
     `);
-    const kb = new Kanban(db, resolved);
-    await kb.persist();
-    return kb;
-  }
 
-  private async persist() {
-    const prev = this.dbLock;
-    this.dbLock = (async () => {
-      try {
-        await prev;
-        const data = this.db.export();
-        const tmpPath = `${this.path}.tmp`;
-        await fs.writeFile(tmpPath, Buffer.from(data));
-        await fs.rename(tmpPath, this.path);
-      } finally {
-        // Always resolve to prevent lock chain breakage
-      }
-    })().catch(err => {
-      logger.error({ err: err instanceof Error ? err.message : String(err) }, "Kanban persist failed");
-    });
-    await this.dbLock;
+    return new Kanban(db);
   }
 
   async close(): Promise<void> {
-    await this.persist();
-  }
-
-  /** sql.js has no .all() — iterate with .step() to collect all rows. */
-  private queryAll(sql: string, params?: unknown[]): unknown[][] {
-    const stmt = this.db.prepare(sql);
-    try {
-      if (params) stmt.bind(params);
-      const results: unknown[][] = [];
-      while (stmt.step()) results.push(stmt.get() as unknown[]);
-      return results;
-    } finally {
-      stmt.free();
-    }
-  }
-
-  /** sql.js has no .get([params]) — use bind → step → getAsObject. */
-  private queryOneObject<T>(sql: string, params?: unknown[]): T | undefined {
-    const stmt = this.db.prepare(sql);
-    try {
-      if (params) stmt.bind(params);
-      const result = stmt.step() ? (stmt.getAsObject() as T) : undefined;
-      return result;
-    } finally {
-      stmt.free();
-    }
-  }
-
-  /** sql.js has no .get([params]) — returns array-indexed row for mapCardPartial. */
-  private queryOneArray(sql: string, params?: unknown[]): unknown[] | undefined {
-    const stmt = this.db.prepare(sql);
-    try {
-      if (params) stmt.bind(params);
-      const result = stmt.step() ? (stmt.get() as unknown[]) : undefined;
-      return result;
-    } finally {
-      stmt.free();
-    }
+    this.db.close();
   }
 
   async ensureBoard(agentId: string, name: string, columns?: string[]) {
     await validateAgentIdentity(agentId);
-    const boardRow = this.queryOneObject<{ id: string }>("SELECT id FROM boards WHERE agent_id=?", [agentId]);
+    
+    const boardRow = this.db.prepare("SELECT id FROM boards WHERE agent_id=?").get(agentId) as { id: string } | undefined;
     if (boardRow) return boardRow.id;
 
     const boardId = uuidv4();
     const defaultColumns: CardStatus[] = ["Backlog","Todo","In Progress","Blocked","Review","Done"];
     const cols = columns || defaultColumns;
 
-    this.db.run("BEGIN");
-    try {
-      this.db.run("INSERT INTO boards (id, agent_id, name) VALUES (?,?,?)", [boardId, agentId, name]);
-      for (let i = 0; i < cols.length; i++) this.db.run("INSERT INTO columns (id, board_id, name, ord) VALUES (?,?,?,?)", [uuidv4(), boardId, cols[i], i + 1]);
-      this.db.run("COMMIT");
-    } catch (err) {
-      this.db.run("ROLLBACK");
-      throw err;
-    }
-    await this.persist();
+    const createTransaction = this.db.transaction(() => {
+      this.db.prepare("INSERT INTO boards (id, agent_id, name) VALUES (?,?,?)").run(boardId, agentId, name);
+      const insertCol = this.db.prepare("INSERT INTO columns (id, board_id, name, ord) VALUES (?,?,?,?)");
+      for (let i = 0; i < cols.length; i++) {
+        insertCol.run(uuidv4(), boardId, cols[i], i + 1);
+      }
+    });
+
+    createTransaction();
     return boardId;
   }
 
   async addCard(agentId: string, title: string, description: string, priority: string, due: string|null, tags: string[], projectId?: string) {
     await validateAgentIdentity(agentId);
-    const board = this.queryOneObject<{ id: string }>("SELECT id FROM boards WHERE agent_id=?", [agentId]);
+    
+    const board = this.db.prepare("SELECT id FROM boards WHERE agent_id=?").get(agentId) as { id: string } | undefined;
     if (!board) throw new Error("Board not found");
+    
     const boardId = board.id;
-    // Try Backlog first, then fall back to the first column by ordinal
-    let column = this.queryOneObject<{ id: string }>("SELECT id FROM columns WHERE board_id=? AND name=?", [boardId, "Backlog"]);
+    
+    let column = this.db.prepare("SELECT id FROM columns WHERE board_id=? AND name=?").get(boardId, "Backlog") as { id: string } | undefined;
     if (!column?.id) {
-      column = this.queryOneObject<{ id: string }>("SELECT id FROM columns WHERE board_id=? ORDER BY ord LIMIT 1", [boardId]);
+      column = this.db.prepare("SELECT id FROM columns WHERE board_id=? ORDER BY ord LIMIT 1").get(boardId) as { id: string } | undefined;
     }
     const columnId = column?.id;
     if (!columnId) throw new Error("No columns found on board");
+    
     const id = uuidv4();
     const now = new Date().toISOString();
 
-    this.db.run("BEGIN");
-    try {
-      this.db.run("INSERT INTO cards (id, board_id, column_id, title, description, priority, due, tags, assignee_agent_id, project_id, last_update) VALUES (?,?,?,?,?,?,?,?,?,?,?)", [id, boardId, columnId, title, description, priority, due, JSON.stringify(tags), agentId, projectId || null, now]);
-      this.db.run("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)", [uuidv4(), id, now, "create", JSON.stringify({ title })]);
-      this.db.run("COMMIT");
-    } catch (err) {
-      this.db.run("ROLLBACK");
-      throw err;
-    }
-    await this.persist();
+    const insertTransaction = this.db.transaction(() => {
+      this.db.prepare(
+        "INSERT INTO cards (id, board_id, column_id, title, description, priority, due, tags, assignee_agent_id, project_id, last_update) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+      ).run(id, boardId, columnId, title, description, priority, due, JSON.stringify(tags), agentId, projectId || null, now);
+      
+      this.db.prepare(
+        "INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)"
+      ).run(uuidv4(), id, now, "create", JSON.stringify({ title }));
+    });
+
+    insertTransaction();
     return id;
   }
 
   async moveCard(agentId: string, cardId: string, status: CardStatus) {
     await validateAgentIdentity(agentId);
 
-    const cardRow = this.queryOneArray(`SELECT ${CARD_COLUMNS} FROM cards WHERE id=?`, [cardId]);
+    const cardRow = this.db.prepare(
+      "SELECT id, board_id, column_id, title, description, priority, due, tags, assignee_agent_id, project_id, last_update FROM cards WHERE id=?"
+    ).get(cardId) as (Omit<KanbanCard, 'status' | 'tags'> & { tags: string }) | undefined;
+    
     if (!cardRow) throw new Error("Card not found");
-    const card = mapCardPartial(cardRow);
-    const board = this.queryOneObject<{ id: string; agent_id: string }>("SELECT id, agent_id FROM boards WHERE id=?", [card.board_id]);
+    
+    const board = this.db.prepare("SELECT id, agent_id FROM boards WHERE id=?").get(cardRow.board_id) as { id: string; agent_id: string } | undefined;
     if (!board) throw new Error("Board not found");
     if (board.agent_id !== agentId) throw new Error("Not authorized: board does not belong to agent");
 
-    const column = this.queryOneObject<{ id: string }>("SELECT id FROM columns WHERE board_id=? AND name=?", [board.id, status]);
+    const column = this.db.prepare("SELECT id FROM columns WHERE board_id=? AND name=?").get(board.id, status) as { id: string } | undefined;
     if (!column) throw new Error(`Column '${status}' not found`);
+    
     const now = new Date().toISOString();
 
-    this.db.run("BEGIN");
-    try {
-      this.db.run("UPDATE cards SET column_id=?, last_update=? WHERE id=?", [column.id, now, cardId]);
-      this.db.run("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)", [uuidv4(), cardId, now, "move", JSON.stringify({ to: status })]);
-      this.db.run("COMMIT");
-    } catch (err) {
-      this.db.run("ROLLBACK");
-      throw err;
-    }
-    await this.persist();
+    const moveTransaction = this.db.transaction(() => {
+      this.db.prepare("UPDATE cards SET column_id=?, last_update=? WHERE id=?").run(column.id, now, cardId);
+      this.db.prepare("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)")
+        .run(uuidv4(), cardId, now, "move", JSON.stringify({ to: status }));
+    });
+
+    moveTransaction();
   }
 
   async getBoard(agentId: string): Promise<KanbanBoard | null> {
     await validateAgentIdentity(agentId);
-    const boardRow = this.queryOneObject<{ id: string; agent_id: string; name: string }>("SELECT id, agent_id, name FROM boards WHERE agent_id=?", [agentId]);
+    
+    const boardRow = this.db.prepare("SELECT id, name FROM boards WHERE agent_id=?").get(agentId) as { id: string; name: string } | undefined;
     if (!boardRow) return null;
 
     const boardId = boardRow.id;
-    const columnRows = this.queryAll("SELECT id, name FROM columns WHERE board_id=? ORDER BY ord", [boardId]) as unknown[][];
+    const columnRows = this.db.prepare("SELECT id, name FROM columns WHERE board_id=? ORDER BY ord").all(boardId) as Array<{ id: string; name: string }>;
 
     const board: KanbanBoard = {
       id: boardId,
@@ -257,16 +172,21 @@ export class Kanban {
       columns: []
     };
 
+    const getCardsStmt = this.db.prepare("SELECT id, board_id, column_id, title, description, priority, due, tags, assignee_agent_id, project_id, last_update FROM cards WHERE column_id=?");
+    
     for (const colRow of columnRows) {
-      const colId = (colRow as unknown[])[0] as string;
-      const colName = (colRow as unknown[])[1] as string;
-
-      const rows = this.queryAll(`SELECT ${CARD_COLUMNS} FROM cards WHERE column_id=?`, [colId]);
+      const dbCards = getCardsStmt.all(colRow.id) as Array<Omit<KanbanCard, 'status' | 'tags'> & { tags: string }>;
+      
+      const cards: KanbanCard[] = dbCards.map(c => ({
+        ...c,
+        tags: safeJsonParse(c.tags, []),
+        status: colRow.name as CardStatus
+      }));
 
       board.columns.push({
-        id: colId,
-        name: colName,
-        cards: rows ? rows.map((row: unknown[]) => mapCard(row, colName)) : []
+        id: colRow.id,
+        name: colRow.name,
+        cards
       });
     }
 
@@ -288,10 +208,9 @@ export class Kanban {
     return results;
   }
 
-  /** Column names for a board, ordered. */
   private getColumnNames(boardId: string): string[] {
-    const rows = this.queryAll("SELECT name FROM columns WHERE board_id=? ORDER BY ord", [boardId]);
-    return rows.map(r => (r as unknown[])[0] as string);
+    const rows = this.db.prepare("SELECT name FROM columns WHERE board_id=? ORDER BY ord").all(boardId) as Array<{ name: string }>;
+    return rows.map(r => r.name);
   }
 
   async reassignCard(cardId: string, fromAgentId: string, toAgentId: string, managerId: string): Promise<void> {
@@ -309,44 +228,41 @@ export class Kanban {
       throw new Error(`${managerId} is not manager of ${toAgentId}`);
     }
 
-    const cardRow = this.queryOneArray(`SELECT ${CARD_COLUMNS} FROM cards WHERE id=?`, [cardId]);
+    const cardRow = this.db.prepare("SELECT column_id, assignee_agent_id FROM cards WHERE id=?").get(cardId) as { column_id: string; assignee_agent_id: string } | undefined;
     if (!cardRow) throw new Error("Card not found");
-    const card = mapCardPartial(cardRow);
 
-    if (card.assignee_agent_id !== fromAgentId) {
-      throw new Error(`Card ${cardId} is not assigned to ${fromAgentId} (actual: ${card.assignee_agent_id})`);
+    if (cardRow.assignee_agent_id !== fromAgentId) {
+      throw new Error(`Card ${cardId} is not assigned to ${fromAgentId} (actual: ${cardRow.assignee_agent_id})`);
     }
 
-    const fromBoard = this.queryOneObject<{ id: string }>("SELECT id FROM boards WHERE agent_id=?", [fromAgentId]);
-    const toBoard = this.queryOneObject<{ id: string }>("SELECT id FROM boards WHERE agent_id=?", [toAgentId]);
+    const fromBoard = this.db.prepare("SELECT id FROM boards WHERE agent_id=?").get(fromAgentId) as { id: string } | undefined;
+    const toBoard = this.db.prepare("SELECT id FROM boards WHERE agent_id=?").get(toAgentId) as { id: string } | undefined;
 
     if (!fromBoard || !toBoard) throw new Error("Board not found for one of the agents");
 
     const columnNames = this.getColumnNames(fromBoard.id);
-    const srcColumn = this.queryOneObject<{ name: string }>("SELECT name FROM columns WHERE id=?", [card.column_id]);
+    const srcColumn = this.db.prepare("SELECT name FROM columns WHERE id=?").get(cardRow.column_id) as { name: string } | undefined;
     const columnName = srcColumn?.name;
+    
     if (!columnName || !columnNames.includes(columnName)) {
       throw new Error(`Source column '${columnName || 'unknown'}' not found in board ${fromBoard.id}`);
     }
 
-    const newColumn = this.queryOneObject<{ id: string }>("SELECT id FROM columns WHERE board_id=? AND name=?", [toBoard.id, columnName]);
+    const newColumn = this.db.prepare("SELECT id FROM columns WHERE board_id=? AND name=?").get(toBoard.id, columnName) as { id: string } | undefined;
     if (!newColumn) {
       throw new Error(`Target board ${toBoard.id} has no column named '${columnName}'`);
     }
 
     const now = new Date().toISOString();
-    this.db.run("BEGIN");
-    try {
-      this.db.run("UPDATE cards SET board_id=?, column_id=?, assignee_agent_id=?, last_update=? WHERE id=?",
-        [toBoard.id, newColumn.id, toAgentId, now, cardId]);
-      this.db.run("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)",
-        [uuidv4(), cardId, now, "reassign", JSON.stringify({ from: fromAgentId, to: toAgentId })]);
-      this.db.run("COMMIT");
-    } catch (err) {
-      this.db.run("ROLLBACK");
-      throw err;
-    }
-    await this.persist();
+    
+    const reassignTransaction = this.db.transaction(() => {
+      this.db.prepare("UPDATE cards SET board_id=?, column_id=?, assignee_agent_id=?, last_update=? WHERE id=?")
+        .run(toBoard.id, newColumn.id, toAgentId, now, cardId);
+      this.db.prepare("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)")
+        .run(uuidv4(), cardId, now, "reassign", JSON.stringify({ from: fromAgentId, to: toAgentId }));
+    });
+
+    reassignTransaction();
     logger.info({ cardId, from: fromAgentId, to: toAgentId }, "Card reassigned");
   }
 
@@ -354,11 +270,10 @@ export class Kanban {
     await validateAgentIdentity(callerAgentId);
     await validateAgentIdentity(toManagerId);
 
-    const cardRow = this.queryOneArray(`SELECT ${CARD_COLUMNS} FROM cards WHERE id=?`, [cardId]);
+    const cardRow = this.db.prepare("SELECT assignee_agent_id FROM cards WHERE id=?").get(cardId) as { assignee_agent_id: string } | undefined;
     if (!cardRow) throw new Error("Card not found");
-    const card = mapCardPartial(cardRow);
 
-    if (card.assignee_agent_id !== callerAgentId) {
+    if (cardRow.assignee_agent_id !== callerAgentId) {
       throw new Error("Not authorized: caller does not own this card");
     }
 
@@ -367,28 +282,27 @@ export class Kanban {
       throw new Error(`${toManagerId} is not a manager (has no direct reports)`);
     }
 
-    this.db.run("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)",
-      [uuidv4(), cardId, new Date().toISOString(), "escalate", JSON.stringify({ to: toManagerId, reason, from: callerAgentId })]);
+    this.db.prepare("INSERT INTO card_activity (id, card_id, ts, action, payload) VALUES (?,?,?,?,?)")
+      .run(uuidv4(), cardId, new Date().toISOString(), "escalate", JSON.stringify({ to: toManagerId, reason, from: callerAgentId }));
 
-    await this.persist();
     logger.info({ cardId, to: toManagerId, reason, from: callerAgentId }, "Card escalated");
   }
 
   async getCard(cardId: string): Promise<KanbanCard | null> {
-    const cardRow = this.queryOneArray(`SELECT ${CARD_COLUMNS} FROM cards WHERE id=?`, [cardId]);
+    const cardRow = this.db.prepare("SELECT id, board_id, column_id, title, description, priority, due, tags, assignee_agent_id, project_id, last_update FROM cards WHERE id=?").get(cardId) as (Omit<KanbanCard, 'status' | 'tags'> & { tags: string }) | undefined;
     if (!cardRow) return null;
 
-    const card = mapCardPartial(cardRow);
-    const columnRow = this.queryOneObject<{ name: string }>("SELECT name FROM columns WHERE id=?", [card.column_id]);
+    const columnRow = this.db.prepare("SELECT name FROM columns WHERE id=?").get(cardRow.column_id) as { name: string } | undefined;
 
     return {
-      ...card,
+      ...cardRow,
+      tags: safeJsonParse(cardRow.tags, []),
       status: columnRow ? columnRow.name as CardStatus : "Backlog"
     };
   }
 
   listAgents(): string[] {
-    const rows = this.queryAll("SELECT DISTINCT agent_id FROM boards");
-    return rows.map(r => (r as unknown[])[0] as string);
+    const rows = this.db.prepare("SELECT DISTINCT agent_id FROM boards").all() as Array<{ agent_id: string }>;
+    return rows.map(r => r.agent_id);
   }
 }

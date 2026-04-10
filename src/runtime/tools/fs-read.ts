@@ -27,7 +27,7 @@ export function createFsReadTool() {
     },
     permissionTier: "read" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { file_path, agent_id } = args as FsReadArgs;
+      const { file_path, agent_id } = args as unknown as FsReadArgs;
 
       if (!agent_id) {
         return { content: [{ type: "text", text: "Error: agent_id is required" }] };
@@ -35,7 +35,7 @@ export function createFsReadTool() {
 
       // Resolve workspace directory
       const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      const workspaceDir = path.join(homeDir, ".operant", "agents", agent_id);
 
       // Security: validate path is within workspace
       if (file_path.includes("..")) {

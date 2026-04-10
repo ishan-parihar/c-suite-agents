@@ -10,6 +10,8 @@ import { getEmbeddingService } from "../memory/embeddings.js";
 import { validateAgentIdentity } from "../auth/session.js";
 import { EventEmitter } from "node:events";
 import { ErrorBus } from "../runtime/error-emitter.js";
+import { getMessageBus } from "../transport/message-bus.js";
+import type { MessagePayload } from "../transport/ws-types.js";
 
 export type MessagePriority = "P1" | "P2" | "P3" | "P4";
 
@@ -66,6 +68,9 @@ export class MessagingSystem extends EventEmitter {
   private db: any;
   private dbPath: string;
   private persistLock = Promise.resolve();
+  private embedFailures = 0;
+  private embedCircuitOpen = false;
+  private embedLastFailTime = 0;
 
   private constructor(dbPath: string) {
     super();
@@ -91,7 +96,19 @@ export class MessagingSystem extends EventEmitter {
       const buf = await fs.readFile(this.dbPath);
       this.db = new SQL.Database(new Uint8Array(buf));
     } catch {
-      this.db = new SQL.Database();
+      // Recovery: check for stale .tmp file from a crashed persist()
+      const tmpPath = `${this.dbPath}.tmp`;
+      try {
+        const tmpBuf = await fs.readFile(tmpPath);
+        logger.warn({ tmpPath, dbPath: this.dbPath }, "Recovering from stale .tmp file — previous persist() likely crashed");
+        this.db = new SQL.Database(new Uint8Array(tmpBuf));
+        // Promote .tmp to .db so future persist() calls work correctly
+        await fs.rename(tmpPath, this.dbPath);
+        logger.info({ dbPath: this.dbPath }, "Recovered .tmp → .db successfully");
+      } catch {
+        // No .tmp either — truly fresh database
+        this.db = new SQL.Database();
+      }
     }
 
     this.db.run(`
@@ -161,10 +178,30 @@ export class MessagingSystem extends EventEmitter {
     const currentLock = this.persistLock;
     this.persistLock = currentLock.then(async () => {
       await fs.writeFile(tmpPath, Buffer.from(data));
-      await fs.rename(tmpPath, this.dbPath);
+      try {
+        await fs.rename(tmpPath, this.dbPath);
+      } catch (err: any) {
+        // Cross-device rename: fall back to copy + unlink
+        if (err.code === "EXDEV") {
+          await fs.copyFile(tmpPath, this.dbPath);
+          await fs.unlink(tmpPath);
+        } else {
+          throw err;
+        }
+      }
     }).catch(async (err) => {
-      try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+      ErrorBus.emit({
+        type: "persistence:failed",
+        severity: "error",
+        component: "messaging",
+        error: err instanceof Error ? err : new Error(String(err)),
+        message: `Failed to persist messages database: ${err instanceof Error ? err.message : String(err)}`,
+        context: { dbPath: this.dbPath, tmpPath },
+      });
+      // Do NOT delete .tmp on failure — preserves data for recovery on next startup
       throw err;
+    }).finally(() => {
+      this.persistLock = Promise.resolve();
     });
     await this.persistLock;
   }
@@ -172,6 +209,10 @@ export class MessagingSystem extends EventEmitter {
   private sanitizeParams(params?: unknown[]): unknown[] {
     if (!params) return [];
     return params.map(p => p === undefined ? null : p);
+  }
+
+  private run(sql: string, params?: unknown[]): void {
+    this.db.run(sql, this.sanitizeParams(params));
   }
 
   private queryAllArrays(sql: string, params?: unknown[]): unknown[][] {
@@ -202,11 +243,36 @@ export class MessagingSystem extends EventEmitter {
   }
 
   private async generateEmbedding(text: string): Promise<number[]> {
+    if (this.embedCircuitOpen) {
+      if (Date.now() - this.embedLastFailTime > 5 * 60 * 1000) {
+        this.embedCircuitOpen = false;
+        this.embedFailures = 0;
+        logger.info("Embedding circuit breaker reset — retrying");
+      } else {
+        return [];
+      }
+    }
+
     try {
       const embedder = getEmbeddingService();
-      return embedder.embed(text);
+      const result = embedder.embed(text);
+      this.embedFailures = 0;
+      return result;
     } catch (err: any) {
-      logger.error({ err: err.message }, "Failed to generate embedding");
+      this.embedFailures++;
+      this.embedLastFailTime = Date.now();
+      if (this.embedFailures >= 5) {
+        this.embedCircuitOpen = true;
+        logger.error({ err: err.message }, "Embedding service circuit breaker OPEN — semantic search degraded");
+        ErrorBus.emit({
+          type: "message:failed",
+          severity: "warn",
+          component: "messaging",
+          error: err instanceof Error ? err : new Error(String(err)),
+          message: `Embedding service failed ${this.embedFailures} consecutive times. Semantic search degraded.`,
+          context: { consecutiveFailures: this.embedFailures },
+        });
+      }
       return [];
     }
   }
@@ -238,11 +304,11 @@ export class MessagingSystem extends EventEmitter {
 
     this.db.run("BEGIN");
     try {
-      this.db.run(
+      this.run(
         "INSERT INTO threads (id, participants, subject, status, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
         [thread_id, JSON.stringify([from, to]), subject || content.slice(0, 50), "active", JSON.stringify(tags), now, now]
       );
-      this.db.run(
+      this.run(
         "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         [message_id, thread_id, from, to, content, priority, requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
       );
@@ -263,6 +329,20 @@ export class MessagingSystem extends EventEmitter {
 
     await this.persist();
     logger.info({ from, to, priority, thread_id }, "Message sent");
+
+    const bus = getMessageBus();
+    const payload: MessagePayload = {
+      message_id,
+      thread_id,
+      from,
+      to,
+      content,
+      priority,
+      requires_response,
+      created_at: now,
+      tags,
+    };
+    bus.publish(to, payload);
 
     this.emit('message:sent', { message_id, thread_id, from, to, priority, requires_response });
 
@@ -298,12 +378,12 @@ export class MessagingSystem extends EventEmitter {
 
     this.db.run("BEGIN");
     try {
-      this.db.run(
+      this.run(
         "INSERT INTO messages (id, thread_id, from_agent, to_agent, content, priority, requires_response, responded, created_at, read, tags, vector) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         [message_id, thread_id, from, otherParticipant, content, "P3", requires_response ? 1 : 0, 0, now, 0, JSON.stringify(tags), JSON.stringify(vector)]
       );
-      this.db.run(`UPDATE messages SET responded = 1 WHERE thread_id = ? AND from_agent = ? AND requires_response = 1`, [thread_id, otherParticipant]);
-      this.db.run("UPDATE threads SET updated_at = ? WHERE id = ?", [now, thread_id]);
+      this.run(`UPDATE messages SET responded = 1 WHERE thread_id = ? AND from_agent = ? AND requires_response = 1`, [thread_id, otherParticipant]);
+      this.run("UPDATE threads SET updated_at = ? WHERE id = ?", [now, thread_id]);
       this.db.run("COMMIT");
     } catch (err) {
       this.db.run("ROLLBACK");
@@ -322,6 +402,20 @@ export class MessagingSystem extends EventEmitter {
     await this.persist();
     logger.info({ thread_id, from }, "Reply sent");
 
+    const bus = getMessageBus();
+    const payload: MessagePayload = {
+      message_id,
+      thread_id,
+      from,
+      to: otherParticipant,
+      content,
+      priority: "P3",
+      requires_response,
+      created_at: now,
+      tags,
+    };
+    bus.publish(otherParticipant, payload);
+
     this.emit('message:reply', { thread_id, from, content });
 
     return this.getThread(thread_id)!;
@@ -330,17 +424,17 @@ export class MessagingSystem extends EventEmitter {
   getThread(thread_id: string): MessageThread | null {
     const threadRow = this.queryOneRow(`SELECT * FROM threads WHERE id = ?`, [thread_id]);
     if (!threadRow) return null;
-    const vals = threadRow.values;
-
+    // sql.js stmt.get() returns a plain array, NOT {values: [...]}.
+    // threadRow IS the values array: [id, participants, subject, status, tags, summary, created_at, updated_at]
     return {
-      id: vals[0],
-      participants: safeJsonParse(vals[1], []),
-      subject: vals[2],
-      status: vals[3],
-      tags: safeJsonParse(vals[4], []),
-      summary: vals[5],
-      created_at: vals[6],
-      updated_at: vals[7]
+      id: threadRow[0] as string,
+      participants: safeJsonParse(threadRow[1] as string, []),
+      subject: threadRow[2] as string,
+      status: threadRow[3] as MessageThread['status'],
+      tags: safeJsonParse(threadRow[4] as string, []),
+      summary: threadRow[5] as string | undefined,
+      created_at: threadRow[6] as number,
+      updated_at: threadRow[7] as number
     };
   }
 
@@ -374,14 +468,15 @@ export class MessagingSystem extends EventEmitter {
 
   async getUnreadCount(agent_id: string): Promise<number> {
     const result = this.queryOneRow(`SELECT COUNT(*) FROM messages WHERE to_agent = ? AND read = 0`, [agent_id]);
-    return result?.values?.[0] as number || 0;
+    // sql.js stmt.get() returns a plain array; result[0] is the COUNT value.
+    return (result?.[0] as number) || 0;
   }
 
   async markAsRead(agent_id: string, thread_id?: string): Promise<void> {
     if (thread_id) {
-      this.db.run(`UPDATE messages SET read = 1 WHERE to_agent = ? AND thread_id = ?`, [agent_id, thread_id]);
+      this.run(`UPDATE messages SET read = 1 WHERE to_agent = ? AND thread_id = ?`, [agent_id, thread_id]);
     } else {
-      this.db.run(`UPDATE messages SET read = 1 WHERE to_agent = ?`, [agent_id]);
+      this.run(`UPDATE messages SET read = 1 WHERE to_agent = ?`, [agent_id]);
     }
     await this.persist();
   }
@@ -483,18 +578,19 @@ export class MessagingSystem extends EventEmitter {
 
     // Check existing escalation count (max 3)
     const existingEscalations = this.queryOneRow(`SELECT COUNT(*) FROM escalations WHERE thread_id = ?`, [thread_id]);
-    const escalationCount = (existingEscalations?.values?.[0] as number) || 0;
+    // sql.js stmt.get() returns a plain array; [0] is the COUNT value.
+    const escalationCount = (existingEscalations?.[0] as number) || 0;
     if (escalationCount >= 3) throw new Error(`Thread ${thread_id} has reached maximum escalation limit (3)`);
 
     const escalation_id = uuidv4();
     const now = Date.now();
-    this.db.run("BEGIN");
+    this.run("BEGIN");
     try {
-      this.db.run("INSERT INTO escalations (id, thread_id, from_agent, to_agent, reason, created_at, status) VALUES (?,?,?,?,?,?,?)", [escalation_id, thread_id, from, to, reason, now, "pending"]);
-      this.db.run("UPDATE threads SET status = 'escalated' WHERE id = ?", [thread_id]);
-      this.db.run("COMMIT");
+      this.run("INSERT INTO escalations (id, thread_id, from_agent, to_agent, reason, created_at, status) VALUES (?,?,?,?,?,?,?)", [escalation_id, thread_id, from, to, reason, now, "pending"]);
+      this.run("UPDATE threads SET status = 'escalated' WHERE id = ?", [thread_id]);
+      this.run("COMMIT");
     } catch (err) {
-      this.db.run("ROLLBACK");
+      this.run("ROLLBACK");
       throw err;
     }
     await this.persist();
@@ -507,7 +603,7 @@ export class MessagingSystem extends EventEmitter {
   }
 
   async resolveEscalation(escalation_id: string, status: "resolved" | "dismissed"): Promise<void> {
-    this.db.run("UPDATE escalations SET status = ? WHERE id = ?", [status, escalation_id]);
+    this.run("UPDATE escalations SET status = ? WHERE id = ?", [status, escalation_id]);
     await this.persist();
   }
 

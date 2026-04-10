@@ -4,7 +4,7 @@
 // Role-based: only agents with heartbeat enabled in config receive heartbeats.
 
 import { logger } from "../logger.js";
-import type { StrategosRuntime } from "../types.js";
+import type { OperantRuntime } from "../types.js";
 import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
 import { SystemEventQueue, ACTIVE_HOURS } from "./system-events.js";
 import { loadConfig } from "../config/loader.js";
@@ -54,7 +54,7 @@ function resolveHeartbeatConfig(): {
   return { mode, defaultAgent, agentConfigs };
 }
 
-export async function startHeartbeat(rt: StrategosRuntime) {
+export async function startHeartbeat(rt: OperantRuntime) {
   const { defaultAgent, agentConfigs } = resolveHeartbeatConfig();
 
   const enabledAgents = getCoreStaffIds().filter(
@@ -122,7 +122,7 @@ export async function startHeartbeat(rt: StrategosRuntime) {
 
           await SystemEventQueue.enqueueCoalesced({
             agentId,
-            text: `It's ${timeStr} on ${dayStr}. Time for your domain check. Query your LifeOS databases for anything needing attention in ${title}. Check your Kanban for blocked/overdue items. Review your inbox for pending items. If anything needs attention, take action internally — update your Kanban, send messages to other agents, store findings in memory. If all clear, reply HEARTBEAT_OK.`,
+            text: `It's ${timeStr} on ${dayStr}. Time for your domain check. Query your Operant databases for anything needing attention in ${title}. Check your Kanban for blocked/overdue items. Review your inbox for pending items. If anything needs attention, take action internally — update your Kanban, send messages to other agents, store findings in memory. If all clear, reply HEARTBEAT_OK.`,
             contextKey: "heartbeat:domain-check",
             priority: "P3",
           });

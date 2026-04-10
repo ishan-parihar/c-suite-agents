@@ -474,7 +474,7 @@ ${timeLine}
 
     switch (task.action) {
       case "query_database":
-        prompt += `Query your databases for the following: ${JSON.stringify(task.action_params, null, 2)}\nUse your lifeos tools to fetch and analyze the data. Report any findings, anomalies, or items needing attention.`;
+        prompt += `Query your databases for the following: ${JSON.stringify(task.action_params, null, 2)}\nUse your operant tools to fetch and analyze the data. Report any findings, anomalies, or items needing attention.`;
         break;
       case "check_kanban":
         prompt += `Check your Kanban board for blocked, overdue, or stale cards. Report the status and flag anything needing attention.`;
@@ -493,6 +493,10 @@ ${timeLine}
         break;
       case "custom_prompt":
         prompt += `\n### Custom Instructions:\n${task.action_params.prompt || task.action_params.instructions || ""}\n\nExecute this task and report results.`;
+        break;
+      default:
+        prompt += `Execute scheduled task: ${task.action} — ${JSON.stringify(task.action_params)}`;
+        logger.warn({ taskId: task.id, action: task.action }, "Unknown scheduled action type — using generic prompt");
         break;
     }
 

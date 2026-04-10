@@ -37,7 +37,7 @@ import { logger } from "../logger.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Failure scenarios specific to the Strategos multi-agent orchestration system.
+ * Failure scenarios specific to the Operant multi-agent orchestration system.
  * Each scenario represents a distinct failure mode with a dedicated recovery recipe.
  */
 export enum FailureScenario {

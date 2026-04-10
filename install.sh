@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Strategos Multi-Agent Orchestrator - Complete Installation Script
+# Operant Multi-Agent Orchestrator - Complete Installation Script
 #
 
 set -e
@@ -11,11 +11,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-STRATEGOS_USER="${STRATEGOS_USER:-strategos}"
-STRATEGOS_GROUP="${STRATEGOS_GROUP:-strategos}"
-STRATEGOS_DIR="${STRATEGOS_DIR:-/opt/strategos}"
-STRATEGOS_DATA_DIR="${STRATEGOS_DATA_DIR:-/var/lib/strategos}"
-STRATEGOS_LOG_DIR="${STRATEGOS_LOG_DIR:-/var/log/strategos}"
+OPERANT_USER="${OPERANT_USER:-operant}"
+OPERANT_GROUP="${OPERANT_GROUP:-operant}"
+OPERANT_DIR="${OPERANT_DIR:-/opt/operant}"
+OPERANT_DATA_DIR="${OPERANT_DATA_DIR:-/var/lib/operant}"
+OPERANT_LOG_DIR="${OPERANT_LOG_DIR:-/var/log/operant}"
 NODE_VERSION="${NODE_VERSION:-20}"
 # LLM Configuration (qwen-proxy defaults)
 LLM_BASE_URL="${LLM_BASE_URL:-http://127.0.0.1:3000/v1}"
@@ -32,7 +32,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 check_first_run() {
-    local config_file="/home/$(logname)/.strategos/config.json"
+    local config_file="/home/$(logname)/.operant/config.json"
     if [ -f "$config_file" ] && ! grep -q '"wizard"' "$config_file" 2>/dev/null; then
         return 0  # first run
     fi
@@ -42,16 +42,16 @@ check_first_run() {
 post_start_health_check() {
     log_info "Running post-start health check..."
     sleep 5
-    if systemctl is-active --quiet strategos; then
-        log_success "Strategos service is running"
-        if grep -q "Strategos started" "$STRATEGOS_LOG_DIR/strategos.log" 2>/dev/null; then
+    if systemctl is-active --quiet operant; then
+        log_success "Operant service is running"
+        if grep -q "Operant started" "$OPERANT_LOG_DIR/operant.log" 2>/dev/null; then
             log_success "Service booted successfully"
         else
             log_warn "Service started but boot message not found in logs yet"
         fi
     else
         log_error "Service failed to start. Check logs:"
-        log_error "  journalctl -u strategos -n 50 --no-pager"
+        log_error "  journalctl -u operant -n 50 --no-pager"
         return 1
     fi
 }
@@ -176,17 +176,17 @@ install_embedding_model() {
 }
 
 create_user() {
-    log_info "Creating system user: $STRATEGOS_USER..."
+    log_info "Creating system user: $OPERANT_USER..."
     
-    if id "$STRATEGOS_USER" &>/dev/null; then
+    if id "$OPERANT_USER" &>/dev/null; then
         log_info "User already exists"
         return 0
     fi
     
     useradd --system --no-create-home --shell /bin/false \
-        --home-dir "$STRATEGOS_DIR" \
-        --comment "Strategos Service User" \
-        "$STRATEGOS_USER"
+        --home-dir "$OPERANT_DIR" \
+        --comment "Operant Service User" \
+        "$OPERANT_USER"
     
     log_success "User created"
 }
@@ -194,50 +194,50 @@ create_user() {
 create_directories() {
     log_info "Creating directories..."
     
-    mkdir -p "$STRATEGOS_DIR"
-    mkdir -p "$STRATEGOS_DATA_DIR"
-    mkdir -p "$STRATEGOS_LOG_DIR"
-    mkdir -p "$STRATEGOS_DATA_DIR/lancedb"
-    mkdir -p "$STRATEGOS_DATA_DIR/kanban"
-    mkdir -p "$STRATEGOS_DATA_DIR/messages"
-    mkdir -p "$STRATEGOS_DATA_DIR/agents"
-    for office in strategos coo-productivity cpo-psychologist cro-relational cfo-financial cmo-content cio-intelligence physician-health; do
-        mkdir -p "$STRATEGOS_DATA_DIR/agents/$office"
+    mkdir -p "$OPERANT_DIR"
+    mkdir -p "$OPERANT_DATA_DIR"
+    mkdir -p "$OPERANT_LOG_DIR"
+    mkdir -p "$OPERANT_DATA_DIR/lancedb"
+    mkdir -p "$OPERANT_DATA_DIR/kanban"
+    mkdir -p "$OPERANT_DATA_DIR/messages"
+    mkdir -p "$OPERANT_DATA_DIR/agents"
+    for office in operant coo-productivity cpo-psychologist cro-relational cfo-financial cmo-content cio-intelligence physician-health; do
+        mkdir -p "$OPERANT_DATA_DIR/agents/$office"
     done
 
-    chown -R "$STRATEGOS_USER:$STRATEGOS_GROUP" "$STRATEGOS_DIR"
-    chown -R "$STRATEGOS_USER:$STRATEGOS_GROUP" "$STRATEGOS_DATA_DIR"
-    chown -R "$STRATEGOS_USER:$STRATEGOS_GROUP" "$STRATEGOS_LOG_DIR"
-    chown -R "$STRATEGOS_USER:$STRATEGOS_GROUP" "$STRATEGOS_DATA_DIR/agents"
-    chmod 750 "$STRATEGOS_DIR"
-    chmod 750 "$STRATEGOS_DATA_DIR"
-    chmod 750 "$STRATEGOS_LOG_DIR"
+    chown -R "$OPERANT_USER:$OPERANT_GROUP" "$OPERANT_DIR"
+    chown -R "$OPERANT_USER:$OPERANT_GROUP" "$OPERANT_DATA_DIR"
+    chown -R "$OPERANT_USER:$OPERANT_GROUP" "$OPERANT_LOG_DIR"
+    chown -R "$OPERANT_USER:$OPERANT_GROUP" "$OPERANT_DATA_DIR/agents"
+    chmod 750 "$OPERANT_DIR"
+    chmod 750 "$OPERANT_DATA_DIR"
+    chmod 750 "$OPERANT_LOG_DIR"
     
     log_success "Directories created"
 }
 
 install_application() {
-    log_info "Installing Strategos application..."
+    log_info "Installing Operant application..."
     
     # Copy application files (preserve permissions)
-    cp -r /home/ishanp/Documents/GitHub/strategos/* "$STRATEGOS_DIR/"
+    cp -r /home/ishanp/Documents/GitHub/operant/* "$OPERANT_DIR/"
     
     # Install ALL dependencies (including devDependencies for build)
-    cd "$STRATEGOS_DIR"
+    cd "$OPERANT_DIR"
     log_info "Installing npm dependencies..."
     npm install
     
     # Build application using npx (no global tsc needed)
     log_info "Building application..."
     npx tsc
-    chmod 755 "$STRATEGOS_DIR/build/index.js"
+    chmod 755 "$OPERANT_DIR/build/index.js"
     
     # Install production dependencies only (cleaner)
     log_info "Installing production dependencies..."
     npm install --omit=dev
     
     # Set permissions
-    chown -R "$STRATEGOS_USER:$STRATEGOS_GROUP" "$STRATEGOS_DIR"
+    chown -R "$OPERANT_USER:$OPERANT_GROUP" "$OPERANT_DIR"
     
     log_success "Application installed"
 }
@@ -245,8 +245,8 @@ install_application() {
 create_env_file() {
     log_info "Creating environment configuration..."
     
-    cat > "$STRATEGOS_DIR/.env" << EOFENV
-# Strategos Environment Configuration
+    cat > "$OPERANT_DIR/.env" << EOFENV
+# Operant Environment Configuration
 # Generated: $(date -Iseconds)
 
 # Telegram Bot Configuration
@@ -263,30 +263,30 @@ OLLAMA_HOST=$OLLAMA_HOST
 OLLAMA_EMBED_MODEL=$OLLAMA_EMBED_MODEL
 
 # Data Directories
-LANCEDB_DIR=$STRATEGOS_DATA_DIR/lancedb
-KANBAN_DB=$STRATEGOS_DATA_DIR/kanban/kanban.db
-MESSAGES_DB=$STRATEGOS_DATA_DIR/messages/messages.db
+LANCEDB_DIR=$OPERANT_DATA_DIR/lancedb
+KANBAN_DB=$OPERANT_DATA_DIR/kanban/kanban.db
+MESSAGES_DB=$OPERANT_DATA_DIR/messages/messages.db
 
 # Logging
 LOG_LEVEL=info
-LOG_FILE=$STRATEGOS_LOG_DIR/strategos.log
+LOG_FILE=$OPERANT_LOG_DIR/operant.log
 
 # Service Configuration
-STRATEGOS_USER=$STRATEGOS_USER
-STRATEGOS_GROUP=$STRATEGOS_GROUP
+OPERANT_USER=$OPERANT_USER
+OPERANT_GROUP=$OPERANT_GROUP
 EOFENV
 
-    chmod 600 "$STRATEGOS_DIR/.env"
-    chown "$STRATEGOS_USER:$STRATEGOS_GROUP" "$STRATEGOS_DIR/.env"
+    chmod 600 "$OPERANT_DIR/.env"
+    chown "$OPERANT_USER:$OPERANT_GROUP" "$OPERANT_DIR/.env"
     
-    log_success "Environment file created at $STRATEGOS_DIR/.env"
+    log_success "Environment file created at $OPERANT_DIR/.env"
     log_warn "IMPORTANT: Edit .env file and set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
 }
 
 create_config_json() {
     log_info "Creating JSON configuration..."
     
-    local config_dir="/home/$(logname)/.strategos"
+    local config_dir="/home/$(logname)/.operant"
     mkdir -p "$config_dir"
     
     cat > "$config_dir/config.json" << EOFCONFIG
@@ -325,11 +325,11 @@ create_config_json() {
     "directToUser": true
   },
   "paths": {
-    "lancedb": "$STRATEGOS_DATA_DIR/lancedb",
-    "kanbanDb": "$STRATEGOS_DATA_DIR/kanban/kanban.db",
-    "messagesDb": "$STRATEGOS_DATA_DIR/messages/messages.db",
-    "agentOffices": "$STRATEGOS_DIR/agents",
-    "logFile": "$STRATEGOS_LOG_DIR/strategos.log"
+    "lancedb": "$OPERANT_DATA_DIR/lancedb",
+    "kanbanDb": "$OPERANT_DATA_DIR/kanban/kanban.db",
+    "messagesDb": "$OPERANT_DATA_DIR/messages/messages.db",
+    "agentOffices": "$OPERANT_DIR/agents",
+    "logFile": "$OPERANT_LOG_DIR/operant.log"
   },
   "telegram": {
     "botToken": "your-bot-token-from-botfather",
@@ -337,7 +337,7 @@ create_config_json() {
   },
   "logging": {
     "level": "info",
-    "file": "$STRATEGOS_LOG_DIR/strategos.log",
+    "file": "$OPERANT_LOG_DIR/operant.log",
     "maxFileBytes": 10485760
   }
 }
@@ -354,10 +354,10 @@ create_systemd_service() {
     
     # Ensure daemon CLI is available
     local daemon_cmd=""
-    if command -v strategos &>/dev/null; then
-        daemon_cmd="strategos daemon install --force"
-    elif [ -f "$STRATEGOS_DIR/build/cli/program.js" ]; then
-        daemon_cmd="node $STRATEGOS_DIR/build/cli/program.js daemon install --force"
+    if command -v operant &>/dev/null; then
+        daemon_cmd="operant daemon install --force"
+    elif [ -f "$OPERANT_DIR/build/cli/program.js" ]; then
+        daemon_cmd="node $OPERANT_DIR/build/cli/program.js daemon install --force"
     else
         log_warn "Daemon CLI not available, falling back to static service unit"
         create_systemd_service_fallback
@@ -365,7 +365,7 @@ create_systemd_service() {
     fi
     
     # Run as the target user (not root) for user-level systemd service
-    local target_user="${STRATEGOS_USER:-$(logname)}"
+    local target_user="${OPERANT_USER:-$(logname)}"
     if [[ "$target_user" == "root" ]]; then
         target_user="$(logname)"
     fi
@@ -382,31 +382,31 @@ create_systemd_service() {
 create_systemd_service_fallback() {
     log_info "Creating static systemd service (fallback)..."
     
-    cat > /etc/systemd/system/strategos.service << EOFSERVICE
+    cat > /etc/systemd/system/operant.service << EOFSERVICE
 [Unit]
-Description=Strategos Multi-Agent Orchestrator
-Documentation=https://github.com/strategos/strategos
+Description=Operant Multi-Agent Orchestrator
+Documentation=https://github.com/operant/operant
 After=network.target
 
 [Service]
 Type=simple
-User=$STRATEGOS_USER
-Group=$STRATEGOS_GROUP
-WorkingDirectory=$STRATEGOS_DIR
+User=$OPERANT_USER
+Group=$OPERANT_GROUP
+WorkingDirectory=$OPERANT_DIR
 Environment=NODE_ENV=production
-EnvironmentFile=$STRATEGOS_DIR/.env
-ExecStart=/usr/bin/node $STRATEGOS_DIR/build/index.js
+EnvironmentFile=$OPERANT_DIR/.env
+ExecStart=/usr/bin/node $OPERANT_DIR/build/index.js
 Restart=on-failure
 RestartSec=10
-StandardOutput=append:$STRATEGOS_LOG_DIR/strategos.log
-StandardError=append:$STRATEGOS_LOG_DIR/strategos.error.log
+StandardOutput=append:$OPERANT_LOG_DIR/operant.log
+StandardError=append:$OPERANT_LOG_DIR/operant.error.log
 
 # Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$STRATEGOS_DATA_DIR $STRATEGOS_LOG_DIR
+ReadWritePaths=$OPERANT_DATA_DIR $OPERANT_LOG_DIR
 
 # Resource limits
 LimitNOFILE=65536
@@ -417,9 +417,9 @@ CPUQuota=200%
 WantedBy=multi-user.target
 EOFSERVICE
 
-    chmod 644 /etc/systemd/system/strategos.service
+    chmod 644 /etc/systemd/system/operant.service
     systemctl daemon-reload
-    systemctl enable strategos.service
+    systemctl enable operant.service
     
     log_success "Systemd service created and enabled (system-level fallback)"
 }
@@ -427,17 +427,17 @@ EOFSERVICE
 create_logrotate() {
     log_info "Creating logrotate configuration..."
     
-    cat > /etc/logrotate.d/strategos << EOFLOGROTATE
-$STRATEGOS_LOG_DIR/*.log {
+    cat > /etc/logrotate.d/operant << EOFLOGROTATE
+$OPERANT_LOG_DIR/*.log {
     daily
     missingok
     rotate 14
     compress
     delaycompress
     notifempty
-    create 0640 $STRATEGOS_USER $STRATEGOS_GROUP
+    create 0640 $OPERANT_USER $OPERANT_GROUP
     postrotate
-        systemctl reload strategos.service > /dev/null 2>&1 || true
+        systemctl reload operant.service > /dev/null 2>&1 || true
     endscript
 }
 EOFLOGROTATE
@@ -448,16 +448,16 @@ EOFLOGROTATE
 create_cli_symlink() {
     log_info "Installing CLI command..."
     
-    local bin_target="/usr/local/bin/strategos"
-    local cli_source="$STRATEGOS_DIR/bin/strategos.mjs"
+    local bin_target="/usr/local/bin/operant"
+    local cli_source="$OPERANT_DIR/bin/operant.mjs"
     
     if [ -f "$cli_source" ]; then
         ln -sf "$cli_source" "$bin_target"
         chmod +x "$bin_target"
-        log_success "CLI command installed: strategos → $bin_target"
+        log_success "CLI command installed: operant → $bin_target"
     else
         log_warn "CLI source not found at $cli_source"
-        log_warn "Users can still run: node $STRATEGOS_DIR/build/index.js <command>"
+        log_warn "Users can still run: node $OPERANT_DIR/build/index.js <command>"
     fi
 }
 
@@ -479,12 +479,12 @@ verify_installation() {
         log_warn "Embedding model not found (optional, only needed if using Ollama embeddings)"
     fi
     
-    if [ ! -f "$STRATEGOS_DIR/build/index.js" ]; then
+    if [ ! -f "$OPERANT_DIR/build/index.js" ]; then
         log_error "Application not built"
         errors=$((errors + 1))
     fi
     
-    if ! systemctl list-unit-files | grep -q strategos; then
+    if ! systemctl list-unit-files | grep -q operant; then
         log_error "Systemd service not installed"
         errors=$((errors + 1))
     fi
@@ -501,64 +501,64 @@ verify_installation() {
 print_next_steps() {
     echo ""
     echo "=============================================="
-    echo "  Strategos Installation Complete!"
+    echo "  Operant Installation Complete!"
     echo "=============================================="
     echo ""
     echo "Next steps:"
     echo ""
     echo "1. Configure Telegram bot:"
-    echo "   sudo nano $STRATEGOS_DIR/.env"
+    echo "   sudo nano $OPERANT_DIR/.env"
     echo "   - Set TELEGRAM_BOT_TOKEN"
     echo "   - Set TELEGRAM_CHAT_ID"
     echo ""
     echo "2. Review LLM configuration (qwen-proxy defaults):"
-    echo "   cat ~/.strategos/config.json"
+    echo "   cat ~/.operant/config.json"
     echo "   - LLM provider: qwen-proxy"
     echo "   - Model: $LLM_MODEL"
     echo "   - Base URL: $LLM_BASE_URL"
     echo ""
     echo "3. Start the service:"
-    echo "   sudo systemctl start strategos"
+    echo "   sudo systemctl start operant"
     echo ""
     echo "4. Check status:"
-    echo "   systemctl status strategos"
+    echo "   systemctl status operant"
     echo ""
     echo "5. View logs:"
-    echo "   sudo journalctl -u strategos -f"
+    echo "   sudo journalctl -u operant -f"
     echo ""
     echo "6. Test in Telegram:"
     echo "   - Send /start to your bot"
     echo "   - Try /help for available commands"
     echo ""
     echo "CLI commands (available to all users):"
-    echo "  strategos onboard              # Run setup wizard"
-    echo "  strategos doctor               # Run diagnostic checks"
-    echo "  strategos status               # Show system status"
-    echo "  strategos status --deep        # Deep health check"
-    echo "  strategos status --json        # JSON output (for scripts)"
-    echo "  strategos reset --scope config # Reset configuration"
-    echo "  strategos migrate              # Apply config migrations"
-    echo "  strategos help                 # Show all commands"
-    echo "  strategos version              # Show version"
+    echo "  operant onboard              # Run setup wizard"
+    echo "  operant doctor               # Run diagnostic checks"
+    echo "  operant status               # Show system status"
+    echo "  operant status --deep        # Deep health check"
+    echo "  operant status --json        # JSON output (for scripts)"
+    echo "  operant reset --scope config # Reset configuration"
+    echo "  operant migrate              # Apply config migrations"
+    echo "  operant help                 # Show all commands"
+    echo "  operant version              # Show version"
     echo ""
     echo "Service management:"
-    echo "  sudo systemctl start strategos    # Start service"
-    echo "  sudo systemctl stop strategos     # Stop service"
-    echo "  sudo systemctl restart strategos  # Restart service"
-    echo "  sudo systemctl enable strategos   # Enable on boot"
-    echo "  sudo systemctl disable strategos  # Disable on boot"
+    echo "  sudo systemctl start operant    # Start service"
+    echo "  sudo systemctl stop operant     # Stop service"
+    echo "  sudo systemctl restart operant  # Restart service"
+    echo "  sudo systemctl enable operant   # Enable on boot"
+    echo "  sudo systemctl disable operant  # Disable on boot"
     echo ""
     echo "Logs:"
-    echo "  $STRATEGOS_LOG_DIR/strategos.log"
-    echo "  $STRATEGOS_LOG_DIR/strategos.error.log"
+    echo "  $OPERANT_LOG_DIR/operant.log"
+    echo "  $OPERANT_LOG_DIR/operant.error.log"
     echo ""
     echo "Data:"
-    echo "  $STRATEGOS_DATA_DIR/"
+    echo "  $OPERANT_DATA_DIR/"
     echo ""
     echo "Health checks:"
-    echo "  sudo systemctl is-active strategos           # Check service status"
-    echo "  sudo journalctl -u strategos -n 50           # Recent log entries"
-    echo "  grep 'Strategos started' $STRATEGOS_LOG_DIR/strategos.log  # Boot confirmation"
+    echo "  sudo systemctl is-active operant           # Check service status"
+    echo "  sudo journalctl -u operant -n 50           # Recent log entries"
+    echo "  grep 'Operant started' $OPERANT_LOG_DIR/operant.log  # Boot confirmation"
     echo "  loginctl show-user $(logname) -p Linger      # Systemd linger status"
     echo ""
     echo "=============================================="
@@ -566,7 +566,7 @@ print_next_steps() {
 
 main() {
     echo "=============================================="
-    echo "  Strategos Installation Script"
+    echo "  Operant Installation Script"
     echo "=============================================="
     echo ""
     
@@ -599,51 +599,51 @@ main() {
 
     if check_first_run; then
         log_info "First run detected — running setup wizard..."
-        if command -v strategos &>/dev/null; then
-            strategos onboard
-        elif [ -f "$STRATEGOS_DIR/build/index.js" ]; then
-            node "$STRATEGOS_DIR/build/index.js" onboard
+        if command -v operant &>/dev/null; then
+            operant onboard
+        elif [ -f "$OPERANT_DIR/build/index.js" ]; then
+            node "$OPERANT_DIR/build/index.js" onboard
         else
-            cd "$STRATEGOS_DIR"
+            cd "$OPERANT_DIR"
             bun run src/cli/setup-wizard.ts
         fi
         log_info "Running doctor check..."
-        if command -v strategos &>/dev/null; then
-            strategos doctor
-        elif [ -f "$STRATEGOS_DIR/build/index.js" ]; then
-            node "$STRATEGOS_DIR/build/index.js" doctor
+        if command -v operant &>/dev/null; then
+            operant doctor
+        elif [ -f "$OPERANT_DIR/build/index.js" ]; then
+            node "$OPERANT_DIR/build/index.js" doctor
         else
-            cd "$STRATEGOS_DIR"
+            cd "$OPERANT_DIR"
             bun run src/cli/doctor.ts
         fi
-        log_info "Starting Strategos service..."
-        sudo systemctl start strategos
+        log_info "Starting Operant service..."
+        sudo systemctl start operant
         post_start_health_check
     else
         echo ""
         read -p "Would you like to run the setup wizard to customize your configuration? (y/N) " -r
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             log_info "Running setup wizard..."
-            if command -v strategos &>/dev/null; then
-                strategos onboard
-            elif [ -f "$STRATEGOS_DIR/build/index.js" ]; then
-                node "$STRATEGOS_DIR/build/index.js" onboard
+            if command -v operant &>/dev/null; then
+                operant onboard
+            elif [ -f "$OPERANT_DIR/build/index.js" ]; then
+                node "$OPERANT_DIR/build/index.js" onboard
             else
-                cd "$STRATEGOS_DIR"
+                cd "$OPERANT_DIR"
                 bun run src/cli/setup-wizard.ts
             fi
             log_info "Running doctor check..."
-            if command -v strategos &>/dev/null; then
-                strategos doctor
-            elif [ -f "$STRATEGOS_DIR/build/index.js" ]; then
-                node "$STRATEGOS_DIR/build/index.js" doctor
+            if command -v operant &>/dev/null; then
+                operant doctor
+            elif [ -f "$OPERANT_DIR/build/index.js" ]; then
+                node "$OPERANT_DIR/build/index.js" doctor
             else
-                cd "$STRATEGOS_DIR"
+                cd "$OPERANT_DIR"
                 bun run src/cli/doctor.ts
             fi
         else
-            log_info "You can run the setup wizard later with: strategos onboard"
-            log_info "Run doctor check with: strategos doctor"
+            log_info "You can run the setup wizard later with: operant onboard"
+            log_info "Run doctor check with: operant doctor"
         fi
     fi
 }

@@ -9,7 +9,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { logger } from "../logger.js";
 import { SystemEventQueue } from "./system-events.js";
 
-const WEBHOOKS_FILE = join(homedir(), ".strategos", "webhooks.json");
+const WEBHOOKS_FILE = join(homedir(), ".operant", "webhooks.json");
 
 export interface WebhookConfig {
   id: string;
@@ -76,7 +76,7 @@ async function loadConfigs(): Promise<WebhookConfig[]> {
 }
 
 async function saveConfigs(configs: WebhookConfig[]): Promise<void> {
-  const dir = join(homedir(), ".strategos");
+  const dir = join(homedir(), ".operant");
   await mkdir(dir, { recursive: true });
   // Atomic write: write to temp file then rename
   const tmp = WEBHOOKS_FILE + ".tmp";

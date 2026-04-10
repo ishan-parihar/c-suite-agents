@@ -1,8 +1,8 @@
-#compdef strategos
-# Strategos CLI zsh completion
-# Install: copy to ~/.zsh/completion/_strategos and add fpath
+#compdef operant
+# Operant CLI zsh completion
+# Install: copy to ~/.zsh/completion/_operant and add fpath
 
-_strategos() {
+_operant() {
     local -a commands
     commands=(
         'onboard:Run setup wizard'
@@ -49,4 +49,4 @@ _strategos() {
     esac
 }
 
-_strategos "$@"
+_operant "$@"

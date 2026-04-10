@@ -35,7 +35,7 @@ function bold(text: string): string {
 
 // ── Config Path ──────────────────────────────────────────────────────────
 
-const CONFIG_DIR = path.join(os.homedir(), ".strategos");
+const CONFIG_DIR = path.join(os.homedir(), ".operant");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
 function loadRawConfig(): Record<string, unknown> {
@@ -45,7 +45,7 @@ function loadRawConfig(): Record<string, unknown> {
   try {
     const stat = fs.statSync(CONFIG_FILE);
     if (stat.size > 100 * 1024) {
-      console.warn(`[strategos] WARN: Config file too large (${stat.size} bytes), skipping`);
+      console.warn(`[operant] WARN: Config file too large (${stat.size} bytes), skipping`);
       return {};
     }
   } catch {

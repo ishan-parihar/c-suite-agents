@@ -1,5 +1,5 @@
 /**
- * Alert Manager for Strategos.
+ * Alert Manager for Operant.
  *
  * Smart alerting with consecutive failure counting, cooldown periods,
  * and escalation tiers. Subscribes to the ErrorBus and sends Telegram
@@ -396,7 +396,7 @@ const TIER_LABELS: Record<AlertTier, string> = {
  *
  * Example:
  * ```
- * 🔴 **Strategos Alert: LLM Provider Failure**
+ * 🔴 **Operant Alert: LLM Provider Failure**
  *
  * Agent: CEO (ceo-strategic)
  * Component: llm-provider
@@ -436,7 +436,7 @@ export function formatAlertMessage(
 
   // Build message
   const parts: string[] = [
-    `${emoji} **Strategos Alert: ${componentName}**`,
+    `${emoji} **Operant Alert: ${componentName}**`,
     "",
     `Tier: ${label}`,
     `Component: ${event.component}`,
@@ -481,7 +481,7 @@ function formatRecoveryMessage(event: ErrorEvent): string {
 
   const agentPart = event.agentId ? `\nAgent: ${event.agentId}` : "";
 
-  return `✅ **Strategos Recovered: ${componentName}**${agentPart}\n\nThe ${event.component} subsystem has recovered. Consecutive failure counter has been reset.`;
+  return `✅ **Operant Recovered: ${componentName}**${agentPart}\n\nThe ${event.component} subsystem has recovered. Consecutive failure counter has been reset.`;
 }
 
 // ---------------------------------------------------------------------------

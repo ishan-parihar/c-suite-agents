@@ -38,19 +38,19 @@ function error(text: string): string {
 // ---------------------------------------------------------------------------
 
 const SYSTEMD_USER_DIR = join(homedir(), ".config", "systemd", "user");
-const SYSTEMD_SERVICE_NAME = "strategos.service";
+const SYSTEMD_SERVICE_NAME = "operant.service";
 const SYSTEMD_SERVICE_PATH = join(SYSTEMD_USER_DIR, SYSTEMD_SERVICE_NAME);
 
 const SYSTEMD_SERVICE_CONTENT = `[Unit]
-Description=Strategos Multi-Agent System
+Description=Operant Multi-Agent System
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /opt/strategos/build/index.js
+ExecStart=/usr/bin/node /opt/operant/build/index.js
 Restart=on-failure
 RestartSec=10
-EnvironmentFile=/opt/strategos/.env
+EnvironmentFile=/opt/operant/.env
 NoNewPrivileges=true
 PrivateTmp=true
 
@@ -76,7 +76,7 @@ export async function installSystemdService(config: Record<string, unknown>): Pr
     }
   } catch {
     console.log(`  ${warn("⚠ systemd user session not available — skipping service installation")}`);
-    console.log(`  ${DIM}You can still run Strategos manually: node /opt/strategos/build/index.js${RESET}`);
+    console.log(`  ${DIM}You can still run Operant manually: node /opt/operant/build/index.js${RESET}`);
     return false;
   }
 
@@ -92,7 +92,7 @@ export async function installSystemdService(config: Record<string, unknown>): Pr
     spawnSync("systemctl", ["--user", "daemon-reload"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     console.log(`  ${success("Systemd daemon reloaded")}`);
 
-    spawnSync("systemctl", ["--user", "enable", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    spawnSync("systemctl", ["--user", "enable", "operant"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     console.log(`  ${success("Service enabled (will start on login)")}`);
 
     return true;
@@ -163,17 +163,17 @@ async function startService(): Promise<boolean> {
   try {
     const statusResult = spawnSync(
       "systemctl",
-      ["--user", "is-active", "strategos"],
+      ["--user", "is-active", "operant"],
       { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
     const status = statusResult.status === 0 && statusResult.stdout?.trim() === "active" ? "active" : "inactive";
 
     if (status === "active") {
       console.log(`  ${success("Service already running — restarting to apply changes")}`);
-      spawnSync("systemctl", ["--user", "restart", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      spawnSync("systemctl", ["--user", "restart", "operant"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     } else {
       console.log(`  ${success("Starting service...")}`);
-      spawnSync("systemctl", ["--user", "start", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      spawnSync("systemctl", ["--user", "start", "operant"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     }
 
     return true;
@@ -215,7 +215,7 @@ export async function healthCheck(
   try {
     const systemResult = spawnSync(
       "systemctl",
-      ["is-active", "strategos"],
+      ["is-active", "operant"],
       { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
     systemActive = systemResult.status === 0 && systemResult.stdout?.trim() === "active";
@@ -226,7 +226,7 @@ export async function healthCheck(
   try {
     const userResult = spawnSync(
       "systemctl",
-      ["--user", "is-active", "strategos"],
+      ["--user", "is-active", "operant"],
       { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
     userActive = userResult.status === 0 && userResult.stdout?.trim() === "active";
@@ -260,7 +260,7 @@ export async function healthCheck(
             line.toLowerCase().includes("boot") ||
             line.toLowerCase().includes("started") ||
             line.toLowerCase().includes("initialized") ||
-            line.toLowerCase().includes("strategos"),
+            line.toLowerCase().includes("operant"),
         );
 
         if (bootMessage) {
@@ -293,7 +293,7 @@ export async function healthCheck(
       try {
         const userResult = spawnSync(
           "systemctl",
-          ["--user", "is-active", "strategos"],
+          ["--user", "is-active", "operant"],
           { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
         );
         if (userResult.status === 0 && userResult.stdout?.trim() === "active") {
@@ -323,7 +323,7 @@ export async function healthCheck(
  */
 export function printSummary(config: Record<string, unknown>): void {
   console.log("");
-  console.log(heading("  Strategos Setup Complete!"));
+  console.log(heading("  Operant Setup Complete!"));
   console.log("");
 
   const llm = config.llm as Record<string, unknown> | undefined;
@@ -378,13 +378,13 @@ export function printSummary(config: Record<string, unknown>): void {
 
   console.log("");
   console.log(`  ${BOLD}Next Steps:${RESET}`);
-  console.log(`    1. Start service:  ${BOLD}systemctl --user start strategos${RESET}`);
-  console.log(`    2. Check status:   ${BOLD}systemctl --user status strategos${RESET}`);
-  console.log(`    3. View logs:      ${BOLD}journalctl --user -u strategos -f${RESET}`);
+  console.log(`    1. Start service:  ${BOLD}systemctl --user start operant${RESET}`);
+  console.log(`    2. Check status:   ${BOLD}systemctl --user status operant${RESET}`);
+  console.log(`    3. View logs:      ${BOLD}journalctl --user -u operant -f${RESET}`);
   if (telegram?.botToken) {
     console.log(`    4. Send /start to your bot on Telegram`);
   }
-  console.log(`    5. Run ${BOLD}'strategos doctor'${RESET} for health checks`);
+  console.log(`    5. Run ${BOLD}'operant doctor'${RESET} for health checks`);
 
   console.log("");
   console.log(heading(""));

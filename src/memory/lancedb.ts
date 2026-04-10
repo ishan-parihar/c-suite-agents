@@ -37,6 +37,7 @@ export type MemoryEvent = {
 export class Memory {
   private keywordIndex: Map<string, Set<string>> = new Map();
   private indexBuilt = false;
+  private indexBuildPromise: Promise<void> | null = null;
   private conn: Connection;
   private events?: Table;
 
@@ -117,6 +118,7 @@ export class Memory {
     }
     this.keywordIndex = index;
     this.indexBuilt = true;
+    this.indexBuildPromise = null;
   }
 
   private updateKeywordIndex(id: string, e: MemoryEvent) {
@@ -134,7 +136,10 @@ export class Memory {
 
   async searchKeyword(agentId: string, query: string, topK = 10): Promise<any[]> {
     if (!this.indexBuilt) {
-      await this.buildKeywordIndex();
+      if (!this.indexBuildPromise) {
+        this.indexBuildPromise = this.buildKeywordIndex();
+      }
+      await this.indexBuildPromise;
     }
 
     const queryWords = this.extractWords(query);

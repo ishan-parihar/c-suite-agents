@@ -60,7 +60,7 @@ export function createBashTool() {
     },
     permissionTier: "danger" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { command, args: cmdArgs = [], agent_id, cwd, timeout_ms = 30000 } = args as BashArgs;
+      const { command, args: cmdArgs = [], agent_id, cwd, timeout_ms = 30000 } = args as unknown as BashArgs;
 
       if (!agent_id) {
         return { content: [{ type: "text", text: "Error: agent_id is required" }] };
@@ -76,7 +76,7 @@ export function createBashTool() {
       }
 
       const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      const workspaceDir = path.join(homeDir, ".operant", "agents", agent_id);
 
       let workingDir = workspaceDir;
       if (cwd) {
@@ -114,7 +114,7 @@ export function createBashTool() {
           env: {
             PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
             HOME: homeDir,
-            USER: process.env.USER || "strategos",
+            USER: process.env.USER || "operant",
             LANG: process.env.LANG || "en_US.UTF-8",
             TERM: "dumb",
           },

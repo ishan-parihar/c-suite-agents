@@ -1,13 +1,13 @@
 /**
- * Custom Error classes for the Strategos self-healing system.
+ * Custom Error classes for the Operant self-healing system.
  *
  * This is the foundation for error classification, aggregation, and automated recovery.
- * All error-domain-specific classes extend StrategosError, enabling the error classifier,
+ * All error-domain-specific classes extend OperantError, enabling the error classifier,
  * aggregator, and self-healer to distinguish error types programmatically instead of
  * relying on fragile string matching.
  *
  * Design principles:
- * - Every class extends StrategosError with a unique `code` prefix
+ * - Every class extends OperantError with a unique `code` prefix
  * - Constructor accepts (message, options) with full `cause` support
  * - No business logic — types only
  * - Utility functions map errors to FailureScenario and classify recoverability
@@ -40,17 +40,17 @@ export type FailoverReason =
 // Base Error Class
 // ---------------------------------------------------------------------------
 
-/** Severity levels for Strategos errors. */
+/** Severity levels for Operant errors. */
 export type ErrorSeverity = "info" | "warn" | "error" | "critical";
 
 /**
- * Base error class for all Strategos errors.
+ * Base error class for all Operant errors.
  *
  * Every error in the system should extend this class so that the classifier,
  * aggregator, and self-healer can uniformly inspect `code`, `component`,
  * `severity`, and `metadata`.
  */
-export class StrategosError extends Error {
+export class OperantError extends Error {
   readonly code: string;
   readonly component: string;
   readonly severity: ErrorSeverity;
@@ -78,7 +78,7 @@ export class StrategosError extends Error {
 // ProviderError — LLM provider / API errors
 // ---------------------------------------------------------------------------
 
-export class ProviderError extends StrategosError {
+export class ProviderError extends OperantError {
   readonly failoverReason: FailoverReason;
   readonly provider?: string;
   readonly model?: string;
@@ -139,7 +139,7 @@ function deriveProviderSeverity(reason: FailoverReason): ErrorSeverity {
 
 export type ToolType = "native" | "mcp";
 
-export class ToolExecutionError extends StrategosError {
+export class ToolExecutionError extends OperantError {
   readonly toolName: string;
   readonly toolType: ToolType;
   readonly mcpServer?: string;
@@ -183,7 +183,7 @@ export type PersistenceSubsystem =
   | "scheduler"
   | "messaging";
 
-export class PersistenceError extends StrategosError {
+export class PersistenceError extends OperantError {
   readonly subsystem: PersistenceSubsystem;
   readonly operation: string;
 
@@ -214,7 +214,7 @@ export class PersistenceError extends StrategosError {
 // HeartbeatError — heartbeat system failures
 // ---------------------------------------------------------------------------
 
-export class HeartbeatError extends StrategosError {
+export class HeartbeatError extends OperantError {
   readonly agentId?: string;
   readonly missedCount?: number;
   readonly lastHeartbeatAt?: number;
@@ -248,7 +248,7 @@ export class HeartbeatError extends StrategosError {
 // CronJobError — scheduled task failures
 // ---------------------------------------------------------------------------
 
-export class CronJobError extends StrategosError {
+export class CronJobError extends OperantError {
   readonly jobId: string;
   readonly jobName?: string;
   readonly agentId?: string;
@@ -297,7 +297,7 @@ export type GatewayType =
   | "webhook-server"
   | "telegram";
 
-export class GatewayError extends StrategosError {
+export class GatewayError extends OperantError {
   readonly gatewayType: GatewayType;
   readonly port?: number;
   readonly url?: string;
@@ -337,7 +337,7 @@ export type AgentLifecyclePhase =
   | "execution"
   | "shutdown";
 
-export class AgentError extends StrategosError {
+export class AgentError extends OperantError {
   readonly agentId: string;
   readonly lifecyclePhase: AgentLifecyclePhase;
 
@@ -372,14 +372,14 @@ export class AgentError extends StrategosError {
  * Inspects an error and returns a classification with severity and
  * recoverability assessment.
  *
- * Works with StrategosError instances (reads typed properties) and
+ * Works with OperantError instances (reads typed properties) and
  * falls back to heuristic classification for arbitrary Error / unknown values.
  */
 export function classifyError(
   err: unknown,
 ): { severity: ErrorSeverity; isRecoverable: boolean } {
-  // Typed StrategosError — use declared properties directly
-  if (err instanceof StrategosError) {
+  // Typed OperantError — use declared properties directly
+  if (err instanceof OperantError) {
     return {
       severity: err.severity,
       isRecoverable: isRecoverableByType(err),
@@ -396,8 +396,8 @@ export function classifyError(
   return { severity: "error", isRecoverable: false };
 }
 
-/** Determine recoverability from typed StrategosError properties. */
-function isRecoverableByType(err: StrategosError): boolean {
+/** Determine recoverability from typed OperantError properties. */
+function isRecoverableByType(err: OperantError): boolean {
   // Critical-severity errors are generally not auto-recoverable
   if (err.severity === "critical") {
     return false;
@@ -446,7 +446,7 @@ function isRecoverableByType(err: StrategosError): boolean {
     );
   }
 
-  // Unknown StrategosError subclass — conservative
+  // Unknown OperantError subclass — conservative
   return true;
 }
 
@@ -521,14 +521,14 @@ function classifyPlainError(err: Error): {
 /**
  * Maps an error to a FailureScenario from the recovery system.
  *
- * Uses typed properties when available (StrategosError subclasses),
+ * Uses typed properties when available (OperantError subclasses),
  * falls back to message / name heuristics for plain Error objects.
  * Returns `undefined` if the error cannot be mapped to any known scenario.
  */
 export function toFailureScenario(
   err: unknown,
 ): FailureScenario | undefined {
-  if (err instanceof StrategosError) {
+  if (err instanceof OperantError) {
     return mapTypedErrorToScenario(err);
   }
 
@@ -539,9 +539,9 @@ export function toFailureScenario(
   return undefined;
 }
 
-/** Map a typed StrategosError to a FailureScenario. */
+/** Map a typed OperantError to a FailureScenario. */
 function mapTypedErrorToScenario(
-  err: StrategosError,
+  err: OperantError,
 ): FailureScenario | undefined {
   if (err instanceof ProviderError) {
     return FailureScenario.LLMProviderFailure;

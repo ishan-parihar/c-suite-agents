@@ -66,7 +66,9 @@ export class ToolSearch {
   }
 }
 
-const instances = new Map<string, ToolSearch>();
+import { LruMap } from "./utils.js";
+
+const instances = new LruMap<string, ToolSearch>(50);
 
 /**
  * Get or create a ToolSearch instance scoped to a specific agent.

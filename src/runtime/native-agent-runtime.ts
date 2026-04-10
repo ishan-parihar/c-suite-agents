@@ -5,7 +5,7 @@
 import OpenAI from "openai";
 import { logger } from "../logger.js";
 import { buildSystemPrompt } from "./prompt-builder.js";
-import { isSilentAck, stripHeartbeatToken, hasSubstantiveFinding, currentTimeLine } from "./utils.js";
+import { isSilentAck, stripHeartbeatToken, hasSubstantiveFinding, currentTimeLine, LruMap } from "./utils.js";
 import { ContextManager, type ChatMessage, type ToolCall, estimateTokens, type SummarizeFn, type PersistCallbacks, splitMessagesByTokenShare } from "./context-manager.js";
 import { resolveContextWindowInfo, type ContextWindowInfo } from "./context-window.js";
 import { buildToolDefinitions, createToolBridge, type ToolExecutor, type ToolResult, type ToolDefinition } from "./tool-bridge.js";
@@ -15,17 +15,24 @@ import {
   createFailoverChain,
   getCurrentModel,
   shouldFailover,
+  shouldFailoverWithAuthAndBilling,
   failoverToNext,
   resetFailover,
+  createBillingBackoffRegistry,
+  recordBillingError,
+  clearBillingBackoff,
+  getBillingBackoffRemainingMs,
   type FailoverState,
   type ModelEntry,
+  type BillingBackoffRegistry,
 } from "./model-fallback.js";
 import { loadConfig } from "../config/loader.js";
-import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent } from "./provider.js";
+import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent, MAX_SAFE_TIMEOUT_MS } from "./provider.js";
 import { SkillRegistry, type Skill } from "./skill-registry.js";
 import { getAgentWorkspace } from "../agents/workspace-manager.js";
 import { detectToolCallLoop, recordToolCall, recordToolCallOutcome, DEFAULT_LOOP_DETECTION_CONFIG, type ToolLoopDetectionConfig, type ToolCallRecord } from "./tool-loop-detection.js";
 import { truncateToolResult } from "./tool-result-truncation.js";
+import { getWsGateway } from "../transport/ws-server.js";
 
 // SessionRegistry-compatible interface for persistence wiring
 export interface SessionPersistence {
@@ -70,6 +77,15 @@ const DEFAULT_RUNTIME_CONFIG: NativeAgentRuntimeConfig = {
   maxContextTokens: 32000,
 };
 
+/**
+ * Resolve timeoutMs: 0 = unlimited (MAX_SAFE_TIMEOUT_MS), negative/undefined = 48h default.
+ */
+function resolveTimeoutMs(raw: number | undefined): number {
+  if (raw === undefined || raw < 0) return 48 * 60 * 60 * 1000; // 48h default
+  if (raw === 0) return MAX_SAFE_TIMEOUT_MS; // unlimited
+  return Math.min(raw, MAX_SAFE_TIMEOUT_MS);
+}
+
 export interface AgentExecutionResult {
   sessionId: string;
   text: string;
@@ -88,10 +104,11 @@ export class NativeAgentRuntime {
   private toolExecutor: ToolExecutor | null = null;
   private toolDefinitions: ReturnType<typeof buildToolDefinitions> = [];
   private mcpToolDefinitions: ToolDefinition[] = [];
-  private agentToolScope: Map<string, string[]> = new Map();
-  private agentSessions = new Map<string, string>();
-  private sessionInitPromises = new Map<string, Promise<string>>();
+  private agentToolScope: LruMap<string, string[]> = new LruMap(50);
+  private agentSessions = new LruMap<string, string>(50);
+  private sessionInitPromises = new LruMap<string, Promise<string>>(50);
   private failoverState: FailoverState | null = null;
+  private billingBackoff: BillingBackoffRegistry;
   private contextWindowInfo: ContextWindowInfo;
   private skillRegistries = new Map<string, SkillRegistry>();
   private loopDetectionConfig: ToolLoopDetectionConfig;
@@ -113,6 +130,7 @@ export class NativeAgentRuntime {
     });
 
     this.failoverState = this.buildFailoverChain();
+    this.billingBackoff = createBillingBackoffRegistry();
     this.updateClientForModel();
     this.initProvider();
     this.contextManager.setSummarizeFn(this.compactionSummarizeFn.bind(this));
@@ -177,7 +195,8 @@ export class NativeAgentRuntime {
 
         return createFailoverChain([primary, ...fallbackModels]);
       }
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, "Failed to load failover chain config — using primary model only");
     }
 
     return createFailoverChain([primary]);
@@ -306,35 +325,39 @@ export class NativeAgentRuntime {
   async getOrCreateRuntimeSession(agentId: string, options?: {
     memoryInjection?: string;
     mode?: "full" | "heartbeat" | "message" | "minimal";
+    chatId?: string;
   }): Promise<string> {
-    const existing = this.agentSessions.get(agentId);
+    const sessionKey = `${agentId}:${options?.chatId || ''}`;
+    const existing = this.agentSessions.get(sessionKey);
     if (existing) {
       const session = this.contextManager.getSession(existing);
       if (session) return existing;
     }
 
-    let initPromise = this.sessionInitPromises.get(agentId);
+    let initPromise = this.sessionInitPromises.get(sessionKey);
     if (!initPromise) {
       initPromise = (async () => {
         const sessionId = this.createSession(agentId, options);
-        this.agentSessions.set(agentId, sessionId);
+        this.agentSessions.set(sessionKey, sessionId);
         return sessionId;
       })().then(sessionId => {
-        this.sessionInitPromises.delete(agentId);
+        this.sessionInitPromises.delete(sessionKey);
         return sessionId;
       }).catch((err) => {
-        this.sessionInitPromises.delete(agentId);
+        this.sessionInitPromises.delete(sessionKey);
         logger.error({ agentId, err: err.message }, "Session init failed");
         throw err;
       });
-      this.sessionInitPromises.set(agentId, initPromise);
+      this.sessionInitPromises.set(sessionKey, initPromise);
     }
     return initPromise;
   }
 
   restoreSession(agentId: string, sessionId: string, options?: {
     mode?: "full" | "heartbeat" | "message" | "minimal";
+    chatId?: string;
   }): boolean {
+    const sessionKey = `${agentId}:${options?.chatId || ''}`;
     const systemPrompt = buildSystemPrompt({
       agentId,
       mode: options?.mode || "full",
@@ -345,14 +368,14 @@ export class NativeAgentRuntime {
     });
 
     if (created) {
-      this.agentSessions.set(agentId, sessionId);
+      this.agentSessions.set(sessionKey, sessionId);
       logger.info({ sessionId, agentId }, "Session restored from persisted state");
       return true;
     }
 
     logger.warn({ sessionId, agentId }, "Session restoration failed — creating fresh session");
     const newSessionId = this.createSession(agentId, options);
-    this.agentSessions.set(agentId, newSessionId);
+    this.agentSessions.set(sessionKey, newSessionId);
     return false;
   }
 
@@ -861,7 +884,8 @@ export class NativeAgentRuntime {
         maxDelayMs = fullConfig.llm.retry.maxDelayMs;
         jitter = fullConfig.llm.retry.jitter;
       }
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, "Failed to load LLM retry config — using defaults");
     }
 
     const label = `llm-call:${this.config.llm.model}`;
@@ -900,6 +924,7 @@ export class NativeAgentRuntime {
   /**
    * Execute a single LLM call with model fallback chain support.
    * When the current model fails after retries, auto-failover to next model.
+   * Also handles billing backoff and auth profile rotation.
    */
   private async callLLMWithFailover(
     messages: ChatMessage[],
@@ -915,16 +940,60 @@ export class NativeAgentRuntime {
     }
 
     const currentModel = getCurrentModel(this.failoverState);
+
+    // Check billing backoff — skip provider if in cooldown
+    const backoffRemaining = getBillingBackoffRemainingMs(
+      this.billingBackoff,
+      currentModel.provider,
+      currentModel.model,
+    );
+    if (backoffRemaining > 0) {
+      logger.warn(
+        { provider: currentModel.provider, model: currentModel.model, backoffMs: backoffRemaining },
+        "Provider in billing cooldown — attempting failover to next model"
+      );
+      const nextModel = failoverToNext(this.failoverState, undefined, "billing_error");
+      if (!nextModel) {
+        throw new Error(`LLM provider ${currentModel.provider}:${currentModel.model} is in billing cooldown (${Math.ceil(backoffRemaining / 60000)}min remaining) and no fallback available`);
+      }
+      logger.info({ toModel: nextModel.model, toProvider: nextModel.provider }, "Failed over due to billing cooldown");
+    }
+
     this.updateClientForModel();
 
     try {
       const result = await this.callLLM(messages, options, agentId);
+      // Success — clear billing backoff and reset failover
+      clearBillingBackoff(this.billingBackoff, currentModel.provider, currentModel.model);
       resetFailover(this.failoverState);
       return result;
     } catch (err: unknown) {
-      const { should: shouldFail, reason } = shouldFailover(err);
+      const { should: shouldFail, reason, skipFailover } = shouldFailoverWithAuthAndBilling(err);
 
-      if (!shouldFail) {
+      // Billing error: record backoff, do NOT failover (same provider has billing issue)
+      if (reason === "billing_error") {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const { cooldownMs, backoffUntil } = recordBillingError(
+          this.billingBackoff,
+          currentModel.provider,
+          currentModel.model,
+          errMsg,
+        );
+        logger.error(
+          { provider: currentModel.provider, model: currentModel.model, cooldownMs, backoffUntil },
+          "Billing error — provider placed in cooldown"
+        );
+        // Try failover anyway since current provider is unavailable
+        const nextModel = failoverToNext(this.failoverState, err instanceof Error ? err : new Error(errMsg), reason);
+        if (!nextModel) {
+          throw new Error(`LLM billing error for ${currentModel.provider}:${currentModel.model}. Cooldown: ${Math.ceil(cooldownMs / 60000)}min. No fallback models available.`);
+        }
+        logger.warn({ toModel: nextModel.model }, "Failover after billing error");
+        this.updateClientForModel();
+        return this.callLLM(messages, options, agentId);
+      }
+
+      if (!shouldFail || skipFailover) {
         throw err;
       }
 
@@ -946,7 +1015,7 @@ export class NativeAgentRuntime {
           provider: nextModel.provider,
           reason,
         },
-        "Model failover — switching to fallback",
+        `Model failover — switching to fallback${reason === "auth_error" ? " (auth error rotated)" : ""}`,
       );
 
       this.updateClientForModel();
@@ -997,16 +1066,16 @@ export class NativeAgentRuntime {
       }));
     }
 
-    let timeoutMs = 120000;
+    let timeoutMs = MAX_SAFE_TIMEOUT_MS; // default: unlimited
     try {
       const fullConfig = loadConfig();
-      timeoutMs = fullConfig.llm?.timeoutMs ?? this.config.llm.timeoutMs ?? 120000;
+      timeoutMs = resolveTimeoutMs(fullConfig.llm?.timeoutMs ?? this.config.llm.timeoutMs);
     } catch {
-      timeoutMs = this.config.llm.timeoutMs ?? 120000;
+      timeoutMs = resolveTimeoutMs(this.config.llm.timeoutMs);
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const timeoutId = timeoutMs >= MAX_SAFE_TIMEOUT_MS ? undefined : setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await this.client.chat.completions.create(
@@ -1078,6 +1147,22 @@ export class NativeAgentRuntime {
     let round = 0;
     let toolCallHistory: ToolCallRecord[] = [];
 
+    // ── WS cancel support ────────────────────────────────────────────
+    const abortController = new AbortController();
+    let cancelHandler: ((data: { agentId: string; runId: string }) => void) | null = null;
+    try {
+      const ws = getWsGateway();
+      cancelHandler = (data: { agentId: string; runId: string }) => {
+        if (data.agentId === session.agentId && data.runId === sessionId) {
+          abortController.abort();
+        }
+      };
+      ws.on("cancel", cancelHandler);
+    } catch {
+      /* WS not available */
+    }
+
+    try {
     while (round < maxRounds) {
       round++;
       const messages = this.contextManager.getMessagesForLLM(sessionId);
@@ -1104,9 +1189,9 @@ export class NativeAgentRuntime {
           }))
         : undefined;
 
-      let timeoutMs = this.config.llm.timeoutMs ?? 120000;
+      let timeoutMs = resolveTimeoutMs(this.config.llm.timeoutMs);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const timeoutId = timeoutMs >= MAX_SAFE_TIMEOUT_MS ? undefined : setTimeout(() => controller.abort(), timeoutMs);
 
       // Accumulate tool calls from the stream
       const toolCallAccum: Map<string, { id: string; name: string; inputChunks: string[] }> = new Map();
@@ -1120,6 +1205,7 @@ export class NativeAgentRuntime {
           temperature: this.config.llm.temperature,
           maxTokens: this.config.llm.maxTokens,
           abortSignal: controller.signal,
+          timeoutMs: this.config.llm.timeoutMs,
         })) {
           // Accumulate tool_call chunks
           if (event.type === "tool_use") {
@@ -1147,6 +1233,15 @@ export class NativeAgentRuntime {
           }
 
           yield event;
+
+          try {
+            const ws = getWsGateway();
+            ws.pushStreamChunk(session.agentId, sessionId, event as unknown as Record<string, unknown>);
+          } catch { /* WS not available */ }
+
+          if (abortController.signal.aborted) {
+            break;
+          }
         }
       } finally {
         clearTimeout(timeoutId);
@@ -1157,7 +1252,75 @@ export class NativeAgentRuntime {
         break;
       }
 
-      // Execute accumulated tool calls
+      // Execute accumulated tool calls — try WS path first, fall back to direct execution
+      try {
+        const ws = getWsGateway();
+        if (ws.getSessionByAgentId(session.agentId)) {
+          const wsToolResults: Array<{ id: string; name: string; args: string; result: string }> = [];
+          for (const [callId, callInfo] of toolCallAccum) {
+            const argsStr = callInfo.inputChunks.join("");
+            let args: Record<string, unknown>;
+            try {
+              args = JSON.parse(argsStr);
+            } catch (parseErr: unknown) {
+              const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+              logger.warn(
+                { tool: callInfo.name, round, error: msg, raw: argsStr.slice(0, 200) },
+                "Failed to parse tool arguments in stream (WS path)",
+              );
+              wsToolResults.push({
+                id: callId,
+                name: callInfo.name,
+                args: argsStr,
+                result: `Error: Failed to parse arguments: ${msg}`,
+              });
+              continue;
+            }
+
+            if (!args["agent_id"]) {
+              args["agent_id"] = session.agentId;
+            }
+
+            logger.info({ tool: callInfo.name, round, agentId: session.agentId, mode: "ws" }, "Tool call over WS");
+            const result = await ws.pushToolCall(session.agentId, callId, callInfo.name, args);
+            wsToolResults.push({
+              id: callId,
+              name: callInfo.name,
+              args: argsStr,
+              result,
+            });
+          }
+
+          const assistantToolCalls = Array.from(toolCallAccum.values()).map(tc => ({
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: tc.inputChunks.join("") },
+          }));
+          if (assistantToolCalls.length > 0) {
+            await this.contextManager.recordAssistantToolCalls(sessionId, null, assistantToolCalls);
+          }
+
+          for (const tr of wsToolResults) {
+            await this.contextManager.recordToolCall(sessionId, {
+              id: tr.id,
+              name: tr.name,
+              arguments: tr.args,
+              result: tr.result,
+              timestamp: Date.now(),
+            });
+          }
+
+          for (const tr of wsToolResults) {
+            yield {
+              type: "text" as const,
+              delta: `\n[Tool: ${tr.name}] ${tr.result.slice(0, 500)}${tr.result.length > 500 ? "..." : ""}\n`,
+            };
+          }
+
+          continue;
+        }
+      } catch { /* WS not available, fall through to direct execution */ }
+
       if (!this.toolExecutor) {
         logger.warn({ sessionId, agentId }, "Tool executor not available — skipping tool calls in stream");
         break;
@@ -1291,6 +1454,26 @@ export class NativeAgentRuntime {
 
       // Continue the loop — next iteration will stream with tool results in context
     }
+    } finally {
+      try {
+        if (cancelHandler) {
+          const ws = getWsGateway();
+          ws.off("cancel", cancelHandler);
+        }
+      } catch { /* ignore */ }
+
+      if (abortController.signal.aborted) {
+        try {
+          const ws = getWsGateway();
+          ws.pushStreamEnd(session.agentId, sessionId, "cancelled");
+        } catch { /* WS not available */ }
+      } else {
+        try {
+          const ws = getWsGateway();
+          ws.pushStreamEnd(session.agentId, sessionId, "stop");
+        } catch { /* WS not available */ }
+      }
+    }
   }
 }
 
@@ -1324,7 +1507,8 @@ export function getNativeRuntime(): NativeAgentRuntime {
         config.llm = config.llm || { provider: "qwen-proxy", model: "coder-model" };
         (config.llm as LLMConfig).maxToolRounds = fullConfig.agents.maxToolRounds;
       }
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, "Failed to load full config — using partial/defaults");
     }
 
     runtime = new NativeAgentRuntime(config);

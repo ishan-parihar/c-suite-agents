@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { StrategosConfigSchema } from "../config/schema.js";
+import { OperantConfigSchema } from "../config/schema.js";
 import { getConfigPath } from "../config/loader.js";
 
 // ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ export function readConfigSnapshot(configPath?: string): ConfigSnapshot {
     };
   }
 
-  const result = StrategosConfigSchema.safeParse(parsed);
+  const result = OperantConfigSchema.safeParse(parsed);
   if (result.success) {
     return { exists: true, valid: true, config: result.data as Record<string, unknown>, path: resolvedPath };
   }
@@ -209,7 +209,7 @@ export function summarizeConfig(config: Record<string, unknown>): string {
   const logging = config.logging as Record<string, unknown> | undefined;
   if (logging) {
     const level = (logging.level as string) ?? "info";
-    const file = (logging.file as string) ?? "~/.local/log/strategos/strategos.log";
+    const file = (logging.file as string) ?? "~/.local/log/operant/operant.log";
     lines.push(`  Logging:         ${level} → ${resolvePath(file)}`);
   } else {
     lines.push("  Logging:         not configured");

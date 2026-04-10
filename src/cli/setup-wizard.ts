@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, existsSync, chmodSync, renameSync } from "node:fs";
 import * as crypto from "node:crypto";
-import { StrategosConfigSchema } from "../config/schema.js";
+import { OperantConfigSchema } from "../config/schema.js";
 import { loadConfig } from "../config/loader.js";
 import {
   detectExistingConfig,
@@ -151,14 +151,14 @@ function defaultPath(relativeToHome: string): string {
 }
 
 const DEFAULT_PATHS = {
-  lancedb: defaultPath(".local/share/strategos/lancedb"),
-  kanbanDb: defaultPath(".local/share/strategos/kanban/kanban.db"),
-  messagesDb: defaultPath(".local/share/strategos/messages/messages.db"),
-  agentOffices: defaultPath(".strategos/agents"),
-  logFile: defaultPath(".local/log/strategos/strategos.log"),
+  lancedb: defaultPath(".local/share/operant/lancedb"),
+  kanbanDb: defaultPath(".local/share/operant/kanban/kanban.db"),
+  messagesDb: defaultPath(".local/share/operant/messages/messages.db"),
+  agentOffices: defaultPath(".operant/agents"),
+  logFile: defaultPath(".local/log/operant/operant.log"),
 };
 
-const CONFIG_DIR = join(homedir(), ".strategos");
+const CONFIG_DIR = join(homedir(), ".operant");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 // ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ const C_SUITE_AGENTS = [
  */
 async function quickstartFlow(): Promise<Record<string, unknown>> {
   console.log(subheading("Quickstart Configuration"));
-  console.log(`\nWe'll configure Strategos with sensible defaults:`);
+  console.log(`\nWe'll configure Operant with sensible defaults:`);
   console.log(`\n${BOLD}LLM Provider:${RESET}`);
   console.log(`  Provider:     ${success("qwen-proxy")}`);
   console.log(`  Base URL:     ${success("http://127.0.0.1:3000/v1")}`);
@@ -271,7 +271,7 @@ async function quickstartFlow(): Promise<Record<string, unknown>> {
   console.log(`  Provider:     ${success("ollama")}`);
   console.log(`  Model:        ${success("nomic-embed-text")}`);
   console.log(`  Dimensions:   ${success("1024")}`);
-  console.log(hint("Change with 'strategos configure --section embedding'"));
+  console.log(hint("Change with 'operant configure --section embedding'"));
 
   const confirm = await prompt("\nAccept these defaults?", "yes");
   if (confirm.toLowerCase().startsWith("n")) {
@@ -321,7 +321,7 @@ async function advancedFlow(): Promise<Record<string, unknown>> {
  */
 async function configureLlm(existingDefaults?: Record<string, unknown>): Promise<Record<string, unknown>> {
   console.log(subheading("LLM Configuration"));
-  console.log(hint("Choose how Strategos connects to an AI model.\n"));
+  console.log(hint("Choose how Operant connects to an AI model.\n"));
 
   console.log(`${BOLD}Model Presets:${RESET}`);
   for (let i = 0; i < MODEL_PRESETS.length; i++) {
@@ -508,7 +508,7 @@ async function configureEmbedding(existing?: Record<string, unknown>): Promise<R
  */
 async function configureAgentOffices(config: Record<string, unknown>): Promise<void> {
   console.log(subheading("Agent Office Setup"));
-  console.log(hint("Strategos uses a C-suite multi-agent architecture."));
+  console.log(hint("Operant uses a C-suite multi-agent architecture."));
   console.log(hint("Each agent gets its own office directory with identity files.\n"));
 
   console.log(`${BOLD}C-Suite Agents:${RESET}`);
@@ -539,7 +539,7 @@ async function configureAgentOffices(config: Record<string, unknown>): Promise<v
  */
 async function configurePaths(existingDefaults?: Record<string, string>): Promise<Record<string, unknown>> {
   console.log(subheading("Directory & File Paths"));
-  console.log(hint("Where Strategos stores data. Press Enter to accept defaults.\n"));
+  console.log(hint("Where Operant stores data. Press Enter to accept defaults.\n"));
 
   const defaults = existingDefaults ?? DEFAULT_PATHS;
 
@@ -613,7 +613,7 @@ async function promptWithValidation(
  * Validate the assembled config against the schema.
  */
 function validateConfig(raw: Record<string, unknown>): { valid: boolean; errors?: string } {
-  const result = StrategosConfigSchema.safeParse(raw);
+  const result = OperantConfigSchema.safeParse(raw);
   if (result.success) {
     return { valid: true };
   }
@@ -632,9 +632,9 @@ export async function runSetupWizard(): Promise<boolean> {
 
   // ── Step 1: Welcome + Risk Acknowledgment ──
   console.log(``);
-  console.log(heading("  Strategos Setup Wizard"));
+  console.log(heading("  Operant Setup Wizard"));
   console.log(``);
-  console.log(`  Welcome! This wizard will configure Strategos for first-time use.`);
+  console.log(`  Welcome! This wizard will configure Operant for first-time use.`);
   console.log(`  You'll set up:`);
   console.log(`    ${BOLD}•${RESET} AI model provider and connection`);
   console.log(`    ${BOLD}•${RESET} Telegram bot (optional)`);
@@ -644,7 +644,7 @@ export async function runSetupWizard(): Promise<boolean> {
 
   // Risk acknowledgment
   console.log(`${RED}${BOLD}⚠ SECURITY WARNING${RESET}`);
-  console.log(`${RED}Strategos runs autonomous agents that can execute code, manage tasks,${RESET}`);
+  console.log(`${RED}Operant runs autonomous agents that can execute code, manage tasks,${RESET}`);
   console.log(`${RED}and interact with external services. Ensure you trust the configuration.${RESET}`);
   console.log(``);
   const ack = await prompt('Type "I understand" to continue');
@@ -900,7 +900,7 @@ async function printSummary(rawConfig: Record<string, unknown>): Promise<void> {
   // Next steps
   console.log(`\n${subheading("Next Steps")}`);
   console.log(`  1. Review your config: ${BOLD}cat ${CONFIG_FILE}${RESET}`);
-  console.log(`  2. Start Strategos:    ${BOLD}bun run src/index.ts${RESET}`);
+  console.log(`  2. Start Operant:    ${BOLD}bun run src/index.ts${RESET}`);
   console.log(`  3. Configure env vars: ${BOLD}cp .env.example .env${RESET} (if needed)`);
 
   // Offer doctor
@@ -909,7 +909,7 @@ async function printSummary(rawConfig: Record<string, unknown>): Promise<void> {
     await runDoctor();
   }
 
-  console.log(`\n${GREEN}${BOLD}Strategos is configured and ready.${RESET}\n`);
+  console.log(`\n${GREEN}${BOLD}Operant is configured and ready.${RESET}\n`);
 }
 
 // ---------------------------------------------------------------------------

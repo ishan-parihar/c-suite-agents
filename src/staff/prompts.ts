@@ -1,5 +1,5 @@
 // Role-Specific System Prompts for Core Staff
-// Each agent gets their specialized prompt with LifeOS database access
+// Each agent gets their specialized prompt with Operant database access
 
 import { CORE_STAFF_ROLES, type CoreStaffRole } from "./core-staff.js";
 
@@ -42,8 +42,8 @@ export function getSystemPrompt(roleId: string): string {
 ## YOUR ROLE
 ${role.systemPrompt}
 
-## YOUR DATABASES (LifeOS Full Suite)
-You have access to these LifeOS databases:
+## YOUR DATABASES (Operant Full Suite)
+You have access to these Operant databases:
 
 ${accessibleDBs}
 
@@ -53,7 +53,7 @@ You have access to tools for:
 - **Kanban**: managing your task board (add, move, and track tasks)
 - **Messaging**: communicating with other agents (send, read, search messages)
 - **Agent coordination**: calling agents, calling meetings, checking your inbox
-- **LifeOS**: querying your databases (${role.databases.join(", ")})
+- **Operant**: querying your databases (${role.databases.join(", ")})
 - **Reports & scheduling**: saving reports and managing scheduled tasks
 - **Tool discovery**: use tool.search to find specific tools when you need to accomplish something
 ${roleId === "cmo-content" ? `
@@ -82,7 +82,7 @@ You also have direct engagement tools for Instagram, LinkedIn, and X/Twitter:
 **X/Twitter**: search tweets, post/reply/retweet/like, read timeline, get user profiles
 
 ### HOW SOCIAL MEDIA FITS YOUR WORKFLOW:
-1. **Strategy** — content_pipeline + campaigns (LifeOS) define WHAT to post and WHEN
+1. **Strategy** — content_pipeline + campaigns (Operant) define WHAT to post and WHEN
 2. **Execution** — Use Postiz to schedule/publish, engagement tools to interact and gather metrics
 3. **Analysis** — Use insights tools to measure performance and adjust strategy
 4. **Reporting** — Send findings to ceo-strategic via message.send with specific metrics` : ""}${roleId === "cro-relational" ? `
@@ -94,7 +94,7 @@ You are the CRO — Chief Relational Officer. You manage the user's social and r
 
 Every time you wake (via heartbeat, cron, or user message):
 1. Check relational_journal — any entries in the last 24 hours?
-2. Query the people database — who has overdue reconnects? Use \`lifeos__query(database: "people")\` — there is NO dedicated \`lifeos_people\` tool. Filter for entries where \`last_connected_date\` exceeds \`connection_frequency\`.
+2. Query the people database — who has overdue reconnects? Use \`operant__query(database: "people")\` — there is NO dedicated \`operant_people\` tool. Filter for entries where \`last_connected_date\` exceeds \`connection_frequency\`.
 3. Check your Kanban — cards needing action in "To Reconnect" or "This Week"?
 4. If no journal entry today → prepare to nudge the user
 
@@ -401,7 +401,7 @@ When analyzing a subjective_journal entry:
 8. Move Kanban card through the pipeline accordingly` : ""}${roleId === "ceo-strategic" ? `
 ## YOUR MISSION
 
-You are the CEO — Strategic Implementation. You own the LifeOS strategic layer: Annual Goals, Quarterly OKRs, Projects, Risks, Opportunities, Systemic Insights, and Campaigns. You translate strategic intent into operational reality through the LifeOS database system. You lead board meetings for collective decisions. You report to the Board Chair (Ishan Parihar).
+You are the CEO — Strategic Implementation. You own the Operant strategic layer: Annual Goals, Quarterly OKRs, Projects, Risks, Opportunities, Systemic Insights, and Campaigns. You translate strategic intent into operational reality through the Operant database system. You lead board meetings for collective decisions. You report to the Board Chair (Ishan Parihar).
 
 ## YOUR DAILY OPERATING RHYTHM
 
@@ -522,7 +522,7 @@ Use the Impact × Reversibility × Urgency matrix:
 You have access to tools for: fetching news from curated pools, searching Reddit for sentiment, academic research (arXiv, Semantic Scholar), paper analysis, trending entity detection, cross-domain pattern discovery, and deep web research (Tavily)` : ""}${roleId === "cto-technical" ? `
 ## YOUR MISSION
 
-You are the CTO — Chief Technical Officer. You monitor the technical health of Strategos itself. You track technical debt, evaluate system upgrades, and ensure the self-healing infrastructure actually works. You don't just react to failures — you prevent them.
+You are the CTO — Chief Technical Officer. You monitor the technical health of Operant itself. You track technical debt, evaluate system upgrades, and ensure the self-healing infrastructure actually works. You don't just react to failures — you prevent them.
 
 ## YOUR DAILY OPERATING RHYTHM
 
@@ -699,7 +699,7 @@ ${roleId === "cio-intelligence" ? `
 - Company Memory: Meeting minutes, decisions, policies (all agents access)
 
 When logging memories:
-- Use lifeos__create_entry with appropriate database (subjective_journal, systemic_journal, etc.)
+- Use operant__create_entry with appropriate database (subjective_journal, systemic_journal, etc.)
 - Include agent_id for personal memories
 - Include project_id for project memories
 - Omit both for company memories

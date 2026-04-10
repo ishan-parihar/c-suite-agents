@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Strategos Installation Verification Script
+# Operant Installation Verification Script
 # Checks all components are properly installed and configured
 #
 # Usage: ./verify-install.sh
@@ -14,8 +14,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-STRATEGOS_DIR="${STRATEGOS_DIR:-/opt/strategos}"
-STRATEGOS_DATA_DIR="${STRATEGOS_DATA_DIR:-/var/lib/strategos}"
+OPERANT_DIR="${OPERANT_DIR:-/opt/operant}"
+OPERANT_DATA_DIR="${OPERANT_DATA_DIR:-/var/lib/operant}"
 OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
 OLLAMA_EMBED_MODEL="${OLLAMA_EMBED_MODEL:-qwen3-embedding:0.6b}"
 
@@ -39,7 +39,7 @@ check_warn() {
 }
 
 echo "=============================================="
-echo "  Strategos Installation Verification"
+echo "  Operant Installation Verification"
 echo "=============================================="
 echo ""
 
@@ -97,16 +97,16 @@ fi
 
 # Check application directory
 echo "Checking application..."
-if [ -d "$STRATEGOS_DIR" ]; then
-    check_pass "Application directory exists ($STRATEGOS_DIR)"
+if [ -d "$OPERANT_DIR" ]; then
+    check_pass "Application directory exists ($OPERANT_DIR)"
     
-    if [ -f "$STRATEGOS_DIR/build/index.js" ]; then
+    if [ -f "$OPERANT_DIR/build/index.js" ]; then
         check_pass "Application built"
     else
         check_fail "Application not built (run: npm run build)"
     fi
     
-    if [ -f "$STRATEGOS_DIR/package.json" ]; then
+    if [ -f "$OPERANT_DIR/package.json" ]; then
         check_pass "Package files present"
     else
         check_fail "Package files missing"
@@ -117,16 +117,16 @@ fi
 
 # Check environment file
 echo "Checking configuration..."
-if [ -f "$STRATEGOS_DIR/.env" ]; then
+if [ -f "$OPERANT_DIR/.env" ]; then
     check_pass "Environment file exists"
     
-    if grep -q "TELEGRAM_BOT_TOKEN=your_bot_token" "$STRATEGOS_DIR/.env" 2>/dev/null; then
+    if grep -q "TELEGRAM_BOT_TOKEN=your_bot_token" "$OPERANT_DIR/.env" 2>/dev/null; then
         check_warn "Telegram bot token not configured"
     else
         check_pass "Telegram bot token configured"
     fi
     
-    if grep -q "TELEGRAM_CHAT_ID=your_chat_id" "$STRATEGOS_DIR/.env" 2>/dev/null; then
+    if grep -q "TELEGRAM_CHAT_ID=your_chat_id" "$OPERANT_DIR/.env" 2>/dev/null; then
         check_warn "Telegram chat ID not configured"
     else
         check_pass "Telegram chat ID configured"
@@ -139,19 +139,19 @@ fi
 
 # Check systemd service
 echo "Checking systemd service..."
-if [ -f "/etc/systemd/system/strategos.service" ]; then
+if [ -f "/etc/systemd/system/operant.service" ]; then
     check_pass "Systemd service file exists"
     
-    if systemctl is-enabled strategos.service &>/dev/null; then
+    if systemctl is-enabled operant.service &>/dev/null; then
         check_pass "Service enabled on boot"
     else
-        check_warn "Service not enabled (run: sudo systemctl enable strategos)"
+        check_warn "Service not enabled (run: sudo systemctl enable operant)"
     fi
     
-    if systemctl is-active --quiet strategos.service 2>/dev/null; then
+    if systemctl is-active --quiet operant.service 2>/dev/null; then
         check_pass "Service is running"
     else
-        check_warn "Service not running (start with: sudo systemctl start strategos)"
+        check_warn "Service not running (start with: sudo systemctl start operant)"
     fi
 else
     check_warn "Systemd service not installed (development mode?)"
@@ -159,18 +159,18 @@ fi
 
 # Check data directories
 echo "Checking data directories..."
-if [ -d "$STRATEGOS_DATA_DIR" ]; then
+if [ -d "$OPERANT_DATA_DIR" ]; then
     check_pass "Data directory exists"
     
-    if [ -d "$STRATEGOS_DATA_DIR/lancedb" ]; then
+    if [ -d "$OPERANT_DATA_DIR/lancedb" ]; then
         check_pass "LanceDB directory exists"
     fi
     
-    if [ -d "$STRATEGOS_DATA_DIR/kanban" ]; then
+    if [ -d "$OPERANT_DATA_DIR/kanban" ]; then
         check_pass "Kanban directory exists"
     fi
     
-    if [ -d "$STRATEGOS_DATA_DIR/messages" ]; then
+    if [ -d "$OPERANT_DATA_DIR/messages" ]; then
         check_pass "Messages directory exists"
     fi
 else
@@ -179,7 +179,7 @@ fi
 
 # Check log directory
 echo "Checking log directories..."
-if [ -d "/var/log/strategos" ]; then
+if [ -d "/var/log/operant" ]; then
     check_pass "Log directory exists"
 else
     check_warn "Log directory not found (will be created on first run)"
@@ -200,8 +200,8 @@ if [ $FAIL -eq 0 ]; then
     echo ""
     echo "Next steps:"
     echo "1. Configure .env file with Telegram credentials"
-    echo "2. Start service: sudo systemctl start strategos"
-    echo "3. Check logs: sudo journalctl -u strategos -f"
+    echo "2. Start service: sudo systemctl start operant"
+    echo "3. Check logs: sudo journalctl -u operant -f"
     echo "4. Test in Telegram: Send /start to your bot"
     exit 0
 else

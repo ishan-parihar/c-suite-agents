@@ -41,14 +41,14 @@ export function createFsWriteTool() {
     },
     permissionTier: "write" as const,
     execute: async (_toolCallId: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-      const { file_path, content, agent_id, append = false } = args as FsWriteArgs;
+      const { file_path, content, agent_id, append = false } = args as unknown as FsWriteArgs;
 
       if (!agent_id) {
         return { content: [{ type: "text", text: "Error: agent_id is required" }] };
       }
 
       const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      const workspaceDir = path.join(homeDir, ".operant", "agents", agent_id);
 
       if (file_path.includes("..")) {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };
