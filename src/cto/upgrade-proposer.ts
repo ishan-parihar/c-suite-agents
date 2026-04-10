@@ -2,7 +2,7 @@
 // Consumed by CTO agent for Telegram delivery to the Board Chair
 
 import { logger } from "../logger.js";
-import { OperantClient, operant } from "../operant/client.js";
+import { OperantClient, operant } from "../lifeos/client.js";
 import { v4 as uuidv4 } from "uuid";
 
 // ── Interfaces ──────────────────────────────────────────────────────────────

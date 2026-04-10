@@ -22,3 +22,4 @@ export * from './directives_risk_log';
 export * from './opportunities_strengths';
 export * from './reports';
 export * from './notes_management';
+export * from './notion_unmapped';

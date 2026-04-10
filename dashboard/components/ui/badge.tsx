@@ -8,7 +8,7 @@ interface BadgeProps {
 }
 
 export function Badge({ status, children, className }: BadgeProps) {
-  const config = STATUS_MAP[status];
+  const config = STATUS_MAP[status] ?? STATUS_MAP.neutral;
 
   return (
     <span
