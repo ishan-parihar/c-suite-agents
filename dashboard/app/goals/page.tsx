@@ -163,7 +163,7 @@ async function GoalsContent() {
                           />
                         </td>
                         <td className="px-5 py-4">
-                          <Badge status={goalHealthToColor(g.health) as StatusKey} />
+                          <Badge status={goalHealthToColor(g.health) === "accent" ? "neutral" : goalHealthToColor(g.health) as StatusKey} />
                         </td>
                         <td className="px-5 py-4 text-sm text-text-secondary max-w-md">
                           {[g.keyResult1, g.keyResult2, g.keyResult3]
