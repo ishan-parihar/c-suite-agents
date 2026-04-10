@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/* ============================================================
+   OPERANT DESIGN SYSTEM — Dark-First Operations Dashboard
+   Style: Dark Mode (OLED-optimized)
+   Typography: Fira Code (headings/mono) + Fira Sans (body)
+   ============================================================ */
+
+:root {
+  /* Background surfaces */
+  --bg-primary: #0A0E27;      /* Page background (midnight blue) */
+  --bg-surface: #121212;      /* Card backgrounds */
+  --bg-elevated: #1A1A2E;     /* Modals, dropdowns, sidebar */
+  --bg-hover: #1F2937;        /* Hover states */
+
+  /* Borders */
+  --border-default: rgba(255, 255, 255, 0.08);  /* Card borders, dividers */
+  --border-strong: rgba(255, 255, 255, 0.16);   /* Active states */
+
+  /* Text */
+  --text-primary: #FFFFFF;      /* Headings, labels */
+  --text-secondary: #A1A1AA;    /* Subtitles, metadata */
+  --text-muted: #71717A;        /* Placeholders, disabled */
+
+  /* Accent colors */
+  --accent-primary: #1E40AF;    /* Primary buttons, links */
+  --accent-hover: #2563EB;
+  --accent-secondary: #3B82F6;  /* Secondary actions */
+  --accent-cta: #D97706;        /* Highlights, warnings */
+
+  /* Status — always paired with text labels, never color alone */
+  --status-healthy: #10B981;
+  --status-warning: #F59E0B;
+  --status-critical: #EF4444;
+  --status-neutral: #6B7280;
+
+  /* Typography */
+  --font-heading: var(--font-fira-code);
+  --font-body: var(--font-fira-sans);
+  --font-mono: var(--font-fira-code);
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Z-index scale — never arbitrary values */
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-overlay: 30;
+  --z-modal: 40;
+  --z-sidebar: 50;
+  --z-toast: 100;
+  --z-command: 200;
+
+  /* Spacing — multiples of 4px only */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+}
+
+/* Light mode override via prefers-color-scheme — NOT default */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-primary: #F8FAFC;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #F1F5F9;
+    --bg-hover: #E2E8F0;
+    --border-default: #E2E8F0;
+    --border-strong: #CBD5E1;
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #94A3B8;
+  }
+}
+
+@theme inline {
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --color-surface: var(--bg-surface);
+  --color-elevated: var(--bg-elevated);
+  --color-hover: var(--bg-hover);
+  --color-border: var(--border-default);
+  --color-border-strong: var(--border-strong);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent-primary);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-healthy: var(--status-healthy);
+  --color-warning: var(--status-warning);
+  --color-critical: var(--status-critical);
+  --color-neutral: var(--status-neutral);
+  --font-sans: var(--font-fira-sans);
+  --font-mono: var(--font-fira-code);
+}
+
+/* ============================================================
+   Base styles
+   ============================================================ */
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tabular numbers for all data columns — prevents layout shift */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Focus-visible rings — 2px blue ring offset 2px on all interactive elements */
+*:focus-visible {
+  outline: 2px solid var(--accent-secondary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Scrollbar — thin, subtle */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #a1a1aa;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #71717a;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+/* Print — hide sidebar */
+@media print {
+  .sidebar {
+    display: none !important;
+  }
+}
