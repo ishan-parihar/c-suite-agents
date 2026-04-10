@@ -1,0 +1,41 @@
+# Operant — Self-Hosted PostgreSQL Infrastructure
+# Usage: docker compose up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: operant-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-operant}
+      POSTGRES_USER: ${POSTGRES_USER:-operant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-operant_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./drizzle/migrations:/docker-entrypoint-initdb.d/:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-operant} -d ${POSTGRES_DB:-operant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: operant-pgadmin
+    restart: unless-stopped
+    profiles:
+      - pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@operant.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

@@ -1,0 +1,35 @@
+import { pgTable, uuid, text, timestamp, index } from 'drizzle-orm/pg-core';
+import { quarterlyGoals } from './quarterly_goals';
+
+export const directivesRiskLog = pgTable('directives_risk_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  dataSourceId: uuid('data_source_id').notNull(),
+  name: text('name').notNull(),
+  entryId: text('entry_id').unique(),
+  logType: text('log_type'),
+  status: text('status').notNull().default('Identified'),
+  likelihood: text('likelihood'),
+  impact: text('impact'),
+  threatLevel: text('threat_level'),
+  protocolScenario: text('protocol_scenario'),
+  lastAssessed: timestamp('last_assessed', { withTimezone: true }),
+  drlJson: text('drl_json'),
+  projects: uuid('projects').array(),
+  quarterlyGoalId: uuid('quarterly_goal_id').references(() => quarterlyGoals.id),
+  systemicJournal: uuid('systemic_journal').array(),
+  mitigates: uuid('mitigates').array(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_drl_entry_id').on(table.entryId),
+  index('idx_drl_log_type').on(table.logType),
+  index('idx_drl_status').on(table.status),
+  index('idx_drl_likelihood').on(table.likelihood),
+  index('idx_drl_impact').on(table.impact),
+  index('idx_drl_threat_level').on(table.threatLevel),
+  index('idx_drl_last_assessed').on(table.lastAssessed),
+  index('idx_drl_quarterly_goal_id').on(table.quarterlyGoalId),
+  index('idx_drl_projects').on(table.projects),
+  index('idx_drl_systemic_journal').on(table.systemicJournal),
+  index('idx_drl_mitigates').on(table.mitigates),
+]);

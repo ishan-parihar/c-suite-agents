@@ -31,7 +31,7 @@ export function StatCard({
   }
 
   return (
-    <Card className={cn("p-4", className)}>
+    <Card className={cn("p-4", className)} aria-label={`${title}: ${value}`}>
       <div className="flex items-start justify-between">
         <div className="space-y-2">
           <p className="text-xs uppercase tracking-wider text-text-muted">{title}</p>

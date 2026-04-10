@@ -35,6 +35,8 @@ export function MobileSidebar() {
         >
           {/* Drawer panel */}
           <div
+            role="dialog"
+            aria-label="Mobile navigation menu"
             className="absolute left-0 top-0 h-full w-72 bg-elevated border-r border-border-default flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
