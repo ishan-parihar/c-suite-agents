@@ -98,7 +98,7 @@ async function connectLocal(
   });
 
   const client = new Client(
-    { name: "strategos-mcp-client", version: "0.1.0" },
+    { name: "operant-mcp-client", version: "0.1.0" },
     { capabilities: {} },
   );
 
@@ -185,16 +185,18 @@ async function connectLocal(
     return {
       serverName,
       tools,
-      callTool: async (toolName, args) => {
-        let timeoutId: ReturnType<typeof setTimeout>;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS);
-        });
-        return Promise.race([
-          client.callTool({ name: toolName, arguments: args }).finally(() => clearTimeout(timeoutId)),
-          timeoutPromise,
-        ]);
-      },
+        callTool: async (toolName, args) => {
+          let timeoutId: ReturnType<typeof setTimeout>;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS);
+          });
+          const callPromise = client.callTool({ name: toolName, arguments: args }).finally(() => clearTimeout(timeoutId));
+          callPromise.catch(() => {});
+          return Promise.race([
+            callPromise,
+            timeoutPromise,
+          ]);
+        },
       dispose: doDispose,
     };
   } catch (err: any) {
@@ -215,7 +217,7 @@ async function connectRemote(
   reconnectAttempt = 0,
 ): Promise<McpServerConnection | null> {
   const client = new Client(
-    { name: "strategos-mcp-client", version: "0.1.0" },
+    { name: "operant-mcp-client", version: "0.1.0" },
     { capabilities: {} },
   );
 
@@ -326,8 +328,10 @@ async function connectRemote(
           const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutId = setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms`)), TOOL_CALL_TIMEOUT_MS);
           });
+          const callPromise = client.callTool({ name: toolName, arguments: args }).finally(() => clearTimeout(timeoutId));
+          callPromise.catch(() => {});
           return Promise.race([
-            client.callTool({ name: toolName, arguments: args }).finally(() => clearTimeout(timeoutId)),
+            callPromise,
             timeoutPromise,
           ]);
         },

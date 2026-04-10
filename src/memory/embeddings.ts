@@ -101,8 +101,10 @@ export class EmbeddingService {
         timeoutHandle = setTimeout(() => reject(new Error("Ollama embed timeout (30s)")), 30_000);
       });
       try {
+        const resultPromise = ollama.embed({ model, input: text }).then(r => r.embeddings[0] as number[]);
+        resultPromise.catch(() => {});
         return await Promise.race([
-          ollama.embed({ model, input: text }).then(r => r.embeddings[0] as number[]),
+          resultPromise,
           timeout,
         ]);
       } finally {
@@ -131,6 +133,9 @@ export class EmbeddingService {
       }
 
       const data = await response.json() as { data: Array<{ embedding: number[] }> };
+      if (!data.data || data.data.length === 0) {
+        throw new Error("Embedding API returned empty result");
+      }
       return data.data[0].embedding;
     } finally {
       clearTimeout(timeout);
@@ -179,8 +184,10 @@ export class EmbeddingService {
         timeoutHandle = setTimeout(() => reject(new Error("Ollama batch embed timeout (30s)")), 30_000);
       });
       try {
+        const resultPromise = ollama.embed({ model, input: texts }).then(r => r.embeddings as number[][]);
+        resultPromise.catch(() => {});
         return await Promise.race([
-          ollama.embed({ model, input: texts }).then(r => r.embeddings as number[][]),
+          resultPromise,
           timeout,
         ]);
       } finally {

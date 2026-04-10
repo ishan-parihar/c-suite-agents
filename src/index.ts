@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { startStrategos, toolImpls } from "./mcp/server.js";
+import { startOperant, toolImpls } from "./mcp/server.js";
 import { startHeartbeat, stopHeartbeat } from "./scheduler/heartbeat.js";
 import { startTelegram, sendTelegramMessage, getTelegramBot, flushChatState } from "./integrations/telegram.js";
 import { startMessageProcessor } from "./scheduler/message-processor.js";
@@ -44,15 +44,28 @@ import { AlertManagerInstance as AlertManager } from "./runtime/alert-manager.js
 import { SelfHealer } from "./runtime/self-healer.js";
 import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor.js";
 import { CronErrorHandler } from "./scheduler/cron-error-handler.js";
+import { getWsGateway } from "./transport/ws-server.js";
+import { getMessageBus } from "./transport/message-bus.js";
 
-// Load config early (defaults < .env < ~/.strategos/config.json)
+// Load config early (defaults < .env < ~/.operant/config.json)
 const config = loadConfig();
 if (config.logging?.level) setLogLevel(config.logging.level);
-logger.info({ path: getConfigPath(), level: config.logging?.level }, "Strategos config loaded");
+logger.info({ path: getConfigPath(), level: config.logging?.level }, "Operant config loaded");
 
 // Health check HTTP server — exposes multi-component health status
 const HEALTH_PORT = parseInt(process.env.HEALTH_CHECK_PORT || "4097", 10);
 const healthServer = createServer(async (req, res) => {
+  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  if (url.pathname === "/health/transport") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    try {
+      const ws = getWsGateway();
+      res.end(JSON.stringify({ ws: ws.getHealth(), messageBus: getMessageBus().getStats() }));
+    } catch (err: unknown) {
+      res.end(JSON.stringify({ ws: { connections: 0 }, messageBus: {}, error: err instanceof Error ? err.message : String(err) }));
+    }
+    return;
+  }
   res.writeHead(200, { "Content-Type": "application/json" });
   const body = await healthResponse();
   res.end(JSON.stringify(body));
@@ -60,9 +73,9 @@ const healthServer = createServer(async (req, res) => {
 healthServer.listen(HEALTH_PORT, "127.0.0.1", () => {
   logger.info({ port: HEALTH_PORT }, "Health check server started");
 });
-healthServer.headersTimeout = 10_000;
-healthServer.requestTimeout = 15_000;
-healthServer.timeout = 30_000;
+healthServer.headersTimeout = 300_000;    // 5 min
+healthServer.requestTimeout = 300_000;    // 5 min
+healthServer.timeout = 1_800_000;          // 30 min
 healthServer.on("clientError", (err, socket) => { socket.destroy(); });
 
 // Register all components for health tracking
@@ -75,6 +88,7 @@ registerComponent("mcp");
     registerComponent("board-meeting");
 registerComponent("webhook");
 registerComponent("plugins");
+registerComponent("ws-transport");
 
 const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || "4098", 10);
 const webhookHandler = getWebhookHandler();
@@ -148,9 +162,9 @@ const webhookServer = createServer(async (req, res) => {
 
 webhookServer.listen(WEBHOOK_PORT, "127.0.0.1", async () => {
   logger.info({ port: WEBHOOK_PORT }, "Webhook server started");
-  webhookServer.headersTimeout = 10_000;
-  webhookServer.requestTimeout = 15_000;
-  webhookServer.timeout = 30_000;
+  webhookServer.headersTimeout = 300_000;    // 5 min
+  webhookServer.requestTimeout = 300_000;    // 5 min
+  webhookServer.timeout = 1_800_000;          // 30 min
   webhookServer.on("clientError", (err, socket) => { socket.destroy(); });
   try {
     await webhookHandler.init();
@@ -175,7 +189,7 @@ const watchdogTimer = setInterval(() => {
 
 async function main() {
   // Single-instance enforcement via exclusive PID file creation (atomic check-and-claim)
-  const pidFile = join(homedir(), ".local/run/strategos.pid");
+  const pidFile = join(homedir(), ".local/run/operant.pid");
   try {
     const fd = openSync(pidFile, 'wx');
     writeSync(fd, String(process.pid));
@@ -186,7 +200,7 @@ async function main() {
         const existingPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
         try {
           process.kill(existingPid, 0);
-          console.error(`Strategos already running (PID ${existingPid}). Exiting.`);
+          console.error(`Operant already running (PID ${existingPid}). Exiting.`);
           process.exit(1);
         } catch (e: any) {
           if (e.code === "ESRCH") {
@@ -201,7 +215,7 @@ async function main() {
         }
       } catch {
         // Race — another instance took it
-        console.error("Strategos already running. Exiting.");
+        console.error("Operant already running. Exiting.");
         process.exit(1);
       }
     } else {
@@ -253,9 +267,17 @@ async function main() {
       markHealthy("plugins", { loaded: pluginHealth.loaded, total: pluginHealth.total });
     }
 
-    // Start Strategos MCP server (provides native tool implementations)
-    const rt = await startStrategos();
+    // Start Operant MCP server (provides native tool implementations)
+    const rt = await startOperant();
     const mcpShutdown = rt.shutdown;
+
+    // ── WEBSOCKET GATEWAY: Attach WS upgrade handler to MCP HTTP server ──
+    if (rt.httpServer) {
+      const wsGateway = getWsGateway();
+      wsGateway.attach(rt.httpServer);
+      markHealthy("ws-transport");
+      logger.info("WebSocket gateway attached to MCP server");
+    }
 
     // ── CONNECT MCP BRIDGE: External servers + native tools ──
     const mcpConfig = (config as any).mcp || {};
@@ -379,7 +401,7 @@ async function main() {
 
         for (const tool of serverConn.tools) {
           // Config stores unprefixed tool names (e.g. "goal.list"), but
-          // tool.name is prefixed (e.g. "lifeos__goal.list"). Compare against
+          // tool.name is prefixed (e.g. "operant__goal.list"). Compare against
           // tool.toolName to match the config schema.
           if (!filterSet || filterSet.has(tool.toolName)) {
             scopedTools.push(tool.name);
@@ -442,7 +464,7 @@ async function main() {
 
       for (const record of existingSessions) {
         if (record.has_real_conversation) {
-          const ok = runtime.restoreSession(record.agent_id, record.session_id, { mode: "message" });
+          const ok = runtime.restoreSession(record.agent_id, record.session_id, { mode: "message", chatId: record.chat_id || undefined });
           if (ok) {
             restored++;
           } else {
@@ -524,7 +546,7 @@ Step 1 — External Scan:
 • Run research.search on any academically or strategically relevant developments
 
 Step 2 — Internal Context:
-• Query your LifeOS databases: projects, campaigns, directives_risk_log, opportunities_strengths
+• Query your Operant databases: projects, campaigns, directives_risk_log, opportunities_strengths
 • Cross-reference external signals with internal state — what trends affect your projects? What risks are emerging? What opportunities align with your strengths?
 
 Step 3 — Synthesize:
@@ -658,7 +680,7 @@ Keep it brief and actionable. This is the user's Monday morning relationship sna
 
 1. ACTIVITY SCAN: Review all agent Kanban boards. Any cards moved overnight? New blockers?
 2. BLOCKER AUDIT: Check every board for cards stuck in "Blocked" or "In Review" for 2+ days.
-3. DEADLINE CHECK: Query LifeOS for any tasks/projects with deadlines today or tomorrow. Flag anything at risk.
+3. DEADLINE CHECK: Query Operant for any tasks/projects with deadlines today or tomorrow. Flag anything at risk.
 4. PRIORITY SETTING: Based on CEO's latest strategic directives and current board state, identify the top 3 operational priorities for today.
 5. RESOURCE CHECK: Any agents showing inactivity patterns? Any tools or integrations that may need attention?
 6. OUTPUT: Generate a concise morning operations brief. Highlight blockers, at-risk deadlines, and today's top 3 priorities.
@@ -969,7 +991,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
     if (healthProbeTimer && typeof healthProbeTimer.unref === "function") healthProbeTimer.unref();
 
     // Mark as ready — all components initialized
-    logger.info("Strategos boot complete — NATIVE AGENT RUNTIME (no external dependencies)");
+    logger.info("Operant boot complete — NATIVE AGENT RUNTIME (no external dependencies)");
 
     // Graceful shutdown
     const SHUTDOWN_TIMEOUT_MS = 15000;
@@ -1015,7 +1037,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
 
         // Stop Telegram bot (long-polling) before draining
         if (telegramBot) {
-          try { await telegramBot.stop(); } catch { /* ignore */ }
+          try { await telegramBot.stop('SIGINT'); } catch { /* ignore */ }
           logger.info("Telegram bot stopped");
         }
 
@@ -1050,6 +1072,9 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         // Clear ToolSearch cache (unbounded Map)
         try { const { cleanupAll } = await import("./runtime/tool-search.js"); cleanupAll(); logger.info("ToolSearch cache cleared"); } catch { /* ignore */ }
 
+        // Close WebSocket gateway
+        try { const { getWsGateway } = await import("./transport/ws-server.js"); const ws = getWsGateway(); await ws.shutdown(); logger.info("WebSocket gateway shutdown complete"); } catch { /* ignore */ }
+
         // Close MCP connections
         if (mcpShutdown) { try { await mcpShutdown(); logger.info("MCP server shutdown complete"); } catch { /* ignore */ } }
         for (const conn of mcpConnections) { try { await conn.dispose(); } catch { /* ignore */ } }
@@ -1071,7 +1096,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         logger.info("Webhook server closed");
 
         // Clean up PID file
-        const pidFile = join(homedir(), ".local/run/strategos.pid");
+        const pidFile = join(homedir(), ".local/run/operant.pid");
         try { await unlink(pidFile); logger.info("PID file removed"); } catch { /* ignore */ }
 
         logger.info("Graceful shutdown complete");

@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    STRATEGOS (CEO)                              │
+│                    OPERANT (CEO)                              │
 │  Databases: annual_goals, quarterly_goals, projects, campaigns  │
 │  Tools: Goal alignment, OKR tracking, portfolio health          │
 └─────────────────────────────────────────────────────────────────┘
@@ -28,7 +28,7 @@
 
 ---
 
-## 1. CEO — Strategic (Strategos)
+## 1. CEO — Strategic (Operant)
 
 **Role:** Overall vision, goal alignment, quarterly OKRs, portfolio oversight
 

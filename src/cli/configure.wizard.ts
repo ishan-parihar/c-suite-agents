@@ -4,7 +4,7 @@ import { CONFIGURE_SECTIONS, type WizardSection, promptSection } from "./configu
 import { SECTION_HANDLERS } from "./configure.sections.js";
 import { readConfigSnapshot, summarizeConfig } from "./config-snapshot.js";
 import { applyWizardMetadata } from "./onboard-helpers.js";
-import { StrategosConfigSchema } from "../config/schema.js";
+import { OperantConfigSchema } from "../config/schema.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -44,7 +44,7 @@ function persistConfig(config: Record<string, unknown>, configPath: string): boo
   wizard.lastRunCommand = "configure";
   wizard.lastRunMode = "configure";
 
-  const result = StrategosConfigSchema.safeParse(config);
+  const result = OperantConfigSchema.safeParse(config);
   if (!result.success) {
     const firstError = result.error.errors[0];
     console.log(error(`Validation failed: ${firstError.path.join(".")} — ${firstError.message}`));
@@ -63,12 +63,12 @@ export async function runConfigureWizard(options?: { section?: string }): Promis
   const snapshot = readConfigSnapshot();
 
   if (!snapshot.exists) {
-    console.error(error("No configuration found. Run 'strategos onboard' first."));
+    console.error(error("No configuration found. Run 'operant onboard' first."));
     return false;
   }
 
   if (!snapshot.valid) {
-    console.error(error("Config file is corrupted. Run 'strategos reset' then 'strategos onboard'."));
+    console.error(error("Config file is corrupted. Run 'operant reset' then 'operant onboard'."));
     if (snapshot.error) {
       console.error(DIM + snapshot.error + RESET);
     }
@@ -93,7 +93,7 @@ export async function runConfigureWizard(options?: { section?: string }): Promis
     const result = await handler(nextConfig);
     if (!persistConfig(result, configPath)) return false;
     console.log(`\n${success("Config saved.")}`);
-    console.log(`\n${success("Configure complete. Run 'strategos doctor' to verify.")}`);
+    console.log(`\n${success("Configure complete. Run 'operant doctor' to verify.")}`);
     return true;
   }
 
@@ -117,6 +117,6 @@ export async function runConfigureWizard(options?: { section?: string }): Promis
     console.log(`\n${success("Config saved.")}`);
   }
 
-  console.log(`\n${success("Configure complete. Run 'strategos doctor' to verify.")}`);
+  console.log(`\n${success("Configure complete. Run 'operant doctor' to verify.")}`);
   return true;
 }

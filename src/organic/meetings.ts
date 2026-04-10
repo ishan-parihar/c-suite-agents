@@ -5,6 +5,8 @@ import { logger } from "../logger.js";
 import { getBoardMembers, getStaffById } from "../staff/core-staff.js";
 import { getMessagingSystem, type MessagingSystem } from "./messaging.js";
 import { validateAgentIdentity } from "../auth/session.js";
+import { promises as fs } from "fs";
+import { resolve } from "path";
 
 function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
@@ -26,6 +28,7 @@ export interface MeetingProposal {
   voting_deadline: number;
   scheduled_time?: number;
   attendees?: string[];
+  notification_failures?: string[];
   created_at: number;
 }
 
@@ -46,6 +49,8 @@ export class MeetingGovernance {
   private minutes: Map<string, MeetingMinutes> = new Map();
   private messaging: MessagingSystem | null = null;
   private db: any = null;
+  private dbPath: string = "meetings.db";
+  private persistLock = Promise.resolve();
 
   private async getMessaging(): Promise<MessagingSystem> {
     if (!this.messaging) this.messaging = await getMessagingSystem();
@@ -66,10 +71,16 @@ export class MeetingGovernance {
 
   private async initDB() {
     if (this.db) return;
-    const messaging = await this.getMessaging();
-    this.db = (messaging as any).db;
-
-    if (!this.db) return;
+    const SQL = await import("sql.js");
+    const resolved = resolve(this.dbPath);
+    let db: any;
+    try {
+      const buf = await fs.readFile(resolved);
+      db = new SQL.default(new Uint8Array(buf));
+    } catch {
+      db = new SQL.default();
+    }
+    this.db = db;
 
     this.db.run(`
       CREATE TABLE IF NOT EXISTS meeting_proposals (
@@ -84,6 +95,7 @@ export class MeetingGovernance {
         voting_deadline INTEGER,
         scheduled_time INTEGER,
         attendees TEXT,
+        notification_failures TEXT,
         created_at INTEGER
       )
     `);
@@ -103,13 +115,43 @@ export class MeetingGovernance {
     await this.loadMinutes();
   }
 
+  private async persist(): Promise<void> {
+    if (!this.db) return;
+    const prev = this.persistLock;
+    let writeError: Error | null = null;
+    this.persistLock = (async () => {
+      try {
+        await prev;
+        const data = this.db.export();
+        const tmpPath = `${this.dbPath}.tmp`;
+        try {
+          await fs.writeFile(tmpPath, Buffer.from(data));
+          await fs.rename(tmpPath, this.dbPath);
+        } catch (err) {
+          try { await fs.unlink(tmpPath); } catch { /* tmp may not exist */ }
+          throw err;
+        }
+      } catch (err) {
+        writeError = err as Error;
+      }
+    })().finally(() => {
+      this.persistLock = Promise.resolve();
+    });
+    await this.persistLock;
+    if (writeError) throw writeError;
+  }
+
+  async close(): Promise<void> {
+    await this.persist();
+  }
+
   private async persistProposal(proposal: MeetingProposal) {
     if (!this.db) return;
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO meeting_proposals
-      (id, proposer, title, reason, urgency, status, votes, required_votes, voting_deadline, scheduled_time, attendees, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, proposer, title, reason, urgency, status, votes, required_votes, voting_deadline, scheduled_time, attendees, notification_failures, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     try {
@@ -125,6 +167,7 @@ export class MeetingGovernance {
         proposal.voting_deadline,
         proposal.scheduled_time || null,
         JSON.stringify(proposal.attendees || []),
+        JSON.stringify(proposal.notification_failures || []),
         proposal.created_at
       ]);
     } finally {
@@ -151,6 +194,7 @@ export class MeetingGovernance {
         voting_deadline: row.voting_deadline as number,
         scheduled_time: row.scheduled_time as number | undefined,
         attendees: safeJsonParse(row.attendees as string, []),
+        notification_failures: safeJsonParse(row.notification_failures as string, []),
         created_at: row.created_at as number
       };
       this.proposals.set(proposal.id, proposal);
@@ -205,20 +249,33 @@ export class MeetingGovernance {
     const proposal_id = uuidv4();
     const boardMembers = getBoardMembers();
     const required_votes = VOTE_THRESHOLDS[urgency];
-    const proposal: MeetingProposal = { id: proposal_id, proposer, title, reason, urgency, status: "voting", votes: {}, required_votes, voting_deadline: Date.now() + VOTE_DEADLINES[urgency], created_at: Date.now() };
+    const proposal: MeetingProposal = { id: proposal_id, proposer, title, reason, urgency, status: "voting", votes: {}, required_votes, voting_deadline: Date.now() + VOTE_DEADLINES[urgency], notification_failures: [], created_at: Date.now() };
     this.proposals.set(proposal_id, proposal);
     await this.persistProposal(proposal);
 
     const messaging = await this.getMessaging();
-    const notifyResults = await Promise.allSettled(boardMembers.filter(m => m.id !== proposer).map(member =>
+    const targets = boardMembers.filter(m => m.id !== proposer);
+    const notifyResults = await Promise.allSettled(targets.map(member =>
       messaging.send({ from: proposer, to: member.id, content: `🏛 BOARD MEETING: ${title}\nUrgency: ${urgency}\nReason: ${reason}\nVotes needed: ${required_votes}/${boardMembers.length}`, priority: urgency, requires_response: true, subject: `Board Meeting: ${title}` })
     ));
-    const failedNotifies = notifyResults.filter(r => r.status === "rejected");
-    if (failedNotifies.length > 0) {
-      logger.warn({ failed: failedNotifies.length }, "Meeting proposal: partial notification failure");
+    const failedAgentIds = targets.filter((_, i) => notifyResults[i].status === "rejected").map(m => m.id);
+
+    if (failedAgentIds.length > 0) {
+      proposal.notification_failures = failedAgentIds;
+      await this.persistProposal(proposal);
+      await this.persist();
+      logger.warn({ failed: failedAgentIds.length, failedAgents: failedAgentIds, total: targets.length }, "Meeting proposal: partial notification failure");
     }
 
-    logger.info({ proposal_id, proposer, title, urgency }, "Board meeting proposed");
+    // If ALL notifications failed, auto-reject the proposal
+    if (failedAgentIds.length === targets.length && targets.length > 0) {
+      proposal.status = "rejected";
+      await this.persistProposal(proposal);
+      await this.persist();
+      throw new Error(`Meeting proposed but ALL notifications failed (${failedAgentIds.join(", ")}). Messaging system may be down. Cannot proceed with quorum voting.`);
+    }
+
+    logger.info({ proposal_id, proposer, title, urgency, notificationFailures: failedAgentIds.length }, "Board meeting proposed");
     return proposal;
   }
 
@@ -243,6 +300,7 @@ export class MeetingGovernance {
     proposal.votes[voter] = vote;
     this.proposals.set(meeting_id, proposal);
     await this.persistProposal(proposal);
+    await this.persist();
 
     const yesVotes = Object.values(proposal.votes).filter(v => v === "yes").length;
     logger.info({ meeting_id, voter, vote, yesVotes, required: proposal.required_votes }, "Vote cast");
@@ -252,7 +310,8 @@ export class MeetingGovernance {
     else if (decisiveVotes >= getBoardMembers().length - 1 && yesVotes < proposal.required_votes) {
       proposal.status = "rejected";
       this.proposals.set(meeting_id, proposal);
-      await this.persistProposal(proposal);
+    await this.persistProposal(proposal);
+    await this.persist();
     }
     return proposal;
   }
@@ -265,6 +324,7 @@ export class MeetingGovernance {
     proposal.status = "scheduled"; proposal.scheduled_time = scheduledTime; proposal.attendees = getBoardMembers().map(m => m.id);
     this.proposals.set(meeting_id, proposal);
     await this.persistProposal(proposal);
+    await this.persist();
 
     const messaging = await this.getMessaging();
     const scheduleResults = await Promise.allSettled(getBoardMembers().map(member =>
@@ -288,6 +348,7 @@ export class MeetingGovernance {
     this.proposals.set(meeting_id, proposal);
     await this.persistProposal(proposal);
     await this.persistMinutes(minutes);
+    await this.persist();
 
     const messaging = await this.getMessaging();
     const actionResults = await Promise.allSettled(action_items.map(ai =>
@@ -328,7 +389,7 @@ export class MeetingGovernance {
       await messaging.send({
         from: "system",
         to: member.id,
-        content: `🏛 BOARD MEETING STARTED: ${proposal.title}\n\nYou're expected to participate. Strategos will facilitate.`,
+        content: `🏛 BOARD MEETING STARTED: ${proposal.title}\n\nYou're expected to participate. Operant will facilitate.`,
         priority: proposal.urgency,
         requires_response: false,
         subject: `Meeting Started: ${proposal.title}`
@@ -336,7 +397,7 @@ export class MeetingGovernance {
     }
 
     logger.info({ meeting_id, title: proposal.title }, "Meeting execution started");
-    return { success: true, message: "Meeting convened, Strategos notified to facilitate" };
+    return { success: true, message: "Meeting convened, Operant notified to facilitate" };
   }
 
   async checkAndExecuteMeetings(): Promise<number> {

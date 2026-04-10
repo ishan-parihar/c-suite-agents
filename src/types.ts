@@ -12,7 +12,7 @@ export type ToolExecutor = {
   executeTool: (name: string, args: Record<string, unknown>) => Promise<any>;
 };
 
-export type StrategosRuntime = {
+export type OperantRuntime = {
   server?: McpServer;
   httpServer?: Server;
   ctx: { 

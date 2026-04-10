@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 //
-// Strategos CLI — Unified command dispatcher
-// Usage: strategos <command> [options]
+// Operant CLI — Unified command dispatcher
+// Usage: operant <command> [options]
 //
 // Commands:
 //   onboard   Run the setup wizard (first-time configuration)
@@ -43,7 +43,7 @@ function getVersion(): string {
     if (existsSync(pkgPath)) {
       const stat = statSync(pkgPath);
       if (stat.size > 100 * 1024) {
-        console.warn(`[strategos] WARN: package.json too large (${stat.size} bytes), skipping`);
+        console.warn(`[operant] WARN: package.json too large (${stat.size} bytes), skipping`);
       } else {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
         return pkg.version;
@@ -55,7 +55,7 @@ function getVersion(): string {
     if (existsSync(pkgPath)) {
       const stat = statSync(pkgPath);
       if (stat.size > 100 * 1024) {
-        console.warn(`[strategos] WARN: package.json too large (${stat.size} bytes), skipping`);
+        console.warn(`[operant] WARN: package.json too large (${stat.size} bytes), skipping`);
       } else {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
         return pkg.version;
@@ -88,10 +88,10 @@ function heading(text: string): string {
 
 function showHelp(): void {
   console.log(`
-${heading("  Strategos CLI")}
+${heading("  Operant CLI")}
 
 ${BOLD}USAGE:${RESET}
-  strategos <command> [options]
+  operant <command> [options]
 
 ${BOLD}COMMANDS:${RESET}
   ${BOLD}onboard${RESET}       Run the interactive setup wizard
@@ -120,7 +120,7 @@ ${BOLD}COMMANDS:${RESET}
 
   ${BOLD}help${RESET}           Show this help message
 
-  ${BOLD}version${RESET}        Show Strategos version
+  ${BOLD}version${RESET}        Show Operant version
 
 ${BOLD}ONBOARD OPTIONS:${RESET}
   --mode, -m        Setup mode: quickstart | advanced (default: quickstart)
@@ -139,56 +139,56 @@ ${BOLD}RESET OPTIONS:${RESET}
   --yes, -y         Skip confirmation prompt
 
 ${BOLD}GLOBAL OPTIONS:${RESET}
-  --config, -c      Path to config file (default: ~/.strategos/config.json)
+  --config, -c      Path to config file (default: ~/.operant/config.json)
   --verbose, -v     Enable verbose output
   --help, -h        Show this help message
   --version, -V     Show version
 
 ${BOLD}EXAMPLES:${RESET}
   ${DIM}# First-time setup${RESET}
-  strategos onboard
+  operant onboard
 
   ${DIM}# Advanced setup with custom mode${RESET}
-  strategos onboard --mode advanced
+  operant onboard --mode advanced
 
   ${DIM}# Run diagnostic checks${RESET}
-  strategos doctor
+  operant doctor
 
   ${DIM}# Run diagnostics with auto-repair${RESET}
-  strategos doctor --yes --repair
+  operant doctor --yes --repair
 
   ${DIM}# Check system status${RESET}
-  strategos status
+  operant status
 
   ${DIM}# Status as JSON (for monitoring)${RESET}
-  strategos status --json
+  operant status --json
 
   ${DIM}# Reset config only${RESET}
-  strategos reset --scope config
+  operant reset --scope config
 
   ${DIM}# Full reset (config + credentials + workspace)${RESET}
-  strategos reset --scope full
+  operant reset --scope full
 
   ${DIM}# Apply config migrations${RESET}
-  strategos migrate
+  operant migrate
 
   ${DIM}# Configure LLM settings interactively${RESET}
-  strategos configure
+  operant configure
 
   ${DIM}# Configure a specific section${RESET}
-  strategos configure --section mcp
+  operant configure --section mcp
 
   ${DIM}# List MCP servers${RESET}
-  strategos mcp list
+  operant mcp list
 
   ${DIM}# Add an MCP server${RESET}
-  strategos mcp add
+  operant mcp add
 
 ${BOLD}CONFIGURATION:${RESET}
-  Config file:  ${DIM}~/.strategos/config.json${RESET}
-  Agent offices: ${DIM}~/.strategos/agents/${RESET}
-  Data:         ${DIM}~/.local/share/strategos/${RESET}
-  Logs:         ${DIM}~/.local/log/strategos/${RESET}
+  Config file:  ${DIM}~/.operant/config.json${RESET}
+  Agent offices: ${DIM}~/.operant/agents/${RESET}
+  Data:         ${DIM}~/.local/share/operant/${RESET}
+  Logs:         ${DIM}~/.local/log/operant/${RESET}
 
 ${BOLD}TELEGRAM COMMANDS:${RESET}
   /start          Welcome message
@@ -259,8 +259,8 @@ async function showStatus(options: { json?: boolean; deep?: boolean }): Promise<
 
   try {
     const { spawnSync } = await import("node:child_process");
-    const systemResult = spawnSync("systemctl", ["is-active", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    const userResult = spawnSync("systemctl", ["--user", "is-active", "strategos"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    const systemResult = spawnSync("systemctl", ["is-active", "operant"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    const userResult = spawnSync("systemctl", ["--user", "is-active", "operant"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
     const systemActive = systemResult.status === 0 && systemResult.stdout?.trim() === "active";
     const userActive = userResult.status === 0 && userResult.stdout?.trim() === "active";
     (status.service as { active: boolean; error: string | null }).active = systemActive || userActive;
@@ -271,7 +271,7 @@ async function showStatus(options: { json?: boolean; deep?: boolean }): Promise<
   if (options.deep) {
     try {
       const { spawnSync } = await import("node:child_process");
-      const result = spawnSync("systemctl", ["show", "strategos", "-p", "ActiveEnterTimestamp", "--value"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      const result = spawnSync("systemctl", ["show", "operant", "-p", "ActiveEnterTimestamp", "--value"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
       const uptime = (result.status === 0 && result.stdout?.trim()) || "unknown";
       (status.service as { active: boolean; error: string | null; uptime?: string }).uptime = uptime;
     } catch { /* ignore */ }
@@ -283,7 +283,7 @@ async function showStatus(options: { json?: boolean; deep?: boolean }): Promise<
   }
 
   console.log(``);
-  console.log(heading("  Strategos Status"));
+  console.log(heading("  Operant Status"));
   console.log(``);
   console.log(`  ${BOLD}Version:${RESET}       ${getVersion()}`);
   console.log(`  ${BOLD}Config:${RESET}        ${getConfigPath()}`);
@@ -373,7 +373,7 @@ async function runReset(args: string[]): Promise<boolean> {
   const ok = await handleReset(scope, dirname(configPath));
   if (ok) {
     console.log(`\n${GREEN}${BOLD}✓ Reset complete.${RESET}`);
-    console.log(`${YELLOW}Run 'strategos onboard' to reconfigure.${RESET}`);
+    console.log(`${YELLOW}Run 'operant onboard' to reconfigure.${RESET}`);
   } else {
     console.log(`${YELLOW}Reset cancelled or partially completed.${RESET}`);
   }
@@ -395,7 +395,7 @@ async function runMigrate(): Promise<boolean> {
 
   if (result.config === null && "error" in result) {
     console.log(`${RED}Config file is invalid JSON:${RESET} ${(result as { error: string }).error}`);
-    console.log(`${YELLOW}Run 'strategos onboard' to regenerate.${RESET}`);
+    console.log(`${YELLOW}Run 'operant onboard' to regenerate.${RESET}`);
     return false;
   }
 
@@ -550,7 +550,7 @@ async function main(): Promise<void> {
     case "onboard":
     case "setup":
     case "wizard": {
-      console.log(`${BOLD}${CYAN}Strategos Setup Wizard${RESET}\n`);
+      console.log(`${BOLD}${CYAN}Operant Setup Wizard${RESET}\n`);
       const ok = await runSetupWizard();
 
       // After wizard completes, offer finalize
@@ -601,7 +601,7 @@ async function main(): Promise<void> {
     case "configure":
     case "config":
     case "cfg": {
-      console.log(`${BOLD}${CYAN}Strategos Configuration${RESET}\n`);
+      console.log(`${BOLD}${CYAN}Operant Configuration${RESET}\n`);
       const section = opts.section;
       const ok = await runConfigureWizard({ section: section as string | undefined });
       process.exit(ok ? 0 : 1);
@@ -625,7 +625,7 @@ async function main(): Promise<void> {
     case "version":
     case "-V":
     case "--version":
-      console.log(`strategos v${getVersion()}`);
+      console.log(`operant v${getVersion()}`);
       process.exit(0);
       break;
 

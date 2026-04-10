@@ -31,6 +31,7 @@ export class MemoryStore {
   private tables: Map<MemoryScope, Table> = new Map();
   private keywordIndex: Map<MemoryScope, Map<string, Set<string>>> = new Map();
   private indexBuilt: Map<MemoryScope, boolean> = new Map();
+  private indexBuildPromises: Map<MemoryScope, Promise<void>> = new Map();
 
   static async init(dir: string): Promise<MemoryStore> {
     const store = new MemoryStore();
@@ -147,12 +148,18 @@ export class MemoryStore {
     }
     this.keywordIndex.set(scope, index);
     this.indexBuilt.set(scope, true);
+    this.indexBuildPromises.delete(scope);
     logger.debug({ scope, entries: entries.length }, "Keyword index built");
   }
 
   async searchKeyword(scope: MemoryScope, query: string, _agentId?: string): Promise<MemoryEntry[]> {
     if (!this.indexBuilt.get(scope)) {
-      await this.buildIndexFromStore(scope);
+      let promise = this.indexBuildPromises.get(scope);
+      if (!promise) {
+        promise = this.buildIndexFromStore(scope);
+        this.indexBuildPromises.set(scope, promise);
+      }
+      await promise;
     }
 
     const queryWords = this.extractWords(query);
@@ -161,12 +168,21 @@ export class MemoryStore {
     const index = this.keywordIndex.get(scope);
     if (!index) return [];
 
-    const allEntries = await this.getAll(scope);
-    const filtered = _agentId ? allEntries.filter(e => e.agent_id === _agentId) : allEntries;
+    // Optimize: Find candidate IDs first
+    const candidateIds = new Set<string>();
+    for (const [id, entryWords] of index.entries()) {
+        let matchCount = 0;
+        for (const qw of queryWords) {
+            if (entryWords.has(qw)) matchCount++;
+        }
+        if (matchCount > 0) candidateIds.add(id);
+    }
 
+    const allEntries = await this.getAll(scope, _agentId);
+    
     const results: Array<{ entry: MemoryEntry; matchCount: number }> = [];
 
-    for (const entry of filtered) {
+    for (const entry of allEntries) {
       const entryWords = index.get(entry.id);
       if (!entryWords) continue;
 
@@ -200,12 +216,11 @@ export class MemoryStore {
     const table = this.tables.get(scope);
     if (!table) return [];
 
-    // Fetch more results server-side, filter in JS to avoid SQL injection
     const results = await table.search(vector).limit(query.top_k * 10).toArray();
 
     let filtered = results as any[];
 
-    // JS-side filtering — no string interpolation
+    // JS-side filtering
     filtered = filtered.filter((r: any) => r.agent_id === query.agent_id);
 
     const dateFrom = query.date_from;
@@ -277,32 +292,34 @@ export class MemoryStore {
     const table = this.tables.get(scope);
     if (!table) return 0;
 
-    // Search then delete by _rowid to avoid string interpolation
-    const matches = await table.query().toArray() as any[];
-    const toDelete = matches.filter((r: any) => r.content_hash === contentHash);
-    for (const row of toDelete) {
-      if (row._rowid !== undefined) {
-        await table.delete(`_rowid = ${row._rowid}`);
+    const safeHash = contentHash.replace(/'/g, "''");
+    const q = table.query().where(`content_hash = '${safeHash}'`).select(["id", "_rowid"]);
+    const matches = await q.toArray() as any[];
+    
+    if (matches.length > 0) {
+      await table.delete(`content_hash = '${safeHash}'`);
+      for (const row of matches) {
+        this.keywordIndex.get(scope)?.delete(row.id);
       }
-      this.keywordIndex.get(scope)?.delete(row.id);
     }
-    return toDelete.length;
+    return matches.length;
   }
 
   async deleteById(scope: MemoryScope, id: string): Promise<number> {
     const table = this.tables.get(scope);
     if (!table) return 0;
 
-    // Search then delete by _rowid to avoid string interpolation
-    const matches = await table.query().toArray() as any[];
-    const toDelete = matches.filter((r: any) => r.id === id);
-    for (const row of toDelete) {
-      if (row._rowid !== undefined) {
-        await table.delete(`_rowid = ${row._rowid}`);
+    const safeId = id.replace(/'/g, "''");
+    const q = table.query().where(`id = '${safeId}'`).select(["id", "_rowid"]);
+    const matches = await q.toArray() as any[];
+    
+    if (matches.length > 0) {
+      await table.delete(`id = '${safeId}'`);
+      for (const row of matches) {
+        this.keywordIndex.get(scope)?.delete(row.id);
       }
-      this.keywordIndex.get(scope)?.delete(row.id);
     }
-    return toDelete.length;
+    return matches.length;
   }
 
   async deleteExpired(scope: MemoryScope): Promise<number> {
@@ -310,7 +327,7 @@ export class MemoryStore {
     if (!table) return 0;
 
     const now = Date.now();
-    const all = await table.query().toArray() as any[];
+    const all = await table.query().select(["id", "ts", "ttl_ms", "_rowid"]).toArray() as any[];
     let deleted = 0;
 
     for (const row of all) {
@@ -368,21 +385,26 @@ export class MemoryStore {
     const table = this.tables.get(scope);
     if (!table) return 0;
 
-    const all = await table.query().toArray() as any[];
     if (agentId) {
-      return all.filter(r => r.agent_id === agentId).length;
+       const res = await table.query().where(`agent_id = '${agentId.replace(/'/g, "''")}'`).select(["id"]).toArray();
+       return res.length;
     }
-    return all.length;
+    const allIds = await table.query().select(["id"]).toArray();
+    return allIds.length;
   }
 
   async getAll(scope: MemoryScope, agentId?: string, tag?: string): Promise<MemoryEntry[]> {
     const table = this.tables.get(scope);
     if (!table) return [];
 
-    const all = await table.query().toArray() as any[];
+    let q = table.query();
+    if (agentId) {
+      q = q.where(`agent_id = '${agentId.replace(/'/g, "''")}'`);
+    }
+
+    const all = await q.toArray() as any[];
     let filtered = all;
 
-    if (agentId) filtered = filtered.filter(r => r.agent_id === agentId);
     if (tag) filtered = filtered.filter(r => Array.isArray(r.tags) && r.tags.includes(tag));
 
     return filtered.map((r: any) => ({

@@ -59,14 +59,14 @@ async function prompt(question: string, defaultValue?: string): Promise<string> 
 // Config path helper (matches mcp.ts approach)
 // ---------------------------------------------------------------------------
 
-const CONFIG_FILE = path.join(os.homedir(), ".strategos", "config.json");
+const CONFIG_FILE = path.join(os.homedir(), ".operant", "config.json");
 
 function reloadConfig(): Record<string, unknown> {
   if (!fs.existsSync(CONFIG_FILE)) return {};
   try {
     const stat = fs.statSync(CONFIG_FILE);
     if (stat.size > 100 * 1024) {
-      console.warn(`[strategos] WARN: Config file too large (${stat.size} bytes), skipping reload`);
+      console.warn(`[operant] WARN: Config file too large (${stat.size} bytes), skipping reload`);
       return {};
     }
     return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) as Record<string, unknown>;

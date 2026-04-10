@@ -8,7 +8,6 @@ import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
 import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
-import { getSessionRegistry } from "../scheduler/session-registry.js";
 import { getMessagingSystem } from "./messaging.js";
 
 // ── Data Types ────────────────────────────────────────────────────────
@@ -63,8 +62,8 @@ function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
 
 function getBoardSafetyLimits() {
   return {
-    agentResponseMs: 300000,
-    totalMeetingMs: 30 * 60 * 1000,
+    agentResponseMs: 180000,
+    totalMeetingMs: 45 * 60 * 1000,
     minTurnsForReport: 1,
   };
 }
@@ -326,7 +325,9 @@ export class BoardMeetingEngine {
       } catch (err) {
         writeError = err as Error;
       }
-    })();
+    })().finally(() => {
+      this.persistLock = Promise.resolve();
+    });
     await this.persistLock;
     if (writeError) throw writeError;
   }
@@ -368,7 +369,7 @@ export class BoardMeetingEngine {
   }
 
   private async archiveOldMeetings(): Promise<void> {
-    const count = (this.queryOneRow("SELECT COUNT(*) FROM board_meetings")?.values?.[0] as number) || 0;
+    const count = ((this.queryOneRow("SELECT COUNT(*) FROM board_meetings") as unknown[] | null)?.[0] as number) || 0;
     if (count > this.MAX_MEETINGS_IN_MEMORY) {
       const toArchive = count - this.MAX_MEETINGS_IN_MEMORY;
       this.db.run(
@@ -399,7 +400,7 @@ export class BoardMeetingEngine {
     const meeting: BoardMeeting = {
       id: row.id as string,
       date: row.date as string,
-      status: row.status as string,
+      status: row.status as BoardMeeting["status"],
       objective: (row.objective as string) || undefined,
       report: (row.report as string) || undefined,
       user_decision: row.user_decision as BoardMeeting["user_decision"],
@@ -598,9 +599,8 @@ export class BoardMeetingEngine {
     }
 
     const runtime = getNativeRuntime();
-    const sessionRegistry = getSessionRegistry();
-    const sessionId = await sessionRegistry.getOrCreate("ceo-strategic", {
-      title: `board-meeting-report:${meetingId}`,
+    const sessionId = await runtime.getOrCreateRuntimeSession("ceo-strategic", {
+      mode: "message",
     });
 
     const prompt = buildCeoReportPrompt(meeting);
@@ -712,9 +712,8 @@ export class BoardMeetingEngine {
     timeoutMs: number
   ): Promise<string> {
     const runtime = getNativeRuntime();
-    const sessionRegistry = getSessionRegistry();
-    const sessionId = await sessionRegistry.getOrCreate("ceo-strategic", {
-      title: `board-meeting:${meeting.id}`,
+    const sessionId = await runtime.getOrCreateRuntimeSession("ceo-strategic", {
+      mode: "message",
     });
 
     let prompt: string;
@@ -742,9 +741,8 @@ export class BoardMeetingEngine {
     timeoutMs: number
   ): Promise<AgentResponse> {
     const runtime = getNativeRuntime();
-    const sessionRegistry = getSessionRegistry();
-    const sessionId = await sessionRegistry.getOrCreate(agentId, {
-      title: `board-meeting:${meetingId}`,
+    const sessionId = await runtime.getOrCreateRuntimeSession(agentId, {
+      mode: "message",
     });
 
     const result = await this.withTimeout(
@@ -780,6 +778,7 @@ export class BoardMeetingEngine {
       timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
     });
 
+    promise.catch(() => {});
     try {
       return await Promise.race([promise, timeoutPromise]);
     } finally {

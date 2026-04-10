@@ -16,7 +16,7 @@ interface AnyAgentTool {
   execute: (toolCallId: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: "text"; text: string }> }>;
 }
 
-const MEDIA_DIR = join(homedir(), ".strategos", "media");
+const MEDIA_DIR = join(homedir(), ".operant", "media");
 const MAX_TTS_INPUT_CHARS = 4096;
 const VALID_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
 

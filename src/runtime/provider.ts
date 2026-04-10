@@ -12,6 +12,27 @@ export interface CompletionMessage {
   tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
 }
 
+// ── Timeout Constants ──────────────────────────────────────────────────
+
+/**
+ * Maximum timer-safe value (ms). Used to represent "unlimited" timeout.
+ * Mirrors openclaw's MAX_SAFE_TIMEOUT_MS = 2_147_000_000 (~24.8 days).
+ */
+export const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
+
+/** Default timeout for direct provider calls with no signal/timeout specified. */
+const DEFAULT_PROVIDER_TIMEOUT_MS = 48 * 60 * 60 * 1000; // 48 hours
+
+/**
+ * Default idle timeout for LLM streaming (ms).
+ * If no token/chunk is received within this window, the stream is aborted.
+ * 0 = disable idle detection (never timeout).
+ * Mirrors openclaw's DEFAULT_LLM_IDLE_TIMEOUT_MS = 60_000.
+ */
+export const DEFAULT_LLM_IDLE_TIMEOUT_MS = 60_000; // 60 seconds
+
+// ── Interfaces ───────────────────────────────────────────────────────
+
 export interface CompletionRequest {
   model: string;
   messages: CompletionMessage[];
@@ -26,6 +47,12 @@ export interface CompletionRequest {
   temperature?: number;
   maxTokens?: number;
   abortSignal?: AbortSignal;
+  /**
+   * Timeout in milliseconds. 0 = unlimited (MAX_SAFE_TIMEOUT_MS).
+   * Negative = use default (48h). Omitted = use default.
+   * When abortSignal is provided, this value is ignored (signal controls cancellation).
+   */
+  timeoutMs?: number;
 }
 
 export interface CompletionResponse {
@@ -176,6 +203,63 @@ function parseSSEChunk(rawChunk: string): Array<{ event?: string; data: string }
   return results;
 }
 
+// ── Idle Timeout Wrapper ───────────────────────────────────────────────
+
+/**
+ * Wraps an async iterable stream with idle timeout detection.
+ * Resets the timer on every chunk received. If no chunk arrives within
+ * `timeoutMs`, the stream aborts with an error.
+ *
+ * This means the agent can take hours on a complex task as long as the
+ * model is making progress (streaming tokens). Only stalls trigger timeout.
+ *
+ * @param stream - The async iterable to wrap
+ * @param timeoutMs - Idle timeout in ms. 0 = no idle detection.
+ * @param controller - AbortController to signal on idle timeout
+ * @returns Wrapped async iterable
+ */
+export async function* streamWithIdleTimeout<T>(
+  stream: AsyncIterable<T>,
+  timeoutMs: number,
+  controller: AbortController | undefined,
+): AsyncIterable<T> {
+  // 0 = idle detection disabled, let stream run indefinitely
+  if (timeoutMs <= 0) {
+    yield* stream;
+    return;
+  }
+
+  const iterator = stream[Symbol.asyncIterator]();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const resetIdleTimer = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      const err = new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
+      controller?.abort(err);
+    }, timeoutMs);
+  };
+
+  const clearIdleTimer = (): void => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
+  try {
+    while (true) {
+      resetIdleTimer();
+      const result = await iterator.next();
+      clearIdleTimer();
+      if (result.done) return;
+      yield result.value;
+    }
+  } finally {
+    clearIdleTimer();
+  }
+}
+
 // ── OpenAI-Compatible Provider ───────────────────────────────────────
 
 export class OpenAICompatibleProvider implements LLMProvider {
@@ -253,11 +337,31 @@ export class OpenAICompatibleProvider implements LLMProvider {
     };
   }
 
+  /**
+   * Resolve a raw timeoutMs value into the effective timeout.
+   * - undefined / negative → DEFAULT_PROVIDER_TIMEOUT_MS (48h)
+   * - 0 → MAX_SAFE_TIMEOUT_MS (unlimited, ~24.8 days)
+   * - positive → clamped to MAX_SAFE_TIMEOUT_MS
+   */
+  private resolveTimeoutMs(timeoutMs: number | undefined): number {
+    if (timeoutMs === undefined || timeoutMs < 0) {
+      return DEFAULT_PROVIDER_TIMEOUT_MS;
+    }
+    if (timeoutMs === 0) {
+      return MAX_SAFE_TIMEOUT_MS;
+    }
+    return Math.min(timeoutMs, MAX_SAFE_TIMEOUT_MS);
+  }
+
   async complete(request: CompletionRequest): Promise<CompletionResponse> {
     const body = this.buildBody(request, false);
 
+    // Resolve timeout: abortSignal takes priority; timeoutMs: 0 = unlimited, < 0 = default
+    const resolvedTimeoutMs = this.resolveTimeoutMs(request.timeoutMs);
     const controller = request.abortSignal ? undefined : new AbortController();
-    const timeout = controller ? setTimeout(() => controller.abort(), 120_000) : undefined;
+    const timeout = (controller && resolvedTimeoutMs > 0)
+      ? setTimeout(() => controller.abort(), resolvedTimeoutMs)
+      : undefined;
     try {
       const response = await fetch(this.apiUrl, {
         method: "POST",
@@ -311,9 +415,26 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async *stream(request: CompletionRequest): AsyncIterable<StreamEvent> {
     const body = this.buildBody(request, true);
 
+    // Stream uses idle detection: reset timer on every chunk received.
+    // If no data arrives within idleTimeoutMs, abort. Default: 60s.
+    // timeoutMs: 0 = unlimited (no idle detection).
     const controller = request.abortSignal ? undefined : new AbortController();
-    const timeout = controller ? setTimeout(() => controller.abort(), 120_000) : undefined;
+    const idleTimeoutMs = request.timeoutMs === 0 ? 0 : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const resetIdleTimer = (): void => {
+      if (idleTimeoutMs <= 0) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        controller?.abort(new Error(`LLM idle timeout (${Math.floor(idleTimeoutMs / 1000)}s): no response from model`));
+      }, idleTimeoutMs);
+    };
+    const clearIdleTimer = (): void => {
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    };
+
     try {
+      resetIdleTimer();
       const response = await fetch(this.apiUrl, {
         method: "POST",
         headers: {
@@ -344,6 +465,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
           const { done, value } = await reader.read();
           if (done) break;
 
+          // Reset idle timer on every chunk received — model is making progress
+          resetIdleTimer();
+
           totalBytes += value.length;
           if (totalBytes > MAX_SSE_BODY_SIZE) {
             throw new Error(`SSE response exceeded ${MAX_SSE_BODY_SIZE} bytes`);
@@ -373,6 +497,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
               // Extract delta text
               const delta = (parsedData.choices as Array<Record<string, unknown>> | undefined)?.[0]
                 ?.delta as Record<string, unknown> | undefined;
+
 
               if (delta) {
                 // Text content
@@ -426,7 +551,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
       yield { type: "done" };
     } finally {
-      if (timeout) clearTimeout(timeout);
+      clearIdleTimer();
     }
   }
 }

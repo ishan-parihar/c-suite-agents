@@ -17,7 +17,7 @@ import { Memory } from "../memory/lancedb.js";
 import { getMemoryFacade } from "../memory/index.js";
 import type { MemoryFacade } from "../memory/index.js";
 import { Kanban } from "../kanban/sqlite.js";
-import type { StrategosRuntime, ToolExecutor } from "../types.js";
+import type { OperantRuntime, ToolExecutor } from "../types.js";
 import { v4 as uuidv4 } from "uuid";
 import { CORE_STAFF_ROLES, getCoreStaffIds, getOrgChart, getStaffById, getDirectReports } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
@@ -48,7 +48,7 @@ async function initializeCoreStaff(kanban: Kanban, memory: Memory) {
   logger.info(`Core staff initialized: ${getCoreStaffIds().length} agents`);
 }
 
-export async function startStrategos(): Promise<StrategosRuntime> {
+export async function startOperant(): Promise<OperantRuntime> {
   const memory = await Memory.init(process.env.LANCEDB_DIR || ".lancedb");
   const memoryFacade = await getMemoryFacade();
   const kanban = await Kanban.init(process.env.KANBAN_DB || "kanban.db");
@@ -71,7 +71,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
   // Factory: create a new McpServer with all tools registered for a given SSE session
   function createSessionServer(callerAgentId?: string): { server: McpServer; toolImpls: Record<string, (args: any) => Promise<ToolResult>> } {
-    const sessionServer = new McpServer({ name: "strategos", version: "0.1.0" }, { capabilities: { logging: {} } });
+    const sessionServer = new McpServer({ name: "operant", version: "0.1.0" }, { capabilities: { logging: {} } });
     const sessionToolImpls: Record<string, (args: any) => Promise<ToolResult>> = {};
 
     // Identity override: callerAgentId is validated at SSE connection time (rejects unknown agents),
@@ -122,31 +122,29 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     // === AGENT COMMUNICATION TOOLS ===
     const agentHandoff = async (args: any): Promise<ToolResult> => {
       const { from_agent, to_agent, context, conversation_id } = withCallerIdentity(args);
+      const resolvedFrom = from_agent || args.agent_id;
       if (!to_agent || !context) return ok("❌ Error: to_agent and context are required");
-      const fromStaff = getStaffById(from_agent);
+      if (!resolvedFrom) return ok("❌ Error: caller identity not available");
+      const fromStaff = getStaffById(resolvedFrom);
       const toStaff = getStaffById(to_agent);
       if (!toStaff) return ok(`❌ Agent "${to_agent}" not found.`);
-      try {
-        await messaging.send({ from: from_agent, to: to_agent, content: `🔄 **HANDOFF**\n\nFrom: ${fromStaff?.name || from_agent}\n\nContext:\n${context}`, priority: "P2", requires_response: true, subject: `Handoff from ${from_agent}`, tags: ["handoff", "agent-transfer"] });
-        logger.info({ from: from_agent, to: to_agent, conversation_id }, "Agent handoff completed");
-        return ok(`✅ Conversation handed off to **${toStaff.avatar} ${toStaff.name}**\n\nThey now have full context and will continue the conversation.`);
-      } catch (err: any) {
-        logger.error({ err: err.message }, "Handoff failed");
-        return ok(`❌ Handoff failed: internal error`);
-      }
+      await messaging.send({ from: resolvedFrom, to: to_agent, content: `🔄 **HANDOFF**\n\nFrom: ${fromStaff?.name || resolvedFrom}\n\nContext:\n${context}`, priority: "P2", requires_response: true, subject: `Handoff from ${resolvedFrom}`, tags: ["handoff", "agent-transfer"] });
+      logger.info({ from: resolvedFrom, to: to_agent, conversation_id }, "Agent handoff completed");
+      return ok(`✅ Conversation handed off to **${toStaff.avatar} ${toStaff.name}**\n\nThey now have full context and will continue the conversation.`);
     };
     sessionToolImpls["agent.handoff"] = agentHandoff;
     sessionServer.registerTool("agent.handoff", { description: "Hand off a conversation to another agent — they take over with full context. Use when a topic is outside your domain.", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID"), to_agent: z.string().describe("Agent to handoff to"), context: z.string().describe("Conversation context and summary"), conversation_id: z.string().optional().describe("Optional conversation/thread ID") }) }, agentHandoff);
 
     const agentMeeting = async (args: any): Promise<ToolResult> => {
       const { from_agent, participants, topic, urgency = "normal" } = withCallerIdentity(args);
+      const resolvedFrom = from_agent || args.agent_id;
       if (!participants || participants.length === 0) return ok("❌ Error: participants array is required");
+      if (!resolvedFrom) return ok("❌ Error: caller identity not available");
       const validParticipants = participants.filter((id: string) => getStaffById(id));
       if (validParticipants.length === 0) return ok("❌ No valid agents found in participants list");
-      try {
-        const results = await Promise.allSettled(validParticipants.map(async (agentId: string) => {
+      const results = await Promise.allSettled(validParticipants.map(async (agentId: string) => {
           const staff = getStaffById(agentId);
-          await messaging.send({ from: from_agent, to: agentId, content: `🏛 **BOARD MEETING CALLED**\n\nCalled by: ${getStaffById(from_agent)?.name || from_agent}\n\nTopic: ${topic}\nUrgency: ${urgency}\n\nPlease respond with your input.`, priority: urgency === "urgent" ? "P1" : "P2", requires_response: true, subject: `Meeting: ${topic}`, tags: ["meeting", "board"] });
+          await messaging.send({ from: resolvedFrom, to: agentId, content: `🏛 **BOARD MEETING CALLED**\n\nCalled by: ${getStaffById(resolvedFrom)?.name || resolvedFrom}\n\nTopic: ${topic}\nUrgency: ${urgency}\n\nPlease respond with your input.`, priority: urgency === "urgent" ? "P1" : "P2", requires_response: true, subject: `Meeting: ${topic}`, tags: ["meeting", "board"] });
         }));
         const failed = results.filter(r => r.status === "rejected");
         if (failed.length > 0) {
@@ -154,11 +152,8 @@ export async function startStrategos(): Promise<StrategosRuntime> {
         }
         logger.info({ caller: from_agent, participants: validParticipants, topic }, "Board meeting called");
         const names = validParticipants.map((id: string) => { const s = getStaffById(id); return s ? `${s.avatar} ${s.name}` : id; }).join(", ");
-        return ok(`🏛 **Board Meeting Called**\n\nTopic: ${topic}\nUrgency: ${urgency}\n\nParticipants:\n${names}\n\nAll agents have been notified and will respond.`);
-      } catch (err: any) {
-        logger.error({ err: err.message }, "Failed to call meeting");
-        return ok(`❌ Failed to call meeting: internal error`);
-      }
+        const failureNote = failed.length > 0 ? `\n\n⚠️ ${failed.length}/${results.length} notifications failed to deliver.` : "";
+        return ok(`🏛 **Board Meeting Called**\n\nTopic: ${topic}\nUrgency: ${urgency}\n\nParticipants:\n${names}${failureNote}\n\nAll agents have been notified and will respond.`);
     };
     sessionToolImpls["agent.meeting"] = agentMeeting;
     sessionServer.registerTool("agent.meeting", { description: "Call a board meeting with multiple agents. Use for decisions requiring group consensus or cross-functional coordination.", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID (caller)"), participants: z.array(z.string()).describe("List of agent IDs to invite"), topic: z.string().describe("Meeting topic"), urgency: z.enum(["normal", "urgent"]).optional().describe("Meeting urgency") }) }, agentMeeting);
@@ -329,33 +324,26 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     // === MESSAGING TOOLS ===
     const messageSend = async (args: any): Promise<ToolResult> => {
-      try {
-        const resolved = withCallerIdentity(args);
-        if (!resolved.to) return ok("❌ Error: 'to' (recipient agent ID) is required");
-        if (!resolved.content) return ok("❌ Error: 'content' (message body) is required");
-        const thread = await messaging.send({ from: resolved.from, to: resolved.to, content: resolved.content, priority: resolved.priority || "P3", requires_response: resolved.requires_response || false, subject: resolved.subject, tags: resolved.tags });
-        return ok(`Message sent to ${resolved.to}. Thread ID: ${thread.id}`);
-      } catch (err: any) {
-        const msg = err?.message || String(err);
-        logger.error({ err: msg }, "message.send failed");
-        return ok(`❌ Error: ${msg}`);
-      }
+      const resolved = withCallerIdentity(args);
+      // Fallback: agent_id is injected by native runtime even when callerAgentId is not set
+      if (!resolved.from && resolved.agent_id) resolved.from = resolved.agent_id;
+      if (!resolved.to) return ok("❌ Error: 'to' (recipient agent ID) is required");
+      if (!resolved.content) return ok("❌ Error: 'content' (message body) is required");
+      if (!resolved.from) return ok("❌ Error: 'from' (sender agent ID) is required — caller identity not available");
+      const thread = await messaging.send({ from: resolved.from, to: resolved.to, content: resolved.content, priority: resolved.priority || "P3", requires_response: resolved.requires_response || false, subject: resolved.subject, tags: resolved.tags });
+      return ok(`Message sent to ${resolved.to}. Thread ID: ${thread.id}`);
     };
     sessionToolImpls["message.send"] = messageSend;
     sessionServer.registerTool("message.send", { description: "Send an async message to another agent. Use for requests, updates, or questions.", inputSchema: z.object({ from: z.string().describe("Your agent ID"), to: z.string().describe("Recipient agent ID"), content: z.string().describe("Message content"), priority: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("Priority level (default: P3)"), requires_response: z.boolean().optional().describe("Whether a response is expected"), subject: z.string().optional().describe("Thread subject line"), tags: z.array(z.string()).optional().describe("Tags for categorization") }) }, messageSend);
 
     const messageReply = async (args: any): Promise<ToolResult> => {
-      try {
-        const resolved = withCallerIdentity(args);
-        if (!resolved.thread_id) return ok("❌ Error: 'thread_id' is required");
-        if (!resolved.content) return ok("❌ Error: 'content' (reply body) is required");
-        const thread = await messaging.reply({ thread_id: resolved.thread_id, from: resolved.from, content: resolved.content, requires_response: resolved.requires_response || false, tags: resolved.tags });
-        return ok(`Reply sent. Thread updated: ${thread.id}`);
-      } catch (err: any) {
-        const msg = err?.message || String(err);
-        logger.error({ err: msg }, "message.reply failed");
-        return ok(`❌ Error: ${msg}`);
-      }
+      const resolved = withCallerIdentity(args);
+      if (!resolved.from && resolved.agent_id) resolved.from = resolved.agent_id;
+      if (!resolved.thread_id) return ok("❌ Error: 'thread_id' is required");
+      if (!resolved.content) return ok("❌ Error: 'content' (reply body) is required");
+      if (!resolved.from) return ok("❌ Error: 'from' (sender agent ID) is required — caller identity not available");
+      const thread = await messaging.reply({ thread_id: resolved.thread_id, from: resolved.from, content: resolved.content, requires_response: resolved.requires_response || false, tags: resolved.tags });
+      return ok(`Reply sent. Thread updated: ${thread.id}`);
     };
     sessionToolImpls["message.reply"] = messageReply;
     sessionServer.registerTool("message.reply", { description: "Reply to an existing message thread. Use to continue a conversation.", inputSchema: z.object({ thread_id: z.string().describe("Thread ID to reply to"), from: z.string().describe("Your agent ID"), content: z.string().describe("Reply content"), requires_response: z.boolean().optional().describe("Whether a response is expected"), tags: z.array(z.string()).optional().describe("Tags for categorization") }) }, messageReply);
@@ -387,6 +375,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     const messageEscalate = async (args: any): Promise<ToolResult> => {
       const resolved = withCallerIdentity(args);
+      if (!resolved.from && resolved.agent_id) resolved.from = resolved.agent_id;
       const escalation = await messaging.escalate({ thread_id: resolved.thread_id, from: resolved.from, to: resolved.to, reason: resolved.reason });
       return ok(`Escalated to ${resolved.to}. Escalation ID: ${escalation.id}`);
     };
@@ -449,7 +438,10 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     // === MEETING GOVERNANCE TOOLS ===
     const meetingPropose = async (args: any): Promise<ToolResult> => {
       const proposal = await meetings.propose({ proposer: args.proposer, title: args.title, reason: args.reason, urgency: args.urgency || "P3" });
-      return ok(`Meeting proposed: ${proposal.id}\nVotes needed: ${proposal.required_votes}/${getCoreStaffIds().length}\nDeadline: ${new Date(proposal.voting_deadline).toISOString()}`);
+      const warn = (proposal.notification_failures && proposal.notification_failures.length > 0)
+        ? `\n\n⚠️ Notifications failed for: ${proposal.notification_failures.join(", ")}. These agents will NOT see this proposal and cannot vote. Quorum may be unachievable.`
+        : "";
+      return ok(`Meeting proposed: ${proposal.id}\nVotes needed: ${proposal.required_votes}/${getCoreStaffIds().length}\nDeadline: ${new Date(proposal.voting_deadline).toISOString()}${warn}`);
     };
     sessionToolImpls["meeting.propose"] = meetingPropose;
     sessionServer.registerTool("meeting.propose", { description: "Propose a new board meeting with title, reason, and urgency. Triggers voting process.", inputSchema: z.object({ proposer: z.string().describe("Agent ID proposing the meeting"), title: z.string().describe("Meeting title"), reason: z.string().describe("Why this meeting is needed"), urgency: z.enum(["P1", "P2", "P3", "P4"]).optional().describe("Meeting urgency (default: P3)") }) }, meetingPropose);
@@ -588,17 +580,11 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       if (!callerAgentId || callerAgentId !== "ceo-strategic") {
         throw new Error("boardmeeting.run requires CEO identity");
       }
-      try {
-        const meeting = await runFullBoardMeeting(args.objective);
-        if (!meeting) return ok("❌ Error: Board meeting engine returned null");
-        const turns = meeting.turns?.length ?? 0;
-        const reportPreview = meeting.report ? meeting.report.slice(0, 500) : "No report generated.";
-        return ok(`✅ Board meeting completed: ${meeting.id}\nTurns: ${turns}\nStatus: ${meeting.status}${args.objective ? `\nObjective: ${args.objective}` : ""}\n\n${reportPreview}${meeting.report && meeting.report.length > 500 ? "\n\n[...report truncated]" : ""}`);
-      } catch (err: any) {
-        const msg = err?.message || String(err);
-        logger.error({ err: msg }, "Failed to run board meeting");
-        return ok(`❌ Failed to run board meeting: ${msg}`);
-      }
+      const meeting = await runFullBoardMeeting(args.objective);
+      if (!meeting) throw new Error("Board meeting engine returned null");
+      const turns = meeting.turns?.length ?? 0;
+      const reportPreview = meeting.report ? meeting.report.slice(0, 500) : "No report generated.";
+      return ok(`✅ Board meeting completed: ${meeting.id}\nTurns: ${turns}\nStatus: ${meeting.status}${args.objective ? `\nObjective: ${args.objective}` : ""}\n\n${reportPreview}${meeting.report && meeting.report.length > 500 ? "\n\n[...report truncated]" : ""}`);
     };
     sessionToolImpls["boardmeeting.run"] = boardmeetingRun;
     sessionServer.registerTool("boardmeeting.run", {
@@ -1039,13 +1025,15 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     if (url.pathname === "/mcp" || url.pathname === "/mcp/") {
       if (req.method === "GET") {
-        // SSE connection — create a new session
         if (sseTransports.size >= MAX_SSE_SESSIONS) {
           res.writeHead(503, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
           res.end("Too Many Sessions");
           return;
         }
         const agentId = url.searchParams.get("agentId") || undefined;
+
+        // SSE connection — deprecated, use WS transport instead
+        logger.warn({ agentId }, "SSE transport is deprecated — migrate to WebSocket (ws://127.0.0.1:3001/ws)");
 
         if (agentId) {
           const coreStaffIds = getCoreStaffIds();
@@ -1128,6 +1116,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
               const parsed = JSON.parse(body);
               if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
                 if ("__proto__" in parsed) delete (parsed as any).__proto__;
+                if ("constructor" in parsed) delete (parsed as any).constructor;
               }
               await transport.handlePostMessage(req, res, parsed);
             } catch {
@@ -1163,13 +1152,13 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(MCP_PORT, "127.0.0.1", () => {
-      logger.info({ port: MCP_PORT }, "Strategos MCP HTTP server running");
+      logger.info({ port: MCP_PORT }, "Operant MCP HTTP server running");
       resolve();
     }).on("error", reject);
 });
-  httpServer.headersTimeout = 10_000;
-  httpServer.requestTimeout = 15_000;
-  httpServer.timeout = 30_000;
+  httpServer.headersTimeout = 300_000;    // 5 min
+  httpServer.requestTimeout = 300_000;    // 5 min (SSE/WebSocket — not REST)
+  httpServer.timeout = 1_800_000;          // 30 min
   httpServer.on("clientError", (err, socket) => { socket.destroy(); });
 
   // Also connect stdio transport if MCP_STDIO=1 (for direct CLI usage)
@@ -1180,7 +1169,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     Object.assign(toolImpls, stdioTools);
     const stdioTransport = new StdioServerTransport();
     await stdioServer.connect(stdioTransport);
-    logger.info("Strategos MCP stdio transport connected");
+    logger.info("Operant MCP stdio transport connected");
   }
 
   const executor: ToolExecutor = {
@@ -1196,7 +1185,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     if (stdioServer) {
       await stdioServer.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "shutdown stdio close error"));
     }
-    logger.info("Strategos MCP server shut down");
+    logger.info("Operant MCP server shut down");
   };
 
 

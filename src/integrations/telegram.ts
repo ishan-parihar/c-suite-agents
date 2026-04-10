@@ -1,7 +1,7 @@
 import { Telegraf, Markup } from "telegraf";
 import { logger } from "../logger.js";
 import { cfg, getConfig } from "../config.js";
-import type { StrategosRuntime } from "../types.js";
+import type { OperantRuntime } from "../types.js";
 import { getOrgChart, getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { getMeetingGovernance } from "../organic/meetings.js";
@@ -37,6 +37,7 @@ function escapeHtmlAttr(text: string): string {
 /**
  * Converts markdown to Telegram-compatible HTML.
  * Follows openclaw's approach: markdown → HTML with <b>, <i>, <s>, <code>, <pre><code>, <a>, <blockquote>.
+ * Hardened to handle edge cases and always produce valid Telegram HTML.
  */
 function markdownToTelegramHtml(md: string): string {
   let result = "";
@@ -57,14 +58,51 @@ function markdownToTelegramHtml(md: string): string {
   const formatInline = (text: string): string => {
     let t = escapeHtml(text);
     if (t.length > 4096) t = t.slice(0, 4096);
-    t = t.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
-    t = t.replace(/\*\*\*(.+?)\*\*\*/g, (_m, content) => `<b><i>${content}</i></b>`);
-    t = t.replace(/\*\*(.+?)\*\*/g, (_m, content) => `<b>${content}</b>`);
-    t = t.replace(/__(.+?)__/g, (_m, content) => `<b>${content}</b>`);
-    t = t.replace(/\*(.+?)\*/g, (_m, content) => `<i>${content}</i>`);
-    t = t.replace(/_(.+?)_/g, (_m, content) => `<i>${content}</i>`);
-    t = t.replace(/~~(.+?)~~/g, (_m, content) => `<s>${content}</s>`);
-    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => `<a href="${escapeHtmlAttr(url)}">${text}</a>`);
+
+    t = t.replace(/(`+)([^`]+)\1/g, (_m, _backticks, code) => {
+      const trimmed = code.trim();
+      if (trimmed.length === 0) return _m;
+      return `<code>${trimmed}</code>`;
+    });
+
+    t = t.replace(/\*\*\*(.+?)\*\*\*/g, (_m, content) => {
+      if (content.trim().length === 0) return _m;
+      return `<b><i>${content}</i></b>`;
+    });
+    t = t.replace(/___(.+?)___/g, (_m, content) => {
+      if (content.trim().length === 0) return _m;
+      return `<b><i>${content}</i></b>`;
+    });
+
+    t = t.replace(/\*\*(.+?)\*\*/g, (_m, content) => {
+      if (content.trim().length === 0) return _m;
+      return `<b>${content}</b>`;
+    });
+    t = t.replace(/__(.+?)__/g, (_m, content) => {
+      if (content.trim().length === 0) return _m;
+      return `<b>${content}</b>`;
+    });
+
+    t = t.replace(/\*(.+?)\*/g, (_m, content) => {
+      if (content.trim().length === 0) return _m;
+      return `<i>${content}</i>`;
+    });
+    t = t.replace(/(?<![a-zA-Z0-9_])_(.+?)_(?![a-zA-Z0-9_])/g, (_m, content) => {
+      if (content.trim().length === 0) return _m;
+      return `<i>${content}</i>`;
+    });
+
+    t = t.replace(/~~(.+?)~~/g, (_m, content) => {
+      if (content.trim().length === 0) return _m;
+      return `<s>${content}</s>`;
+    });
+
+    t = t.replace(/\[([^\]]+)\]\(([^)]*(?:\([^)]*\))*[^)]*)\)/g, (_m, linkText, url) => {
+      const trimmedUrl = url.trim();
+      if (trimmedUrl.length === 0) return linkText;
+      return `<a href="${escapeHtmlAttr(trimmedUrl)}">${linkText}</a>`;
+    });
+
     return t;
   };
 
@@ -89,9 +127,9 @@ function markdownToTelegramHtml(md: string): string {
       continue;
     }
 
-    if (line.startsWith("> ")) {
+    if (line.startsWith(">")) {
       inBlockquote = true;
-      blockquoteLines.push(formatInline(line.slice(2)));
+      blockquoteLines.push(formatInline(line.replace(/^>+\s*/, "")));
       continue;
     } else if (inBlockquote) {
       flushBlockquote();
@@ -120,7 +158,74 @@ function markdownToTelegramHtml(md: string): string {
     result += `<pre><code>${escapeHtml(codeBlockContent.join("\n"))}</code></pre>\n`;
   }
 
-  return result.trim();
+  result = validateAndFixHtmlTags(result);
+  result = sanitizeHtmlEntities(result);
+
+  return result.trim() || " ";
+}
+
+const TELEGRAM_ALLOWED_TAGS = new Set(["b", "i", "u", "s", "code", "pre", "a", "blockquote"]);
+
+function validateAndFixHtmlTags(html: string): string {
+  const tagPattern = /<\/?([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>/g;
+  const openStack: string[] = [];
+  const orphanedClose: { index: number; length: number }[] = [];
+  const tagPositions: { index: number; length: number; name: string; isClose: boolean }[] = [];
+
+  let match: RegExpExecArray | null;
+  tagPattern.lastIndex = 0;
+  while ((match = tagPattern.exec(html)) !== null) {
+    const fullTag = match[0];
+    const tagName = match[1].toLowerCase();
+    const isClose = fullTag.startsWith("</");
+    const isSelfClosing = !isClose && fullTag.trimEnd().endsWith("/>");
+
+    if (TELEGRAM_ALLOWED_TAGS.has(tagName) && !isSelfClosing) {
+      tagPositions.push({ index: match.index, length: fullTag.length, name: tagName, isClose });
+    }
+  }
+
+  for (const pos of tagPositions) {
+    if (!pos.isClose) {
+      openStack.push(pos.name);
+    } else {
+      let found = false;
+      for (let i = openStack.length - 1; i >= 0; i--) {
+        if (openStack[i] === pos.name) {
+          openStack.splice(i, 1);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        orphanedClose.push({ index: pos.index, length: pos.length });
+      }
+    }
+  }
+
+  orphanedClose.sort((a, b) => b.index - a.index);
+  let fixedHtml = html;
+  for (const orphan of orphanedClose) {
+    fixedHtml = fixedHtml.slice(0, orphan.index) + fixedHtml.slice(orphan.index + orphan.length);
+  }
+
+  const closingTags = [...openStack].reverse().map((name) => `</${name}>`);
+  if (closingTags.length > 0) {
+    fixedHtml += closingTags.join("");
+  }
+
+  return fixedHtml;
+}
+
+function sanitizeHtmlEntities(html: string): string {
+  html = html.replace(/&(?!(amp|lt|gt|quot|#\d+|#x[0-9a-fA-F]+);)/g, "&amp;");
+
+  html = html.replace(/href="([^"]*)"/g, (_match, url: string) => {
+    const safeUrl = url.replace(/&(?!(amp|lt|gt|quot|#\d+|#x[0-9a-fA-F]+);)/g, "&amp;");
+    return `href="${safeUrl}"`;
+  });
+
+  return html;
 }
 
 const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
@@ -295,8 +400,8 @@ async function sendTelegramHtmlChunks(
   }
 }
 
-const STATE_FILE = path.join(os.homedir(), ".strategos", "state", "telegram-routes.json");
-const SHUTDOWN_TS_FILE = path.join(os.homedir(), ".strategos", "state", "shutdown-timestamp.json");
+const STATE_FILE = path.join(os.homedir(), ".operant", "state", "telegram-routes.json");
+const SHUTDOWN_TS_FILE = path.join(os.homedir(), ".operant", "state", "shutdown-timestamp.json");
 
 // ── Module-level routing state (lifted from startTelegram for board meeting access) ──
 
@@ -413,10 +518,10 @@ function readShutdownTimestamp(): number | null {
 
 async function sendCommandsPage(ctx: any, page: number, totalPages: number) {
   const start = (page - 1) * COMMANDS_PER_PAGE;
-  const end = Math.min(start + COMMANDS_PER_PAGE, STRATEGOS_COMMANDS.length);
-  const pageCommands = STRATEGOS_COMMANDS.slice(start, end);
+  const end = Math.min(start + COMMANDS_PER_PAGE, OPERANT_COMMANDS.length);
+  const pageCommands = OPERANT_COMMANDS.slice(start, end);
 
-  const lines = [`<b>📋 Strategos Commands</b> (Page ${page}/${totalPages})\n`];
+  const lines = [`<b>📋 Operant Commands</b> (Page ${page}/${totalPages})\n`];
   for (let i = 0; i < pageCommands.length; i++) {
     const cmd = pageCommands[i];
     lines.push(`<b>/${escapeHtml(cmd.command)}</b> — ${escapeHtml(cmd.description)}`);
@@ -447,7 +552,7 @@ function formatDowntime(ms: number): string {
   return `${hours}h ${remainingMin}m`;
 }
 
-const STRATEGOS_COMMANDS = [
+const OPERANT_COMMANDS = [
   { command: "start", description: "Welcome message" },
   { command: "agent", description: "Pick an agent from inline menu" },
   { command: "meeting", description: "Start/end board meeting" },
@@ -476,7 +581,7 @@ const COMMANDS_PER_PAGE = 10;
 let boardMeetingActive = false;
 let previousRoute: ChatRoute | null = null;
 
-export async function startTelegram(rt: StrategosRuntime) {
+export async function startTelegram(rt: OperantRuntime) {
   if (telegramBot) {
     logger.warn("Telegram bot already running, ignoring duplicate start");
     return telegramBot;
@@ -532,7 +637,7 @@ export async function startTelegram(rt: StrategosRuntime) {
           .filter(Boolean)
           .join("\n");
         
-        const message = `<b>👋 I'm Strategos, your CEO agent.</b>
+        const message = `<b>👋 I'm Operant, your CEO agent.</b>
 
 <b>Core Staff:</b>
 ${staffList}
@@ -653,7 +758,7 @@ The meeting will be processed through the board meeting engine with turn-based d
         if (args[0].toLowerCase() === "end") {
           setRoute(chatId, { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
           persistState();
-          await ctx.reply(`<b>🛑 Meeting ended. Back to Strategos.</b>`, { parse_mode: "HTML" });
+          await ctx.reply(`<b>🛑 Meeting ended. Back to Operant.</b>`, { parse_mode: "HTML" });
           return;
         }
         const wanted = args.map((a: string) => a.toLowerCase());
@@ -909,7 +1014,7 @@ Searches across messages, tasks, and stored memories for the CEO agent.`, { pars
     // /help command
     bot.command("help", async (ctx) => {
       try {
-        const helpText = `<b>📋 Strategos Help</b>
+        const helpText = `<b>📋 Operant Help</b>
 
 <b>Organization Commands:</b>
 /org — Organization chart
@@ -1582,7 +1687,7 @@ Usage:
         if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
         const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
         let page = parseInt(args[0], 10) || 1;
-        const totalPages = Math.ceil(STRATEGOS_COMMANDS.length / COMMANDS_PER_PAGE);
+        const totalPages = Math.ceil(OPERANT_COMMANDS.length / COMMANDS_PER_PAGE);
         if (page < 1) page = 1;
         if (page > totalPages) page = totalPages;
 
@@ -1664,7 +1769,7 @@ Usage:
             memoryStatus = memoryCount > 0 ? `🟢 Active (${memoryCount} entries)` : "🟡 Empty";
           } catch { memoryStatus = "🔴 Error"; }
 
-          await ctx.reply(`<b>✅ Strategos System Status</b>
+          await ctx.reply(`<b>✅ Operant System Status</b>
 
 <b>Active agent:</b> ${activeAgentDisplay}
 
@@ -1775,7 +1880,7 @@ ${agentLines}`, { parse_mode: "HTML" });
       }
     });
 
-    // /restart — Graceful restart of the Strategos daemon
+    // /restart — Graceful restart of the Operant daemon
     bot.command("restart", async (ctx) => {
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
 
@@ -1785,7 +1890,7 @@ ${agentLines}`, { parse_mode: "HTML" });
         recordShutdownTimestamp();
 
         // Reply and wait for it to be sent
-        await ctx.reply(`<b>🔄 Restarting Strategos...</b>
+        await ctx.reply(`<b>🔄 Restarting Operant...</b>
 
 Saving state and restarting. I'll be back in a moment.`, { parse_mode: "HTML" });
 
@@ -1814,7 +1919,7 @@ Saving state and restarting. I'll be back in a moment.`, { parse_mode: "HTML" })
 
         const runtime = getNativeRuntime();
         const sessions = runtime.listSessions();
-        const agentSession = sessions.find(s => s.agent_id === agentId || s.agentId === agentId);
+        const agentSession = sessions.find(s => s.agentId === agentId);
 
         if (!agentSession) {
           await ctx.reply(`<b>ℹ️ No active session to compact</b>
@@ -1823,7 +1928,7 @@ Send a message first to create a session, then try again.`, { parse_mode: "HTML"
           return;
         }
 
-        const sessionId = agentSession.session_id || agentSession.sessionId;
+        const sessionId = agentSession.sessionId;
         await runtime.compactSession(sessionId);
 
         await ctx.reply(`<b>🗜️ Session Compacted</b>
@@ -1876,7 +1981,7 @@ Previous session cleared. Ready for a fresh conversation.`, { parse_mode: "HTML"
 
         const runtime = getNativeRuntime();
         const sessions = runtime.listSessions();
-        const agentSession = sessions.find(s => s.agent_id === agentId || s.agentId === agentId);
+        const agentSession = sessions.find(s => s.agentId === agentId);
 
         if (!agentSession) {
           await ctx.reply(`<b>ℹ️ No active run to stop</b>
@@ -1885,7 +1990,7 @@ The agent isn't currently processing a request.`, { parse_mode: "HTML" });
           return;
         }
 
-        const sessionId = agentSession.session_id || agentSession.sessionId;
+        const sessionId = agentSession.sessionId;
         // Clear the session history to effectively stop any ongoing context
         runtime.clearSession(sessionId);
 
@@ -2069,9 +2174,9 @@ Usage: /model set [model_name]
 <i>Note: Model switching requires editing the config file.</i>
 
 <b>To change the model:</b>
-1. Run: <code>strategos configure --section llm</code>
+1. Run: <code>operant configure --section llm</code>
 2. Select your desired model
-3. Or edit <code>~/.strategos/config.json</code> directly
+3. Or edit <code>~/.operant/config.json</code> directly
 
 <b>Environment override:</b>
 Set <code>AGENT_LLM_MODEL</code> in your .env file.`, { parse_mode: "HTML" });
@@ -2084,7 +2189,7 @@ Requested: <code>${escapeHtml(modelName)}</code>
 <i>Model switching requires a config change.</i>
 
 <b>To apply:</b>
-1. Run: <code>strategos configure --section llm</code>
+1. Run: <code>operant configure --section llm</code>
 2. Or set <code>AGENT_LLM_MODEL=${escapeHtml(modelName)}</code> in .env
 3. Restart: <code>/restart</code>`, { parse_mode: "HTML" });
           return;
@@ -2190,6 +2295,7 @@ Example:
       await ctx.sendChatAction("typing");
 
       try {
+        const chatId = ctx.chat.id.toString();
         const agentArg = args[0].toLowerCase();
         const taskText = args.slice(1).join(" ");
 
@@ -2228,7 +2334,7 @@ Example:
         let agentReply = "(no reply)";
 
         try {
-          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", chatId });
           const result = await runtime.sendMessage(sid, taskText, nativeAgentId);
           agentReply = result.text || "(empty response)";
         } catch (err: any) {
@@ -2367,7 +2473,7 @@ Escalates the message to the CEO with P1 priority.`, { parse_mode: "HTML" });
         const runtime = getNativeRuntime();
         const ceoNativeId = AGENT_ID_MAP["ceo-strategic"] || "ceo-strategic";
         try {
-          const ceoSid = await runtime.getOrCreateRuntimeSession(ceoNativeId, { mode: "message" });
+          const ceoSid = await runtime.getOrCreateRuntimeSession(ceoNativeId, { mode: "message", chatId });
           await runtime.sendMessage(ceoSid, `🚨 ESCALATION from ${activeAgentName}:\n\n${escalationMessage}`, ceoNativeId);
         } catch (err: any) {
           logger.warn({ err: err.message }, "Escalation: direct CEO runtime notify failed — messaging send succeeded");
@@ -2446,7 +2552,7 @@ Example:
         let agentReply = "(no reply)";
 
         try {
-          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", chatId });
           const result = await runtime.sendMessage(sid, messageText, nativeAgentId);
           agentReply = result.text || "(empty response)";
         } catch (err: any) {
@@ -2592,7 +2698,7 @@ Example:
               let reply = "(no reply)";
               let sid: string | undefined;
               try {
-                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", chatId });
                 logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending media delta to native runtime...");
                 const result = await runtime.sendMessage(sid, delta, nativeAgentId);
                 logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
@@ -2754,7 +2860,7 @@ Example:
               let reply = "(no reply)";
               let sid: string | undefined;
               try {
-                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", chatId });
                 logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending delta to native runtime...");
                 const result = await runtime.sendMessage(sid, delta, nativeAgentId);
                 logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
@@ -2973,7 +3079,7 @@ Example:
         return;
       }
       const page = parseInt(ctx.match[1], 10);
-      const totalPages = Math.ceil(STRATEGOS_COMMANDS.length / COMMANDS_PER_PAGE);
+      const totalPages = Math.ceil(OPERANT_COMMANDS.length / COMMANDS_PER_PAGE);
       if (page < 1 || page > totalPages) {
         await ctx.answerCbQuery("Invalid page");
         return;
@@ -2981,10 +3087,10 @@ Example:
       await ctx.answerCbQuery();
       try {
         const start = (page - 1) * COMMANDS_PER_PAGE;
-        const end = Math.min(start + COMMANDS_PER_PAGE, STRATEGOS_COMMANDS.length);
-        const pageCommands = STRATEGOS_COMMANDS.slice(start, end);
+        const end = Math.min(start + COMMANDS_PER_PAGE, OPERANT_COMMANDS.length);
+        const pageCommands = OPERANT_COMMANDS.slice(start, end);
 
-        const lines = [`<b>📋 Strategos Commands</b> (Page ${page}/${totalPages})\n`];
+        const lines = [`<b>📋 Operant Commands</b> (Page ${page}/${totalPages})\n`];
         for (let i = 0; i < pageCommands.length; i++) {
           const cmd = pageCommands[i];
           lines.push(`<b>/${escapeHtml(cmd.command)}</b> — ${escapeHtml(cmd.description)}`);
@@ -3227,8 +3333,10 @@ export async function probeTelegram(timeoutMs = 5000): Promise<TelegramProbeResu
     return { ok: false, elapsedMs: Date.now() - started, error: "bot not initialized" };
   }
   try {
+    const mePromise = telegramBot.telegram.getMe();
+    mePromise.catch(() => {});
     const me = await Promise.race([
-      telegramBot.telegram.getMe(),
+      mePromise,
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("probe timeout")), timeoutMs)
       ),

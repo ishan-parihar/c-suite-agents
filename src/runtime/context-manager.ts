@@ -203,7 +203,7 @@ export class ContextManager {
           sessionId,
           messages: msgs,
           toolCalls: tcs,
-          systemPrompt: systemMsg.content,
+          systemPrompt: systemMsg.content ?? "",
           systemPromptTokens: systemMsg.tokenEstimate || 0,
           totalTokens,
           createdAt: Date.now(),
@@ -614,7 +614,7 @@ export class ContextManager {
       const topics = turns
         .filter(m => m.role === "user" && hasMeaningfulText(m.content))
         .slice(0, 3)
-        .map(m => m.content.slice(0, 120).replace(/\n/g, " "));
+        .map(m => (m.content ?? "").slice(0, 120).replace(/\n/g, " "));
 
       if (topics.length > 0) {
         lines.push(`Key topics: ${topics.join(" → ")}`);
@@ -623,7 +623,7 @@ export class ContextManager {
       // Final state before compaction
       const lastAssistant = [...turns].reverse().find(m => m.role === "assistant");
       if (lastAssistant) {
-        lines.push(`Last state: ${lastAssistant.content.slice(0, 150).replace(/\n/g, " ")}`);
+        lines.push(`Last state: ${(lastAssistant.content ?? "").slice(0, 150).replace(/\n/g, " ")}`);
       }
     }
 
@@ -847,8 +847,10 @@ export class ContextManager {
     this.sessionAccessOrder.push(sessionId);
 
     const maxSessions = this.config.maxSessions ?? MAX_SESSIONS_LRU;
-    if (this.sessions.size > maxSessions) {
+    while (this.sessions.size > maxSessions) {
       this.evictOldest();
+      // Failsafe in case sessionAccessOrder is empty
+      if (this.sessionAccessOrder.length === 0) break;
     }
   }
 
@@ -901,7 +903,7 @@ export class ContextManager {
  */
 export function isOversizedForSummary(msg: ChatMessage, maxTokens: number): boolean {
   const threshold = maxTokens * 0.6;
-  const tokens = msg.tokenEstimate ?? estimateTokens(msg.content);
+  const tokens = msg.tokenEstimate ?? estimateTokens(msg.content ?? "");
   return tokens > threshold;
 }
 
@@ -922,7 +924,8 @@ export function estimateTokens(text: string): number {
  * Filters out heartbeat acks, silent replies, and empty messages.
  * (OpenClaw: hasMeaningfulText pattern)
  */
-export function hasMeaningfulText(text: string): boolean {
+export function hasMeaningfulText(text: string | null): boolean {
+  if (text === null) return false;
   const trimmed = text.trim();
   if (!trimmed) return false;
 

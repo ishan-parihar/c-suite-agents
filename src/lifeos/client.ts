@@ -1,9 +1,9 @@
-// LifeOS MCP Client — Full Suite Integration
-// All LifeOS databases and tools accessible to all core staff agents
+// Operant MCP Client — Full Suite Integration
+// All Operant databases and tools accessible to all core staff agents
 
 import { logger } from "../logger.js";
 
-export type LifeOSQuery = {
+export type OperantQuery = {
   database: string;
   filter_property?: string;
   filter_value?: string;
@@ -14,32 +14,32 @@ export type LifeOSQuery = {
   return_properties?: string[];
 };
 
-export type LifeOSCreate = {
+export type OperantCreate = {
   database: string;
   name: string;
   properties: Record<string, unknown>;
 };
 
-export type LifeOSUpdate = {
+export type OperantUpdate = {
   database: string;
   page_id: string;
   properties: Record<string, unknown>;
 };
 
-export type LifeOSFind = {
+export type OperantFind = {
   database: string;
   search: string;
   limit?: number;
   return_properties?: string[];
 };
 
-export type LifeOSArchive = {
+export type OperantArchive = {
   database: string;
   page_id: string;
 };
 
-// All LifeOS databases
-export const LIFEOS_DATABASES = [
+// All Operant databases
+export const OPERANT_DATABASES = [
   // Strategic
   "annual_goals", "quarterly_goals", "projects", "campaigns", "content_pipeline",
   "directives_risk_log", "opportunities_strengths", "people", "quarters", "years",
@@ -53,32 +53,32 @@ export const LIFEOS_DATABASES = [
   "financial_log"
 ] as const;
 
-export type LifeOSDatabase = typeof LIFEOS_DATABASES[number];
+export type OperantDatabase = typeof OPERANT_DATABASES[number];
 
-// Simulated LifeOS tool calls (will integrate with actual LifeOS MCP server)
-export class LifeOSClient {
-  async query(params: LifeOSQuery): Promise<any[]> {
-    logger.debug({ database: params.database, filter: params.filter_property }, "LifeOS query");
-    // Placeholder — integrates with actual LifeOS MCP server
+// Simulated Operant tool calls (will integrate with actual Operant MCP server)
+export class OperantClient {
+  async query(params: OperantQuery): Promise<any[]> {
+    logger.debug({ database: params.database, filter: params.filter_property }, "Operant query");
+    // Placeholder — integrates with actual Operant MCP server
     return [];
   }
 
-  async create(params: LifeOSCreate): Promise<{ page_id: string }> {
-    logger.debug({ database: params.database, name: params.name }, "LifeOS create");
+  async create(params: OperantCreate): Promise<{ page_id: string }> {
+    logger.debug({ database: params.database, name: params.name }, "Operant create");
     return { page_id: `new-${Date.now()}` };
   }
 
-  async update(params: LifeOSUpdate): Promise<void> {
-    logger.debug({ database: params.database, page_id: params.page_id }, "LifeOS update");
+  async update(params: OperantUpdate): Promise<void> {
+    logger.debug({ database: params.database, page_id: params.page_id }, "Operant update");
   }
 
-  async find(params: LifeOSFind): Promise<any[]> {
-    logger.debug({ database: params.database, search: params.search }, "LifeOS find");
+  async find(params: OperantFind): Promise<any[]> {
+    logger.debug({ database: params.database, search: params.search }, "Operant find");
     return [];
   }
 
-  async archive(params: LifeOSArchive): Promise<void> {
-    logger.debug({ database: params.database, page_id: params.page_id }, "LifeOS archive");
+  async archive(params: OperantArchive): Promise<void> {
+    logger.debug({ database: params.database, page_id: params.page_id }, "Operant archive");
   }
 
   // === STRATEGIC DATABASES ===
@@ -126,7 +126,7 @@ export class LifeOSClient {
   // === PRODUCTIVITY DATABASES ===
   
   async getActivityLog(date_from?: string, date_to?: string, category?: string) {
-    const params: LifeOSQuery = { database: "activity_log", limit: 100 };
+    const params: OperantQuery = { database: "activity_log", limit: 100 };
     if (category) params.filter_property = "Activity Type";
     if (category) params.filter_value = category;
     return this.query(params);
@@ -137,7 +137,7 @@ export class LifeOSClient {
   }
   
   async getDays(date_from?: string, date_to?: string, status?: string) {
-    const params: LifeOSQuery = { database: "days", limit: 100 };
+    const params: OperantQuery = { database: "days", limit: 100 };
     if (status) { params.filter_property = "Status"; params.filter_value = status; }
     return this.query(params);
   }
@@ -151,13 +151,14 @@ export class LifeOSClient {
   }
   
   async getTasks(status?: string, overdue_only?: boolean) {
-    const params: LifeOSQuery = { database: "tasks", limit: 100 };
+    const params: OperantQuery = { database: "tasks", limit: 100 };
     if (status) { params.filter_property = "Status"; params.filter_value = status; }
+    if (overdue_only) { params.filter_property = "Overdue"; params.filter_value = "true"; }
     return this.query(params);
   }
   
   async getReports(agent?: string) {
-    const params: LifeOSQuery = { database: "reports", limit: 50 };
+    const params: OperantQuery = { database: "reports", limit: 50 };
     if (agent) params.filter_property = "Agent";
     return this.query(params);
   }
@@ -185,7 +186,7 @@ export class LifeOSClient {
   // === FINANCIAL DATABASES ===
   
   async getFinancialLog(date_from?: string, date_to?: string, category?: string) {
-    const params: LifeOSQuery = { database: "financial_log", limit: 100 };
+    const params: OperantQuery = { database: "financial_log", limit: 100 };
     if (category) { params.filter_property = "Category"; params.filter_value = category; }
     return this.query(params);
   }
@@ -194,7 +195,7 @@ export class LifeOSClient {
   
   async getActiveProjects() { return this.getProjects("Active"); }
   async getActiveTasks() { return this.getTasks("Active"); }
-  async getOverdueTasks() { return this.getTasks("Active"); }
+  async getOverdueTasks() { return this.getTasks(undefined, true); }
   async getActiveCampaigns() { return this.getCampaigns("Active"); }
   async getActiveQuarterlyGoals() { return this.getQuarterlyGoals("Active"); }
   async getActiveAnnualGoals() { return this.getAnnualGoals("Active"); }
@@ -204,9 +205,9 @@ export class LifeOSClient {
 }
 
 // Singleton instance
-export const lifeos = new LifeOSClient();
+export const operant = new OperantClient();
 
 // Export all database names for tool generation
 export function getAllDatabases(): string[] {
-  return [...LIFEOS_DATABASES];
+  return [...OPERANT_DATABASES];
 }

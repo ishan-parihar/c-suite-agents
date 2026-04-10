@@ -1,12 +1,12 @@
-# Strategos Setup Guide
+# Operant Setup Guide
 
 ## Quick Start (Production)
 
-### 1. Install Strategos
+### 1. Install Operant
 
 ```bash
 # Clone or copy the repository
-cd /path/to/strategos
+cd /path/to/operant
 
 # Run installation script (requires sudo)
 sudo ./install.sh
@@ -20,7 +20,7 @@ sudo ./install.sh
 4. Edit the environment file:
 
 ```bash
-sudo nano /opt/strategos/.env
+sudo nano /opt/operant/.env
 ```
 
 Update these values:
@@ -32,18 +32,18 @@ TELEGRAM_CHAT_ID=123456789
 ### 3. Start the Service
 
 ```bash
-sudo systemctl start strategos
-sudo systemctl enable strategos  # Start on boot
+sudo systemctl start operant
+sudo systemctl enable operant  # Start on boot
 ```
 
 ### 4. Verify Installation
 
 ```bash
 # Check service status
-sudo systemctl status strategos
+sudo systemctl status operant
 
 # View logs
-sudo journalctl -u strategos -f
+sudo journalctl -u operant -f
 
 # Test in Telegram
 # Send /start to your bot
@@ -118,11 +118,11 @@ npm start
 | `KANBAN_DB` | `kanban.db` | SQLite database for Kanban |
 | `MESSAGES_DB` | `messages.db` | SQLite database for messages |
 | `LOG_LEVEL` | `info` | Logging level (debug, info, warn, error) |
-| `LOG_FILE` | `strategos.log` | Log file path |
+| `LOG_FILE` | `operant.log` | Log file path |
 
 ### Systemd Service Options
 
-Edit `/etc/systemd/system/strategos.service`:
+Edit `/etc/systemd/system/operant.service`:
 
 ```ini
 [Service]
@@ -142,28 +142,28 @@ RestartSec=30
 
 ```bash
 # Start service
-sudo systemctl start strategos
+sudo systemctl start operant
 
 # Stop service
-sudo systemctl stop strategos
+sudo systemctl stop operant
 
 # Restart service
-sudo systemctl restart strategos
+sudo systemctl restart operant
 
 # Enable on boot
-sudo systemctl enable strategos
+sudo systemctl enable operant
 
 # Disable on boot
-sudo systemctl disable strategos
+sudo systemctl disable operant
 
 # View status
-sudo systemctl status strategos
+sudo systemctl status operant
 
 # View logs
-sudo journalctl -u strategos -f
+sudo journalctl -u operant -f
 
 # View recent logs
-sudo journalctl -u strategos -n 100
+sudo journalctl -u operant -n 100
 ```
 
 ---
@@ -174,13 +174,13 @@ sudo journalctl -u strategos -n 100
 
 ```bash
 # Check logs
-sudo journalctl -u strategos -n 50
+sudo journalctl -u operant -n 50
 
 # Check environment file
-sudo cat /opt/strategos/.env
+sudo cat /opt/operant/.env
 
 # Test manually
-sudo -u strategos node /opt/strategos/build/index.js
+sudo -u operant node /opt/operant/build/index.js
 ```
 
 ### Ollama Connection Error
@@ -207,14 +207,14 @@ curl http://localhost:11434/api/tags
 
 ```bash
 # Check memory usage
-sudo systemctl status strategos
+sudo systemctl status operant
 
 # Increase memory limit
-sudo systemctl edit strategos
+sudo systemctl edit operant
 # Add: MemoryMax=4G
 
 sudo systemctl daemon-reload
-sudo systemctl restart strategos
+sudo systemctl restart operant
 ```
 
 ---
@@ -225,31 +225,31 @@ sudo systemctl restart strategos
 
 ```bash
 # Stop service
-sudo systemctl stop strategos
+sudo systemctl stop operant
 
 # Create backup
-sudo tar -czf strategos-backup-$(date +%Y%m%d).tar.gz \
-    /var/lib/strategos \
-    /opt/strategos/.env
+sudo tar -czf operant-backup-$(date +%Y%m%d).tar.gz \
+    /var/lib/operant \
+    /opt/operant/.env
 
 # Restart service
-sudo systemctl start strategos
+sudo systemctl start operant
 ```
 
 ### Restore Data
 
 ```bash
 # Stop service
-sudo systemctl stop strategos
+sudo systemctl stop operant
 
 # Extract backup
-sudo tar -xzf strategos-backup-YYYYMMDD.tar.gz -C /
+sudo tar -xzf operant-backup-YYYYMMDD.tar.gz -C /
 
 # Set permissions
-sudo chown -R strategos:strategos /var/lib/strategos
+sudo chown -R operant:operant /var/lib/operant
 
 # Restart service
-sudo systemctl start strategos
+sudo systemctl start operant
 ```
 
 ---
@@ -261,19 +261,19 @@ sudo systemctl start strategos
 sudo ./uninstall.sh
 
 # Or manually:
-sudo systemctl stop strategos
-sudo systemctl disable strategos
-sudo rm -rf /opt/strategos
-sudo rm -rf /var/lib/strategos
-sudo rm -rf /var/log/strategos
-sudo rm /etc/systemd/system/strategos.service
-sudo userdel strategos
+sudo systemctl stop operant
+sudo systemctl disable operant
+sudo rm -rf /opt/operant
+sudo rm -rf /var/lib/operant
+sudo rm -rf /var/log/operant
+sudo rm /etc/systemd/system/operant.service
+sudo userdel operant
 ```
 
 ---
 
 ## Support
 
-- Documentation: `/opt/strategos/docs/`
-- Logs: `/var/log/strategos/`
-- Data: `/var/lib/strategos/`
+- Documentation: `/opt/operant/docs/`
+- Logs: `/var/log/operant/`
+- Data: `/var/lib/operant/`

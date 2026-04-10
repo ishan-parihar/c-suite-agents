@@ -69,7 +69,7 @@ function checkNodeVersion() {
 }
 
 /**
- * Check 2: Config file exists at ~/.strategos/config.json
+ * Check 2: Config file exists at ~/.operant/config.json
  */
 function checkConfigFileExists() {
   const configPath = getConfigPath();
@@ -153,7 +153,7 @@ async function checkLlmBaseUrlReachable(baseUrl: string) {
         message,
         "",
         "Suggested fixes:",
-        "  1. Verify baseUrl is correct in ~/.strategos/config.json",
+        "  1. Verify baseUrl is correct in ~/.operant/config.json",
         "  2. Check proxy service is running (e.g., qwen-proxy on port 3000)",
         "  3. Test manually: curl -v " + baseUrl,
         "  4. Check for proxy/firewall blocking the connection",
@@ -358,17 +358,17 @@ function checkSystemdService() {
   try {
     const result = spawnSync(
       "systemctl",
-      ["is-active", "strategos"],
+      ["is-active", "operant"],
       { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
     const status = result.status === 0 && result.stdout?.trim() === "active" ? "active" : "inactive";
     if (status === "active") {
-      check("PASS", "Systemd service 'strategos' is active");
+      check("PASS", "Systemd service 'operant' is active");
     } else {
       check(
         "WARN",
-        "Systemd service 'strategos' is not running",
-        "Start with: sudo systemctl start strategos",
+        "Systemd service 'operant' is not running",
+        "Start with: sudo systemctl start operant",
       );
     }
   } catch {
@@ -450,7 +450,7 @@ function checkWizardMetadata(config: any) {
     check(
       "WARN",
       "Setup wizard has not been run yet",
-      "Run: strategos onboard  (or node build/index.js onboard)",
+      "Run: operant onboard  (or node build/index.js onboard)",
     );
   } else {
     check(
@@ -482,7 +482,7 @@ function checkMemorySystem(lancedbPath?: string) {
 function checkMcpServers(mcpConfig?: Record<string, unknown>) {
   if (!mcpConfig || Object.keys(mcpConfig).length === 0) {
     check("WARN", "No MCP servers configured",
-      "Add servers with: strategos mcp add");
+      "Add servers with: operant mcp add");
     return;
   }
 
@@ -533,7 +533,7 @@ function checkMcpServers(mcpConfig?: Record<string, unknown>) {
 
 function printResults() {
   console.log("");
-  console.log(`${BOLD}${CYAN}═══ Strategos Doctor ═══${RESET}`);
+  console.log(`${BOLD}${CYAN}═══ Operant Doctor ═══${RESET}`);
   console.log(`${CYAN}Diagnostic report${RESET}`);
   console.log("");
 

@@ -1,10 +1,10 @@
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { StrategosConfigSchema, type StrategosConfig, type ProviderDef, type ModelDef } from "./schema.js";
+import { OperantConfigSchema, type OperantConfig, type ProviderDef, type ModelDef } from "./schema.js";
 import { runMigrations } from "../cli/migrations.js";
 
-const CONFIG_DIR = path.join(os.homedir(), ".strategos");
+const CONFIG_DIR = path.join(os.homedir(), ".operant");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
 function envString(key: string, fallback: string): string {
@@ -212,21 +212,21 @@ export function getConfigPath(): string {
   return CONFIG_FILE;
 }
 
-export function loadConfig(): StrategosConfig {
+export function loadConfig(): OperantConfig {
   let fileConfig: Record<string, unknown> = {};
 
   if (fs.existsSync(CONFIG_FILE)) {
     try {
       const stat = fs.statSync(CONFIG_FILE);
       if (stat.size > 100 * 1024) {
-        console.warn(`[strategos] WARN: Config file too large (${stat.size} bytes), skipping. Falling back to defaults + .env`);
+        console.warn(`[operant] WARN: Config file too large (${stat.size} bytes), skipping. Falling back to defaults + .env`);
       } else {
         const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
         fileConfig = JSON.parse(raw) as Record<string, unknown>;
       }
     } catch (err: unknown) {
       console.error(
-        `[strategos] ERROR: Failed to parse ${CONFIG_FILE}: ${(err as Error).message}. Falling back to defaults + .env`,
+        `[operant] ERROR: Failed to parse ${CONFIG_FILE}: ${(err as Error).message}. Falling back to defaults + .env`,
       );
     }
   }
@@ -255,18 +255,18 @@ export function loadConfig(): StrategosConfig {
 
   if (migrationResult.warnings.length > 0) {
     for (const warning of migrationResult.warnings) {
-      console.warn(`[strategos] Config migration: ${warning}`);
+      console.warn(`[operant] Config migration: ${warning}`);
     }
   }
 
-  const parseResult = StrategosConfigSchema.safeParse(migrated);
+  const parseResult = OperantConfigSchema.safeParse(migrated);
 
   if (!parseResult.success) {
     const errors = parseResult.error.errors
       .map((e) => `  - ${e.path.join(".")}: ${e.message}`)
       .join("\n");
     throw new Error(
-      `Invalid Strategos config (${CONFIG_FILE}):\n${errors}`,
+      `Invalid Operant config (${CONFIG_FILE}):\n${errors}`,
     );
   }
 

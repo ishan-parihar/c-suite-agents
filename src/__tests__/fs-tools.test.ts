@@ -7,10 +7,10 @@ import { createFsWriteTool } from "../runtime/tools/fs-write";
 import { createFsEditTool } from "../runtime/tools/fs-edit";
 import { createBashTool } from "../runtime/tools/bash-exec";
 
-const workspaceBase = path.join(os.tmpdir(), ".strategos-test-home");
+const workspaceBase = path.join(os.tmpdir(), ".operant-test-home");
 
 function setupTestWorkspace() {
-  const agentDir = path.join(workspaceBase, ".strategos", "agents", "test-agent");
+  const agentDir = path.join(workspaceBase, ".operant", "agents", "test-agent");
   fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(path.join(agentDir, "MEMORY.md"), "# Memory\ntest content", "utf-8");
   process.env.HOME = workspaceBase;
@@ -68,7 +68,7 @@ describe("fs.write tool", () => {
       agent_id: "test-agent",
     });
     expect(result.content[0].text).toContain("Wrote");
-    const agentDir = path.join(workspaceBase, ".strategos", "agents", "test-agent");
+    const agentDir = path.join(workspaceBase, ".operant", "agents", "test-agent");
     expect(fs.existsSync(path.join(agentDir, "NEW_FILE.md"))).toBe(true);
     expect(fs.readFileSync(path.join(agentDir, "NEW_FILE.md"), "utf-8")).toContain("# New File");
   });
@@ -83,7 +83,7 @@ describe("fs.write tool", () => {
       append: true,
     });
     expect(result.content[0].text).toContain("Appended");
-    const agentDir = path.join(workspaceBase, ".strategos", "agents", "test-agent");
+    const agentDir = path.join(workspaceBase, ".operant", "agents", "test-agent");
     const content = fs.readFileSync(path.join(agentDir, "MEMORY.md"), "utf-8");
     expect(content).toContain("initial");
     expect(content).toContain("appended");
@@ -111,7 +111,7 @@ describe("fs.edit tool", () => {
   });
 
   test("edits file content", async () => {
-    const agentDir = path.join(workspaceBase, ".strategos", "agents", "test-agent");
+    const agentDir = path.join(workspaceBase, ".operant", "agents", "test-agent");
     fs.writeFileSync(path.join(agentDir, "MEMORY.md"), "# Memory\n\n## Section A\nOld content here.\n\n## Section B\nKeep this.\n", "utf-8");
 
     const tool = createFsEditTool();
@@ -140,7 +140,7 @@ describe("fs.edit tool", () => {
   });
 
   test("rejects when old_string appears multiple times", async () => {
-    const agentDir = path.join(workspaceBase, ".strategos", "agents", "test-agent");
+    const agentDir = path.join(workspaceBase, ".operant", "agents", "test-agent");
     fs.writeFileSync(path.join(agentDir, "MEMORY.md"), "duplicate\nduplicate\n", "utf-8");
 
     const tool = createFsEditTool();
@@ -166,7 +166,7 @@ describe("bash tool", () => {
   });
 
   test("executes allowed command", async () => {
-    const agentDir = path.join(workspaceBase, ".strategos", "agents", "test-agent");
+    const agentDir = path.join(workspaceBase, ".operant", "agents", "test-agent");
     fs.writeFileSync(path.join(agentDir, "test.txt"), "hello", "utf-8");
 
     const tool = createBashTool();

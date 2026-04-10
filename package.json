@@ -1,10 +1,10 @@
 {
-  "name": "strategos",
+  "name": "operant",
   "version": "0.4.0",
   "private": true,
   "type": "module",
   "bin": {
-    "strategos": "./bin/strategos.mjs"
+    "operant": "./bin/operant.mjs"
   },
   "scripts": {
     "build": "bun build src/index.ts --outdir build --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm && bun build src/cli/program.ts --outdir build/cli --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm",
@@ -28,11 +28,13 @@
     "sql.js": "^1.12.0",
     "telegraf": "^4.16.3",
     "uuid": "^9.0.1",
+    "ws": "^8.20.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.9.1",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.6.3"
   }
 }

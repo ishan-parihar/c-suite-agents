@@ -1,5 +1,5 @@
 /**
- * Centralized Error Event Bus for Strategos.
+ * Centralized Error Event Bus for Operant.
  *
  * Every subsystem (LLM provider, tools, scheduler, heartbeat, MCP, Telegram,
  * memory, Kanban) emits errors here instead of just calling `logger.error()`.
@@ -44,7 +44,7 @@ import { EventEmitter } from "events";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../logger.js";
 import {
-  StrategosError,
+  OperantError,
   ErrorSeverity,
   classifyError,
 } from "./error-types.js";
@@ -97,7 +97,7 @@ export interface ErrorEvent {
   severity: ErrorSeverity;
   /** Which subsystem emitted this event. */
   component: string;
-  /** The original error object (Error, StrategosError, or unknown). */
+  /** The original error object (Error, OperantError, or unknown). */
   error: unknown;
   /** Human-readable summary. */
   message: string;
@@ -453,16 +453,16 @@ export const ErrorBus = ErrorEmitter.getInstance();
 // ---------------------------------------------------------------------------
 
 /**
- * Construct an ErrorEvent from a plain Error or StrategosError.
+ * Construct an ErrorEvent from a plain Error or OperantError.
  *
- * - If `error` is a StrategosError, extracts `code`, `component`, `severity`,
+ * - If `error` is a OperantError, extracts `code`, `component`, `severity`,
  *   and `metadata` from its typed properties.
  * - If `error` is a plain Error, uses `classifyError()` heuristics to
  *   determine severity and recoverability.
  * - Generates a UUID for the event id and sets timestamp to Date.now().
  *
  * @param type    - The canonical event type.
- * @param error   - The original error (Error, StrategosError, or unknown).
+ * @param error   - The original error (Error, OperantError, or unknown).
  * @param context - Optional metadata: component name, agentId, and arbitrary
  *                  key-value pairs.
  * @returns A fully-constructed ErrorEvent ready to emit or log.
@@ -481,7 +481,7 @@ export function createErrorEvent(
   let component = context?.component ?? "unknown";
   let message: string;
 
-  if (error instanceof StrategosError) {
+  if (error instanceof OperantError) {
     severity = error.severity;
     recoverable = classifyError(error).isRecoverable;
     component = error.component ?? component;

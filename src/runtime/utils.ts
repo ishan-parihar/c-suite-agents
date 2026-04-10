@@ -4,6 +4,39 @@
  */
 
 /**
+ * A basic Least Recently Used (LRU) Map to prevent unbounded growth of caches.
+ */
+export class LruMap<K, V> extends Map<K, V> {
+  private maxSize: number;
+
+  constructor(maxSize: number) {
+    super();
+    this.maxSize = maxSize;
+  }
+
+  set(key: K, value: V) {
+    if (this.has(key)) {
+      this.delete(key);
+    } else if (this.size >= this.maxSize) {
+      const firstKey = this.keys().next().value;
+      if (firstKey !== undefined) this.delete(firstKey);
+    }
+    super.set(key, value);
+    return this;
+  }
+
+  get(key: K) {
+    if (this.has(key)) {
+      const value = super.get(key)!;
+      this.delete(key);
+      super.set(key, value);
+      return value;
+    }
+    return undefined;
+  }
+}
+
+/**
  * Generate current time line for prompt injection (OpenClaw pattern).
  */
 export function currentTimeLine(): string {
@@ -122,7 +155,7 @@ export function hasSubstantiveFinding(text: string): boolean {
  * Returns false if ALL messages are silent acks, tool metadata only, or very short.
  * Returns true if ANY message contains substantive content.
  */
-export function isRealConversation(messages: Array<{ role: string; content: string }>): boolean {
+export function isRealConversation(messages: Array<{ role: string; content: string | null }>): boolean {
   if (messages.length === 0) return false;
 
   // Patterns that indicate heartbeat-only / monitoring noise

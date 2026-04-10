@@ -8,6 +8,8 @@ import * as fs from "fs";
 import { logger } from "../logger.js";
 import { initWorkspace } from "../agents/workspace-manager.js";
 
+export type TransportMode = "ws" | "sse" | "polling";
+
 export interface SessionRecord {
   agent_id: string;
   session_id: string;
@@ -17,6 +19,9 @@ export interface SessionRecord {
   created_at: number;
   last_used: number;
   message_count: number;
+  compaction_count: number;
+  previous_summary: string | null;
+  has_real_conversation: number;
 }
 
 export interface StoredMessage {
@@ -44,6 +49,7 @@ export interface StoredToolCall {
 
 export class SessionRegistry {
   private db: Database.Database;
+  private transportState: Map<string, { mode: TransportMode; connectedAt: number; lastActivity: number }> = new Map();
 
   constructor(dbPath: string) {
     const dir = path.dirname(dbPath);
@@ -396,6 +402,32 @@ export class SessionRegistry {
     return randomUUID();
   }
 
+  setTransport(agentId: string, mode: TransportMode): void {
+    this.transportState.set(agentId, { mode, connectedAt: Date.now(), lastActivity: Date.now() });
+    logger.info({ agentId, mode }, "Transport state updated");
+  }
+
+  getTransport(agentId: string): TransportMode {
+    return this.transportState.get(agentId)?.mode ?? "polling";
+  }
+
+  clearTransport(agentId: string): void {
+    this.transportState.delete(agentId);
+    logger.info({ agentId }, "Transport state cleared");
+  }
+
+  getActiveTransports(): Map<string, { mode: TransportMode; connectedAt: number; lastActivity: number }> {
+    return new Map(this.transportState);
+  }
+
+  touchTransport(agentId: string): void {
+    const state = this.transportState.get(agentId);
+    if (state) {
+      state.lastActivity = Date.now();
+      this.transportState.set(agentId, state);
+    }
+  }
+
   close(): void {
     this.db.close();
   }
@@ -406,7 +438,7 @@ let registry: SessionRegistry | null = null;
 export function getSessionRegistry(dbPath?: string): SessionRegistry {
   if (!registry) {
     const defaultPath = path.join(
-      process.env.STRATEGOS_DATA_DIR || process.cwd(),
+      process.env.OPERANT_DATA_DIR || process.cwd(),
       "data",
       "sessions.db"
     );
