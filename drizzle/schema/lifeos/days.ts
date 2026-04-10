@@ -1,0 +1,36 @@
+import { pgTable, uuid, text, integer, date, timestamp, index } from 'drizzle-orm/pg-core';
+import { months } from './months';
+
+export const days = pgTable('days', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  dataSourceId: uuid('data_source_id').notNull(),
+  name: text('name').notNull(),
+  monthsId: uuid('months_id').references(() => months.id),
+  weeks: uuid('weeks').array(),
+  dietLog: uuid('diet_log').array(),
+  subjectiveJournal: uuid('subjective_journal').array(),
+  relationalJournal: uuid('relational_journal').array(),
+  systemicJournal: uuid('systemic_journal').array(),
+  activityLog: uuid('activity_log').array(),
+  year: integer('year'),
+  dayNumber: integer('day_number'),
+  healthScore: integer('health_score'),
+  date: date('date'),
+  dayName: text('day_name'),
+  dayJson: text('day_json'),
+  status: text('status'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_days_status').on(table.status),
+  index('idx_days_months_id').on(table.monthsId),
+  index('idx_days_year').on(table.year),
+  index('idx_days_day_number').on(table.dayNumber),
+  index('idx_days_date').on(table.date),
+  index('idx_days_weeks').on(table.weeks),
+  index('idx_days_diet_log').on(table.dietLog),
+  index('idx_days_subjective_journal').on(table.subjectiveJournal),
+  index('idx_days_relational_journal').on(table.relationalJournal),
+  index('idx_days_systemic_journal').on(table.systemicJournal),
+  index('idx_days_activity_log').on(table.activityLog),
+]);

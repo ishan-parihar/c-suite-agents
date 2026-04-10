@@ -31,12 +31,14 @@ export function ChartCard({ title, subtitle, children, loading, error, className
   }
 
   return (
-    <Card className={cn("p-0 overflow-hidden", className)}>
+    <Card className={cn("p-0 overflow-hidden", className)} role="region" aria-label={title}>
       <CardHeader>
         <h3 className="font-mono text-sm font-medium text-text-primary">{title}</h3>
         {subtitle && <p className="text-xs text-text-secondary">{subtitle}</p>}
       </CardHeader>
-      <CardContent>{children}</CardContent>
+      <CardContent role="img" aria-label={`${title} chart`}>
+        {children}
+      </CardContent>
     </Card>
   );
 }

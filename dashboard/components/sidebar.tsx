@@ -49,6 +49,7 @@ export function Sidebar() {
             collapsed && 'mx-auto'
           )}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
         >
           {collapsed ? (
             <ChevronRight className="w-4 h-4" />
@@ -59,7 +60,11 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 scrollbar-thin">
+      <nav
+        role="navigation"
+        aria-label="Main navigation"
+        className="flex-1 overflow-y-auto overflow-x-hidden py-3 scrollbar-thin"
+      >
         {navigation.map((navSection) => {
           const isSeparatorSection = navSection.section === '';
           const isOpen = openSections[navSection.section] ?? true;

@@ -1,0 +1,38 @@
+import { pgTable, uuid, text, integer, numeric, timestamp, index } from 'drizzle-orm/pg-core';
+import { days } from './days';
+
+export const dietLog = pgTable('diet_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  dataSourceId: uuid('data_source_id').notNull(),
+  name: text('name').notNull(),
+  entryId: text('entry_id').unique(),
+  date: timestamp('date', { withTimezone: true }),
+  logType: text('log_type'),
+  mealType: text('meal_type'),
+  calories: integer('calories'),
+  nutrition: text('nutrition'),
+  proteinG: numeric('protein_g', { precision: 6, scale: 1 }),
+  waterMl: integer('water_ml'),
+  caffeineMg: integer('caffeine_mg'),
+  supplements: text('supplements').array(),
+  mood: text('mood'),
+  energyLevel: text('energy_level'),
+  sleepQuality: text('sleep_quality'),
+  symptoms: text('symptoms').array(),
+  environment: text('environment').array(),
+  vitalsNotes: text('vitals_notes'),
+  dietJson: text('diet_json'),
+  daysId: uuid('days_id').references(() => days.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_diet_log_entry_id').on(table.entryId),
+  index('idx_diet_log_date').on(table.date),
+  index('idx_diet_log_log_type').on(table.logType),
+  index('idx_diet_log_meal_type').on(table.mealType),
+  index('idx_diet_log_mood').on(table.mood),
+  index('idx_diet_log_days_id').on(table.daysId),
+  index('idx_diet_log_supplements').on(table.supplements),
+  index('idx_diet_log_symptoms').on(table.symptoms),
+  index('idx_diet_log_environment').on(table.environment),
+]);

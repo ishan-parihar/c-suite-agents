@@ -108,6 +108,7 @@ export function DataTable<TData, TValue>({
                 value={globalFilter}
                 onChange={(e) => setGlobalFilter(e.target.value)}
                 placeholder={searchPlaceholder}
+                aria-label="Search table"
                 className="w-full rounded-md border border-border bg-surface pl-9 pr-4 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-border-strong focus:outline-none"
               />
             </div>
@@ -118,6 +119,7 @@ export function DataTable<TData, TValue>({
               onChange={(e) =>
                 table.getColumn(filterColumn)?.setFilterValue(e.target.value || undefined)
               }
+              aria-label="Filter by column"
               className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-text-primary focus:border-border-strong focus:outline-none"
             >
               <option value="">All</option>
@@ -133,34 +135,45 @@ export function DataTable<TData, TValue>({
 
       <div className="rounded-lg border border-border bg-surface overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" role="table" aria-label="Data table">
             <thead>
               {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id} className="border-b border-border">
-                  {headerGroup.headers.map((header) => (
-                    <th
-                      key={header.id}
-                      className={cn(
-                        "px-4 py-3 text-left font-medium text-text-secondary uppercase tracking-wider text-xs",
-                        header.column.getCanSort() && "cursor-pointer select-none hover:bg-hover/50"
-                      )}
-                      onClick={header.column.getToggleSortingHandler()}
-                    >
-                      <div className="flex items-center gap-1.5">
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        {header.column.getCanSort() && (
-                          <span className="text-text-muted">
-                            {{
-                              asc: <ChevronUp className="h-3.5 w-3.5" />,
-                              desc: <ChevronDown className="h-3.5 w-3.5" />,
-                            }[header.column.getIsSorted() as string] ?? (
-                              <ChevronsUpDown className="h-3.5 w-3.5" />
-                            )}
-                          </span>
+                <tr key={headerGroup.id} className="border-b border-border" role="row">
+                  {headerGroup.headers.map((header) => {
+                    const sortState = header.column.getIsSorted();
+                    return (
+                      <th
+                        key={header.id}
+                        role="columnheader"
+                        aria-sort={
+                          sortState === "asc"
+                            ? "ascending"
+                            : sortState === "desc"
+                              ? "descending"
+                              : "none"
+                        }
+                        className={cn(
+                          "px-4 py-3 text-left font-medium text-text-secondary uppercase tracking-wider text-xs",
+                          header.column.getCanSort() && "cursor-pointer select-none hover:bg-hover/50"
                         )}
-                      </div>
-                    </th>
-                  ))}
+                        onClick={header.column.getToggleSortingHandler()}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {header.column.getCanSort() && (
+                            <span className="text-text-muted">
+                              {{
+                                asc: <ChevronUp className="h-3.5 w-3.5" />,
+                                desc: <ChevronDown className="h-3.5 w-3.5" />,
+                              }[sortState as string] ?? (
+                                <ChevronsUpDown className="h-3.5 w-3.5" />
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </th>
+                    );
+                  })}
                 </tr>
               ))}
             </thead>
@@ -168,6 +181,7 @@ export function DataTable<TData, TValue>({
               {table.getRowModel().rows.map((row) => (
                 <tr
                   key={row.id}
+                  role="row"
                   className="border-b border-border last:border-b-0 hover:bg-hover/50 transition-colors"
                 >
                   {row.getVisibleCells().map((cell) => (
@@ -190,6 +204,7 @@ export function DataTable<TData, TValue>({
           <button
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
+            aria-label="Previous page"
             className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text-secondary hover:bg-hover/50 disabled:opacity-40 disabled:pointer-events-none transition-colors"
           >
             Previous
@@ -197,6 +212,7 @@ export function DataTable<TData, TValue>({
           <button
             onClick={() => table.nextPage()}
             disabled={!table.getCanNextPage()}
+            aria-label="Next page"
             className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text-secondary hover:bg-hover/50 disabled:opacity-40 disabled:pointer-events-none transition-colors"
           >
             Next

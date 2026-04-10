@@ -20,6 +20,8 @@ export function Badge({ status, children, className }: BadgeProps) {
         backgroundColor: `${config.color}20`,
         color: config.color,
       }}
+      role="status"
+      aria-label={`Status: ${children ?? config.label}`}
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: config.color }} />
       {children ?? config.label}

@@ -1,0 +1,37 @@
+import { pgTable, uuid, text, boolean, timestamp, index } from 'drizzle-orm/pg-core';
+import { years } from './years';
+
+export const annualGoals = pgTable('annual_goals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  dataSourceId: uuid('data_source_id').notNull(),
+  name: text('name').notNull(),
+  goalId: text('goal_id').unique(),
+  yearsId: uuid('years_id').references(() => years.id),
+  primaryMetricId: uuid('primary_metric_id'),
+  visionId: uuid('vision_id'),
+  quarterlyGoals: uuid('quarterly_goals').array(),
+  status: text('status').notNull().default('Draft'),
+  goalArchetype: text('goal_archetype'),
+  isCurrentGoal: boolean('is_current_goal'),
+  goalProgress: text('goal_progress'),
+  monitor: text('monitor'),
+  annualGoalReport: text('annual_goal_report'),
+  plannedRange: text('planned_range'),
+  theEpic: text('the_epic'),
+  strategicIntent: text('strategic_intent'),
+  strategicApproach: text('strategic_approach'),
+  successCondition: text('success_condition'),
+  keyRisks: text('key_risks'),
+  targetValue: text('target_value'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_annual_goals_status').on(table.status),
+  index('idx_annual_goals_years_id').on(table.yearsId),
+  index('idx_annual_goals_goal_id').on(table.goalId),
+  index('idx_annual_goals_vision_id').on(table.visionId),
+  index('idx_annual_goals_primary_metric_id').on(table.primaryMetricId),
+  index('idx_annual_goals_quarterly_goals').on(table.quarterlyGoals),
+  index('idx_annual_goals_goal_archetype').on(table.goalArchetype),
+  index('idx_annual_goals_is_current_goal').on(table.isCurrentGoal),
+]);
