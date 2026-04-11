@@ -1,6 +1,17 @@
-import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { sql } from "drizzle-orm";
+import { z } from 'zod';
+import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { sql } from 'drizzle-orm';
+import { outboxEvents } from '@/drizzle/schema';
+import { PermissionError } from '@/lib/agent-permissions';
+import {
+  extractAgentHeaders,
+  validateAgentAction,
+  sanitizePayload,
+  validateBody,
+  successResponse,
+  errorResponse,
+} from '@/lib/api/factory';
 
 function mapCardRow(r: any) {
   return {
@@ -19,6 +30,21 @@ function mapCardRow(r: any) {
   };
 }
 
+const CreateCardSchema = z.object({
+  boardId: z.string().uuid(),
+  columnId: z.string().uuid(),
+  title: z.string().min(1).max(500),
+  description: z.string().optional(),
+  priority: z.string().optional(),
+  due: z.string().datetime().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+const MoveCardSchema = z.object({
+  cardId: z.string().uuid(),
+  columnId: z.string().uuid(),
+});
+
 async function logCardActivity(cardId: string, action: string, payload: Record<string, unknown>) {
   await db.execute(sql`
     INSERT INTO kanban_card_activity (card_id, ts, action, payload)
@@ -27,95 +53,128 @@ async function logCardActivity(cardId: string, action: string, payload: Record<s
 }
 
 export async function PATCH(request: NextRequest) {
+  const headers = extractAgentHeaders(request);
+
+  let body: Record<string, unknown>;
+  try { body = await request.json(); }
+  catch { return errorResponse('Invalid JSON', 400); }
+
+  const sanitized = sanitizePayload(body);
+  if (!sanitized.ok) return errorResponse(sanitized.error, 422);
+
+  const validation = validateBody(sanitized.data, MoveCardSchema);
+  if (!validation.ok) return errorResponse(validation.errors, 422);
+
   try {
-    const body = await request.json();
-    const { cardId, columnId } = body as { cardId: string; columnId: string };
+    validateAgentAction(headers, 'write', 'kanban');
 
-    if (!cardId || !columnId) {
-      return NextResponse.json(
-        { error: "cardId and columnId are required" },
-        { status: 400 }
-      );
+    const cardRow = await db.transaction(async (tx) => {
+      const result = await tx.execute(sql`
+        UPDATE kanban_cards
+        SET column_id = ${validation.data.columnId}, last_update = NOW()
+        WHERE id = ${validation.data.cardId}
+        RETURNING id, board_id, column_id, title, description, priority,
+                  due, tags, assignee_agent_id, project_id, last_update, created_at
+      `);
+
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      await tx.insert(outboxEvents).values({
+        eventType: 'kanban.card_moved',
+        entityId: validation.data.cardId as string,
+        entityType: 'kanban',
+        payload: { columnId: validation.data.columnId, agentId: headers.agentId, userId: headers.userId },
+        published: false,
+        attempts: 0,
+      });
+
+      return result.rows[0];
+    });
+
+    if (!cardRow) {
+      return errorResponse('Card not found', 404);
     }
 
-    const result = await db.execute(sql`
-      UPDATE kanban_cards
-      SET column_id = ${columnId}, last_update = NOW()
-      WHERE id = ${cardId}
-      RETURNING id, board_id, column_id, title, description, priority,
-                due, tags, assignee_agent_id, project_id, last_update, created_at
-    `);
+    const card = mapCardRow(cardRow);
 
-    if (result.rows.length === 0) {
-      return NextResponse.json({ error: "Card not found" }, { status: 404 });
+    await logCardActivity(validation.data.cardId, 'column_changed', { columnId: validation.data.columnId });
+
+    return successResponse({ card });
+  } catch (error: unknown) {
+    if (error instanceof PermissionError) {
+      return errorResponse('Forbidden', 403);
     }
-
-    const card = mapCardRow(result.rows[0]);
-
-    await logCardActivity(cardId, "column_changed", { columnId });
-
-    return NextResponse.json({ card });
-  } catch (error) {
-    console.error("PATCH /api/kanban/cards error:", error);
-    return NextResponse.json(
-      { error: "Failed to update card" },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('PATCH /api/kanban/cards error:', message);
+    return errorResponse('Failed to update card', 500);
   }
 }
 
 export async function POST(request: NextRequest) {
+  const headers = extractAgentHeaders(request);
+
+  let body: Record<string, unknown>;
+  try { body = await request.json(); }
+  catch { return errorResponse('Invalid JSON', 400); }
+
+  const sanitized = sanitizePayload(body);
+  if (!sanitized.ok) return errorResponse(sanitized.error, 422);
+
+  const validation = validateBody(sanitized.data, CreateCardSchema);
+  if (!validation.ok) return errorResponse(validation.errors, 422);
+
   try {
-    const body = await request.json();
-    const { boardId, columnId, title, description, priority, due, tags } = body as {
-      boardId: string;
-      columnId: string;
-      title: string;
-      description?: string;
-      priority?: string;
-      due?: string;
-      tags?: string[];
-    };
+    validateAgentAction(headers, 'write', 'kanban');
 
-    if (!boardId || !columnId || !title) {
-      return NextResponse.json(
-        { error: "boardId, columnId, and title are required" },
-        { status: 400 }
-      );
+    const cardRow = await db.transaction(async (tx) => {
+      const result = await tx.execute(sql`
+        INSERT INTO kanban_cards (
+          board_id, column_id, title, description, priority, due, tags, created_at
+        )
+        VALUES (
+          ${validation.data.boardId}, ${validation.data.columnId}, ${validation.data.title},
+          ${validation.data.description ?? null}, ${validation.data.priority ?? null},
+          ${validation.data.due ? new Date(validation.data.due) : null},
+          ${validation.data.tags ? JSON.stringify(validation.data.tags) : null},
+          NOW()
+        )
+        RETURNING id, board_id, column_id, title, description, priority,
+                  due, tags, assignee_agent_id, project_id, last_update, created_at
+      `);
+
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      await tx.insert(outboxEvents).values({
+        eventType: 'kanban.card_created',
+        entityId: result.rows[0].id as string,
+        entityType: 'kanban',
+        payload: { title: validation.data.title, agentId: headers.agentId, userId: headers.userId },
+        published: false,
+        attempts: 0,
+      });
+
+      return result.rows[0];
+    });
+
+    if (!cardRow) {
+      return errorResponse('Failed to create card', 500);
     }
 
-    const result = await db.execute(sql`
-      INSERT INTO kanban_cards (
-        board_id, column_id, title, description, priority, due, tags, created_at
-      )
-      VALUES (
-        ${boardId}, ${columnId}, ${title},
-        ${description ?? null}, ${priority ?? null},
-        ${due ? new Date(due) : null},
-        ${tags ? JSON.stringify(tags) : null},
-        NOW()
-      )
-      RETURNING id, board_id, column_id, title, description, priority,
-                due, tags, assignee_agent_id, project_id, last_update, created_at
-    `);
+    const card = mapCardRow(cardRow);
 
-    if (result.rows.length === 0) {
-      return NextResponse.json(
-        { error: "Failed to create card" },
-        { status: 500 }
-      );
+    await logCardActivity(card.id, 'card_created', { title: validation.data.title });
+
+    return successResponse({ card }, 201);
+  } catch (error: unknown) {
+    if (error instanceof PermissionError) {
+      return errorResponse('Forbidden', 403);
     }
-
-    const card = mapCardRow(result.rows[0]);
-
-    await logCardActivity(card.id, "card_created", { title });
-
-    return NextResponse.json({ card }, { status: 201 });
-  } catch (error) {
-    console.error("POST /api/kanban/cards error:", error);
-    return NextResponse.json(
-      { error: "Failed to create card" },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('POST /api/kanban/cards error:', message);
+    return errorResponse('Failed to create card', 500);
   }
 }

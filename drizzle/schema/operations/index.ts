@@ -30,6 +30,11 @@ export {
   sessionToolCalls,
 } from './agentSessions';
 
+// Outbox Events (Transactional Outbox Pattern)
+export {
+  outboxEvents,
+} from './outbox';
+
 // Reports (5 tables)
 export {
   opsReports,
