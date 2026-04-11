@@ -1,4 +1,4 @@
-import { buildToolDefinitions, getAllToolDefinitions, type ToolDefinition, type PermissionTier } from "./tool-bridge.js";
+import { buildToolDefinitions, getAllToolDefinitions, type ToolDefinition, type PermissionTier } from "./tool-bridge";
 
 export interface ToolSearchResult {
   name: string;
@@ -66,7 +66,7 @@ export class ToolSearch {
   }
 }
 
-import { LruMap } from "./utils.js";
+import { LruMap } from "./utils";
 
 const instances = new LruMap<string, ToolSearch>(50);
 

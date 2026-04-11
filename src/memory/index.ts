@@ -1,12 +1,12 @@
 // MemoryFacade — Unified entry point for the production memory system
 
-import { logger } from "../logger.js";
-import { MemoryStore } from "./store.js";
-import { EmbeddingService, getEmbeddingService } from "./embeddings.js";
-import { MemoryDedup } from "./dedup.js";
-import { MemoryLifecycle } from "./lifecycle.js";
-import { MemoryRetriever } from "./retrieval.js";
-import { MemoryInjector } from "./injection.js";
+import { logger } from "../logger";
+import { MemoryStore } from "./store";
+import { EmbeddingService, getEmbeddingService } from "./embeddings";
+import { MemoryDedup } from "./dedup";
+import { MemoryLifecycle } from "./lifecycle";
+import { MemoryRetriever } from "./retrieval";
+import { MemoryInjector } from "./injection";
 import type {
   MemoryScope,
   MemoryEntry,
@@ -14,7 +14,7 @@ import type {
   MemoryInjection,
   DecayConfig,
   MemoryUpsertParams,
-} from "./types.js";
+} from "./types";
 
 export class MemoryFacade {
   private store: MemoryStore;
@@ -131,12 +131,12 @@ export async function getMemoryFacade(): Promise<MemoryFacade> {
   return facade;
 }
 
-export { MemoryStore } from "./store.js";
-export { EmbeddingService, getEmbeddingService } from "./embeddings.js";
-export { MemoryDedup } from "./dedup.js";
-export { MemoryLifecycle } from "./lifecycle.js";
-export { MemoryRetriever } from "./retrieval.js";
-export { MemoryInjector } from "./injection.js";
+export { MemoryStore } from "./store";
+export { EmbeddingService, getEmbeddingService } from "./embeddings";
+export { MemoryDedup } from "./dedup";
+export { MemoryLifecycle } from "./lifecycle";
+export { MemoryRetriever } from "./retrieval";
+export { MemoryInjector } from "./injection";
 export type {
   MemoryScope,
   MemoryKind,
@@ -147,4 +147,4 @@ export type {
   MemoryInjection,
   DecayConfig,
   MemoryUpsertParams,
-} from "./types.js";
+} from "./types";

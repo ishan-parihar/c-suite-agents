@@ -19,12 +19,14 @@
  * @see docs/EDICT-PATTERNS-TRANSFER.md §3 — Activity Stream Fusion
  */
 
-import { eq, inArray, desc, asc } from 'drizzle-orm';
+import { eq, inArray, desc, asc, and, gte } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import {
   kanbanCardActivity,
   kanbanCards,
+  outboxEvents,
 } from '@/drizzle/schema';
+import { tasks } from '@/drizzle/schema/lifeos/tasks';
 import { type EntityType } from '@/lib/agent-permissions';
 export { type EntityType };
 
@@ -89,10 +91,144 @@ async function getImplicitStateActivity(
   entityId: string,
   entityType: EntityType,
 ): Promise<ActivityEntry[]> {
-  // Stub — returns empty. Real implementation would query entity tables
-  // and compare current vs previous status snapshots.
-  // For kanban cards, the kanbanCardActivity table already captures transitions.
-  return [];
+  const tableMap: Record<string, { table: any; statusCol: any; updatedAtCol: any } | null> = {
+    task: { table: tasks, statusCol: tasks.status, updatedAtCol: tasks.updatedAt },
+    kanban: { table: kanbanCards, statusCol: kanbanCards.columnId, updatedAtCol: kanbanCards.lastUpdate },
+    goal: null,
+    meeting: null,
+    journal: null,
+    project: null,
+    campaign: null,
+    content: null,
+    person: null,
+    financial: null,
+    report: null,
+    session: null,
+    message: null,
+    account: null,
+  };
+
+  const mapping = tableMap[entityType];
+  if (!mapping) return [];
+
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({ id: mapping.table.id, status: mapping.statusCol, updatedAt: mapping.updatedAtCol })
+    .from(mapping.table)
+    .where(and(eq(mapping.table.id, entityId), gte(mapping.updatedAtCol, thirtyDaysAgo)));
+
+  return rows.map((row) => ({
+    at: row.updatedAt.toISOString(),
+    kind: 'state_change' as ActivityKind,
+    entityId,
+    entityType,
+    agentId: undefined,
+    userId: undefined,
+    data: { status: row.status, action: 'state_updated' },
+  }));
+}
+
+// ── Activity source: Scheduler Events ──────────────────────────────────────
+
+async function getSchedulerEventsForEntity(
+  entityId: string,
+  entityType: EntityType,
+): Promise<ActivityEntry[]> {
+  if (entityType !== 'kanban') return [];
+
+  const rows = await db
+    .select({ ts: kanbanCardActivity.ts, action: kanbanCardActivity.action, payload: kanbanCardActivity.payload, cardId: kanbanCardActivity.cardId })
+    .from(kanbanCardActivity)
+    .where(and(
+      eq(kanbanCardActivity.cardId, entityId),
+      inArray(kanbanCardActivity.action, ['retry_triggered', 'escalated', 'rollback', 'blocked']),
+    ));
+
+  return rows.map((row) => ({
+    at: row.ts.toISOString(),
+    kind: 'scheduler_action' as ActivityKind,
+    entityId,
+    entityType,
+    agentId: extractAgentId(row.payload),
+    userId: extractUserId(row.payload),
+    data: { action: row.action, ...(row.payload as Record<string, unknown> || {}) },
+  }));
+}
+
+// ── Activity source: Outbox Events ─────────────────────────────────────────
+
+async function getOutboxEventsForEntity(
+  entityId: string,
+  entityType: EntityType,
+): Promise<ActivityEntry[]> {
+  const rows = await db
+    .select({ eventType: outboxEvents.eventType, entityId: outboxEvents.entityId, entityType: outboxEvents.entityType, payload: outboxEvents.payload, createdAt: outboxEvents.createdAt })
+    .from(outboxEvents)
+    .where(and(
+      eq(outboxEvents.entityId, entityId as string),
+      eq(outboxEvents.entityType, entityType),
+    ))
+    .orderBy(desc(outboxEvents.createdAt));
+
+  return rows.map((row) => ({
+    at: row.createdAt.toISOString(),
+    kind: 'crud_event' as ActivityKind,
+    entityId: row.entityId,
+    entityType: row.entityType as EntityType,
+    agentId: extractAgentId(row.payload),
+    userId: extractUserId(row.payload),
+    data: { event: row.eventType, ...(row.payload as Record<string, unknown> || {}) },
+  }));
+}
+
+// ── Activity source: OpenClaw Session Events ───────────────────────────────
+
+async function getOpenClawSessionEvents(
+  entityId: string,
+  entityType: EntityType,
+): Promise<ActivityEntry[]> {
+  // Read session files from ~/.openclaw/agents/*/sessions/*.jsonl
+  // Filter for entries that reference the entityId
+  // This is complex and may not always be available
+  const entries: ActivityEntry[] = [];
+  try {
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '/root';
+    const agentsDir = `${homeDir}/.openclaw/agents`;
+    // Check if agents directory exists
+    const fs = await import('fs');
+    const { promisify } = await import('util');
+    const readdir = promisify(fs.default.readdir);
+    const readFile = promisify(fs.default.readFile);
+
+    const agentDirs = await readdir(agentsDir).catch(() => []);
+    for (const agentId of agentDirs) {
+      const sessionsDir = `${agentsDir}/${agentId}/sessions`;
+      const sessionFiles = await readdir(sessionsDir).catch(() => []);
+      for (const file of sessionFiles.slice(-5)) { // Last 5 session files per agent
+        const content = await readFile(`${sessionsDir}/${file}`, 'utf-8').catch(() => '');
+        const lines = content.split('\n').filter(Boolean);
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            if (JSON.stringify(entry).includes(entityId)) {
+              entries.push({
+                at: new Date(entry.timestamp || Date.now()).toISOString(),
+                kind: 'user_action',
+                entityId,
+                entityType,
+                agentId,
+                userId: undefined,
+                data: { source: 'openclaw_session', type: entry.type, summary: JSON.stringify(entry).slice(0, 200) },
+              });
+            }
+          } catch { /* skip malformed lines */ }
+        }
+      }
+    }
+  } catch {
+    // OpenClaw sessions not available
+  }
+  return entries;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -112,9 +248,9 @@ export async function getEntityActivity(
   const sources: Promise<ActivityEntry[]>[] = [
     getKanbanCardActivityForEntity(entityId, entityType),
     getImplicitStateActivity(entityId, entityType),
-    // Future: getActivityFromOpenClaw(entityId, entityType),
-    // Future: getSchedulerEvents(entityId, entityType),
-    // Future: getOutboxEvents(entityId, entityType),
+    getSchedulerEventsForEntity(entityId, entityType),
+    getOutboxEventsForEntity(entityId, entityType),
+    getOpenClawSessionEvents(entityId, entityType),
   ];
 
   const results = await Promise.all(sources);

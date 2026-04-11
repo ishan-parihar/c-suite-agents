@@ -11,7 +11,7 @@ import {
   MAX_FILE_CONTENT_LENGTH,
   MAX_TOTAL_CONTENT_LENGTH,
   type InstructionFile,
-} from "../runtime/instruction-files.js";
+} from "../runtime/instruction-files";
 
 describe("getInstructionFileHash", () => {
   test("produces consistent hash for same content", () => {

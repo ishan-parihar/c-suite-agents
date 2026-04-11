@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { X, Save, CalendarDays, Tag, User, FolderKanban, History } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { Z_INDEX } from "@/lib/constants";
+import { X, Save, CalendarDays, Tag, User, FolderKanban, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { BlockNoteEditor } from "@/components/crud/blocknote-editor";
+import { DeleteDialog } from "@/components/crud/delete-dialog";
 import type { KanbanCard as KanbanCardType } from "@/lib/server/kanban";
 
 interface KanbanCardModalProps {
@@ -16,6 +17,7 @@ export function KanbanCardModal({ card, onClose }: KanbanCardModalProps) {
   const [description, setDescription] = useState(card.description ?? "");
   const [priority, setPriority] = useState(card.priority ?? "medium");
   const [isSaving, setIsSaving] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const handleEscape = useCallback(
@@ -46,9 +48,22 @@ export function KanbanCardModal({ card, onClose }: KanbanCardModalProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, description, priority }),
       });
+      toast.success("Card saved");
       onClose();
     } catch {
+      toast.error("Failed to save card");
       setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      const res = await fetch(`/api/kanban/cards/${card.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete");
+      toast.success("Card deleted");
+      onClose();
+    } catch {
+      toast.error("Failed to delete card");
     }
   };
 
@@ -69,12 +84,21 @@ export function KanbanCardModal({ card, onClose }: KanbanCardModalProps) {
             onChange={(e) => setTitle(e.target.value)}
             className="text-lg font-medium bg-transparent text-text-primary outline-none w-full mr-4"
           />
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-hover transition-colors"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowDelete(true)}
+              className="p-1.5 rounded-lg text-text-muted hover:text-critical hover:bg-hover transition-colors"
+              aria-label="Delete card"
+            >
+              <Trash2 className="h-5 w-5" />
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-hover transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         <div className="px-6 py-4 space-y-6">
@@ -108,12 +132,10 @@ export function KanbanCardModal({ card, onClose }: KanbanCardModalProps) {
 
           <div className="space-y-1.5">
             <label className="text-xs text-text-secondary">Description</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={4}
-              className="w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-text-primary outline-none focus:border-border-strong resize-none placeholder:text-text-muted"
-              placeholder="Add a description..."
+            <BlockNoteEditor
+              initialContent={description}
+              onChange={setDescription}
+              minHeight="160px"
             />
           </div>
 
@@ -162,6 +184,15 @@ export function KanbanCardModal({ card, onClose }: KanbanCardModalProps) {
           </div>
         </div>
       </div>
+
+      <DeleteDialog
+        open={showDelete}
+        onClose={() => setShowDelete(false)}
+        onConfirm={handleDelete}
+        title="Delete Card"
+        description="This action cannot be undone."
+        itemName={card.title}
+      />
     </div>
   );
 }

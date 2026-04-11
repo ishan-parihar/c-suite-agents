@@ -3,14 +3,14 @@
 // Supports OpenAI-compatible APIs with model fallback chains
 
 import OpenAI from "openai";
-import { logger } from "../logger.js";
-import { buildSystemPrompt } from "./prompt-builder.js";
-import { isSilentAck, stripHeartbeatToken, hasSubstantiveFinding, currentTimeLine, LruMap } from "./utils.js";
-import { ContextManager, type ChatMessage, type ToolCall, estimateTokens, type SummarizeFn, type PersistCallbacks, splitMessagesByTokenShare } from "./context-manager.js";
-import { resolveContextWindowInfo, type ContextWindowInfo } from "./context-window.js";
-import { buildToolDefinitions, createToolBridge, type ToolExecutor, type ToolResult, type ToolDefinition } from "./tool-bridge.js";
+import { logger } from "../logger";
+import { buildSystemPrompt } from "./prompt-builder";
+import { isSilentAck, stripHeartbeatToken, hasSubstantiveFinding, currentTimeLine, LruMap } from "./utils";
+import { ContextManager, type ChatMessage, type ToolCall, estimateTokens, type SummarizeFn, type PersistCallbacks, splitMessagesByTokenShare } from "./context-manager";
+import { resolveContextWindowInfo, type ContextWindowInfo } from "./context-window";
+import { buildToolDefinitions, createToolBridge, type ToolExecutor, type ToolResult, type ToolDefinition } from "./tool-bridge";
 import { v4 as uuidv4 } from "uuid";
-import { retryAsync, isRetryableError, type RetryOptions } from "./retry.js";
+import { retryAsync, isRetryableError, type RetryOptions } from "./retry";
 import {
   createFailoverChain,
   getCurrentModel,
@@ -25,14 +25,14 @@ import {
   type FailoverState,
   type ModelEntry,
   type BillingBackoffRegistry,
-} from "./model-fallback.js";
-import { loadConfig } from "../config/loader.js";
-import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent, MAX_SAFE_TIMEOUT_MS } from "./provider.js";
-import { SkillRegistry, type Skill } from "./skill-registry.js";
-import { getAgentWorkspace } from "../agents/workspace-manager.js";
-import { detectToolCallLoop, recordToolCall, recordToolCallOutcome, DEFAULT_LOOP_DETECTION_CONFIG, type ToolLoopDetectionConfig, type ToolCallRecord } from "./tool-loop-detection.js";
-import { truncateToolResult } from "./tool-result-truncation.js";
-import { getWsGateway } from "../transport/ws-server.js";
+} from "./model-fallback";
+import { loadConfig } from "../config/loader";
+import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent, MAX_SAFE_TIMEOUT_MS } from "./provider";
+import { SkillRegistry, type Skill } from "./skill-registry";
+import { getAgentWorkspace } from "../agents/workspace-manager";
+import { detectToolCallLoop, recordToolCall, recordToolCallOutcome, DEFAULT_LOOP_DETECTION_CONFIG, type ToolLoopDetectionConfig, type ToolCallRecord } from "./tool-loop-detection";
+import { truncateToolResult } from "./tool-result-truncation";
+import { getWsGateway } from "../transport/ws-server";
 
 // SessionRegistry-compatible interface for persistence wiring
 export interface SessionPersistence {

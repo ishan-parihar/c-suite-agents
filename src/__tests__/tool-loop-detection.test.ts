@@ -8,8 +8,8 @@ import {
   getToolCallStats,
   DEFAULT_LOOP_DETECTION_CONFIG,
   clearCircuitBreakers,
-} from "../runtime/tool-loop-detection.js";
-import type { ToolCallRecord, ToolLoopDetectionConfig } from "../runtime/tool-loop-detection.js";
+} from "../runtime/tool-loop-detection";
+import type { ToolCallRecord, ToolLoopDetectionConfig } from "../runtime/tool-loop-detection";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

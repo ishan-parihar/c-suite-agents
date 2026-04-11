@@ -1,8 +1,8 @@
 // Context Injection — Auto-inject relevant memories into session prompts
 
-import { logger } from "../logger.js";
-import type { MemoryRetriever } from "./retrieval.js";
-import type { MemoryEntry, MemoryInjection } from "./types.js";
+import { logger } from "../logger";
+import type { MemoryRetriever } from "./retrieval";
+import type { MemoryEntry, MemoryInjection } from "./types";
 
 const AVG_TOKENS_PER_CHAR = 0.25;
 const BASE_MEMORY_BUDGET = 8000;

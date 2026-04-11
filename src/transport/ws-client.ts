@@ -1,13 +1,13 @@
 import WebSocket from "ws";
 import { EventEmitter } from "node:events";
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 import {
   serializeFrame,
   deserializeFrame,
   type ClientFrame,
   type ServerFrame,
   type StreamEvent,
-} from "./ws-types.js";
+} from "./ws-types";
 
 const DEFAULT_BASE_URL = "ws://127.0.0.1:3001";
 const DEFAULT_MAX_RECONNECT_DELAY = 30000;

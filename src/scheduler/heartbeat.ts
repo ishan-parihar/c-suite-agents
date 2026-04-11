@@ -3,12 +3,12 @@
 // Pattern follows OpenClaw: heartbeat → event queue → prompt injection → agent turn
 // Role-based: only agents with heartbeat enabled in config receive heartbeats.
 
-import { logger } from "../logger.js";
-import type { OperantRuntime } from "../types.js";
-import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
-import { SystemEventQueue, ACTIVE_HOURS } from "./system-events.js";
-import { loadConfig } from "../config/loader.js";
-import { getAgentHealthRegistry } from "./agent-health.js";
+import { logger } from "../logger";
+import type { OperantRuntime } from "../types";
+import { getCoreStaffIds, getStaffById } from "../staff/core-staff";
+import { SystemEventQueue, ACTIVE_HOURS } from "./system-events";
+import { loadConfig } from "../config/loader";
+import { getAgentHealthRegistry } from "./agent-health";
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let heartbeatRunning = false;

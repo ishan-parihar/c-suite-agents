@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, index, integer, boolean, jsonb } from 'drizzle-orm/pg-core';
 import { projects } from './projects';
 
 export const notesManagement = pgTable('notes_management', {
@@ -17,10 +17,22 @@ export const notesManagement = pgTable('notes_management', {
   lastEditedAt: timestamp('last_edited_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+
+  // Notion-style metadata columns
+  parentId: uuid('parent_id').references(() => notesManagement.id, { onDelete: 'set null' }),
+  icon: text('icon'),
+  coverImage: text('cover_image'),
+  tags: text('tags').array(),
+  content: jsonb('content'),
+  ord: integer('ord').default(0),
+  isFavorite: boolean('is_favorite').default(false),
+  isArchived: boolean('is_archived').default(false),
 }, (table) => [
   index('idx_notes_status').on(table.status),
   index('idx_notes_agent').on(table.agent),
   index('idx_notes_project_id').on(table.projectId),
   index('idx_notes_knowledge_categories').on(table.knowledgeCategories),
   index('idx_notes_created_time').on(table.createdTime),
+  index('idx_notes_parent_id').on(table.parentId),
+  index('idx_notes_is_archived').on(table.isArchived),
 ]);

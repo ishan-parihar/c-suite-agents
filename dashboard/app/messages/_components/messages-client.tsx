@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import {
   Search,
   Send,
@@ -13,11 +13,14 @@ import {
   AlertCircle,
   CheckCircle,
   X,
+  Trash2,
+  CheckCheck,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn, truncate } from "@/lib/utils";
 import { getThreadMessages, getThreadEscalations, type MessageThread } from "@/lib/server/messaging";
+import { useSSE } from "@/lib/sse/client";
 
 function statusToBadge(status: string | null): { color: string; label: string } {
   if (status === "active") return { color: "var(--status-healthy)", label: "Active" };
@@ -113,6 +116,7 @@ function formatTimestamp(date: Date | null): string {
 interface ComposeModalProps {
   onClose: () => void;
   onSend: (data: ComposeData) => void;
+  sending: boolean;
 }
 
 interface ComposeData {
@@ -123,7 +127,7 @@ interface ComposeData {
   requiresResponse: boolean;
 }
 
-function ComposeModal({ onClose, onSend }: ComposeModalProps) {
+function ComposeModal({ onClose, onSend, sending }: ComposeModalProps) {
   const [toAgent, setToAgent] = useState("");
   const [subject, setSubject] = useState("");
   const [content, setContent] = useState("");
@@ -219,7 +223,11 @@ function ComposeModal({ onClose, onSend }: ComposeModalProps) {
             disabled={!toAgent || !subject || !content}
             className="px-4 py-2 text-sm bg-accent text-text-primary rounded-md hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:pointer-events-none flex items-center gap-2"
           >
-            <Send className="h-4 w-4" />
+            {sending ? (
+              <div className="h-4 w-4 border-2 border-text-primary border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
             Send
           </button>
         </div>
@@ -261,6 +269,18 @@ export function MessagesClient({ initialThreads }: { initialThreads: MessageThre
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showCompose, setShowCompose] = useState(false);
   const [replyContent, setReplyContent] = useState("");
+  const [sending, setSending] = useState(false);
+  const [threadMenuId, setThreadMenuId] = useState<string | null>(null);
+
+  useSSE("/api/cron/outbox", [["message-threads"], ["messages"]]);
+
+  // Close thread menu on outside click
+  useEffect(() => {
+    if (!threadMenuId) return;
+    const handler = () => setThreadMenuId(null);
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [threadMenuId]);
 
   const loadThread = useCallback(async (threadId: string) => {
     try {
@@ -270,8 +290,29 @@ export function MessagesClient({ initialThreads }: { initialThreads: MessageThre
       ]);
       setMessages(msgs);
       setEscalations(escs);
+      // Mark as read
+      await fetch(`/api/crud/message-threads/${threadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "active" }),
+      });
+      setThreads((prev) =>
+        prev.map((t) => (t.id === threadId ? { ...t, unreadCount: 0 } : t))
+      );
     } catch {
       setMessages([]);
+    }
+  }, []);
+
+  const refreshThreads = useCallback(async () => {
+    try {
+      const res = await fetch("/api/crud/message-threads?limit=100&sort=updated_at&order=desc");
+      if (res.ok) {
+        const data = await res.json();
+        setThreads(data.data.items || []);
+      }
+    } catch {
+      // keep existing threads
     }
   }, []);
 
@@ -298,13 +339,109 @@ export function MessagesClient({ initialThreads }: { initialThreads: MessageThre
     [loadThread]
   );
 
-  const handleComposeSend = (_data: ComposeData) => {
-    window.location.reload();
+  const handleComposeSend = async (data: ComposeData) => {
+    setSending(true);
+    try {
+      // Create message thread
+      const threadRes = await fetch("/api/crud/message-threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: data.subject,
+          participants: ["Board-Chair", data.toAgent],
+          status: "active",
+          tags: [],
+        }),
+      });
+
+      if (!threadRes.ok) {
+        console.error("Failed to create thread");
+        return;
+      }
+
+      const threadData = await threadRes.json();
+      const threadId = threadData.data.id;
+
+      // Create the first message in the thread
+      await fetch("/api/crud/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread_id: threadId,
+          from_agent: "Board-Chair",
+          to_agent: data.toAgent,
+          content: data.content,
+          priority: data.priority,
+          requires_response: data.requiresResponse,
+          read: false,
+          responded: false,
+        }),
+      });
+
+      await refreshThreads();
+    } catch (err) {
+      console.error("Failed to send message:", err);
+    } finally {
+      setSending(false);
+    }
   };
 
-  const handleReplySend = () => {
-    if (replyContent.trim()) {
+  const handleReplySend = async () => {
+    if (!replyContent.trim() || !selectedThread) return;
+    setSending(true);
+    try {
+      await fetch("/api/crud/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread_id: selectedThread.id,
+          from_agent: "Board-Chair",
+          to_agent: formatParticipants(selectedThread.participants)
+            .split(", ")
+            .find((p: string) => p !== "Board-Chair") || "CEO-Strategic",
+          content: replyContent.trim(),
+          priority: "P3",
+          requires_response: false,
+          read: false,
+          responded: false,
+        }),
+      });
       setReplyContent("");
+      await loadThread(selectedThread.id);
+    } catch (err) {
+      console.error("Failed to send reply:", err);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleMarkAsRead = async (threadId: string) => {
+    try {
+      await fetch(`/api/crud/message-threads/${threadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "active" }),
+      });
+      setThreads((prev) =>
+        prev.map((t) => (t.id === threadId ? { ...t, unreadCount: 0 } : t))
+      );
+    } catch {
+      // silent fail
+    }
+  };
+
+  const handleDeleteThread = async (threadId: string) => {
+    if (!confirm("Delete this thread and all its messages?")) return;
+    try {
+      await fetch(`/api/crud/message-threads/${threadId}`, { method: "DELETE" });
+      setThreads((prev) => prev.filter((t) => t.id !== threadId));
+      if (selectedThreadId === threadId) {
+        setSelectedThreadId(null);
+        setMessages([]);
+        setEscalations([]);
+      }
+    } catch (err) {
+      console.error("Failed to delete thread:", err);
     }
   };
 
@@ -388,11 +525,45 @@ export function MessagesClient({ initialThreads }: { initialThreads: MessageThre
                         )}
                       </div>
                       <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        {thread.unreadCount > 0 && (
-                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-accent text-xs font-bold text-text-primary">
-                            {thread.unreadCount}
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {thread.unreadCount > 0 && (
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-accent text-xs font-bold text-text-primary">
+                              {thread.unreadCount}
+                            </span>
+                          )}
+                          <div className="relative">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setThreadMenuId(threadMenuId === thread.id ? null : thread.id); }}
+                              className="p-1 rounded hover:bg-hover transition-colors text-text-muted"
+                              aria-label="Thread actions"
+                            >
+                              <ChevronDown className="h-3 w-3" />
+                            </button>
+                            {threadMenuId === thread.id && (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-6 z-20 min-w-[160px] rounded-md border border-border bg-elevated shadow-lg py-1"
+                              >
+                                {thread.unreadCount > 0 && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); handleMarkAsRead(thread.id); setThreadMenuId(null); }}
+                                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-text-secondary hover:bg-hover transition-colors"
+                                  >
+                                    <CheckCheck className="h-3 w-3" />
+                                    Mark as read
+                                  </button>
+                                )}
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleDeleteThread(thread.id); setThreadMenuId(null); }}
+                                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-critical hover:bg-hover transition-colors"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                  Delete thread
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                         <InlineBadge
                           color={statusConfig.color}
                           label={statusConfig.label}
@@ -526,11 +697,15 @@ export function MessagesClient({ initialThreads }: { initialThreads: MessageThre
                   />
                   <button
                     onClick={handleReplySend}
-                    disabled={!replyContent.trim()}
+                    disabled={!replyContent.trim() || sending}
                     aria-label="Send reply"
                     className="self-end px-4 py-2 bg-accent text-text-primary rounded-md hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:pointer-events-none flex items-center gap-2 text-sm h-fit"
                   >
-                    <Send className="h-4 w-4" />
+                    {sending ? (
+                      <div className="h-4 w-4 border-2 border-text-primary border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
                     Send
                   </button>
                 </div>
@@ -540,7 +715,7 @@ export function MessagesClient({ initialThreads }: { initialThreads: MessageThre
         </Card>
       </div>
 
-      {showCompose && <ComposeModal onClose={() => setShowCompose(false)} onSend={handleComposeSend} />}
+      {showCompose && <ComposeModal onClose={() => setShowCompose(false)} onSend={handleComposeSend} sending={sending} />}
     </div>
   );
 }

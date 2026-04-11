@@ -2,6 +2,21 @@ import { and, notInArray, lt, eq, sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { tasks } from '@/drizzle/schema/lifeos/tasks';
 
+// ── Notification imports (lazy-resolved to avoid breaking when transport is unavailable) ──
+type MessageBusLike = { publish(agentId: string, payload: Record<string, unknown>): boolean; isConnected(agentId: string): boolean };
+let _messageBusCache: MessageBusLike | null = null;
+function getMessageBusSafe(): MessageBusLike | null {
+  if (_messageBusCache) return _messageBusCache;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('../../src/transport/message-bus');
+    _messageBusCache = mod.getMessageBus?.() ?? null;
+  } catch {
+    // Not available outside the daemon runtime — gracefully skip
+  }
+  return _messageBusCache;
+}
+
 /**
  * Edict-Inspired 4-Stage Stalled Task Recovery System
  *
@@ -69,7 +84,7 @@ export function defaultSchedulerState(): SchedulerState {
 }
 
 // ---------------------------------------------------------------------------
-// Recovery stubs (actual agent dispatch wired later)
+// Recovery implementations (agent dispatch wired to MessageBus + Telegram)
 // ---------------------------------------------------------------------------
 
 /**
@@ -113,6 +128,30 @@ export async function retryTask(task: any): Promise<void> {
       .where(eq(tasks.id, task.id));
 
     console.log(`[Scheduler] RETRY task ${task.id} ("${task.name}") — retryCount now ${sched.retryCount}/${sched.maxRetry}`);
+
+    // Notify the assignee agent via MessageBus (with backoff delay)
+    const bus = getMessageBusSafe();
+    if (bus && task.assigneeAgentId && bus.isConnected(task.assigneeAgentId)) {
+      const backoffMs = 600_000 * sched.retryCount; // default stallThresholdMs * retryCount
+      setTimeout(() => {
+        bus.publish(task.assigneeAgentId, {
+          message_id: `retry-${task.id}-${sched.retryCount}`,
+          thread_id: 'scheduler:retry',
+          from: 'system:scheduler',
+          to: task.assigneeAgentId,
+          content: JSON.stringify({
+            action: 'retry_task',
+            taskId: task.id,
+            taskName: task.name,
+            retryCount: sched.retryCount,
+            reason: 'Task stalled — no progress detected',
+          }),
+          priority: 'P1',
+          requires_response: false,
+          created_at: Date.now(),
+        });
+      }, backoffMs);
+    }
   } catch (err) {
     console.error(`[Scheduler] FAILED to retry task ${task.id}:`, err);
     throw err;
@@ -138,6 +177,37 @@ export async function escalateTask(task: any): Promise<void> {
       .where(eq(tasks.id, task.id));
 
     console.log(`[Scheduler] ESCALATE task ${task.id} ("${task.name}") — escalationLevel now ${sched.escalationLevel}/${sched.maxEscalationLevel}`);
+
+    // Notify escalation targets via MessageBus
+    const bus = getMessageBusSafe();
+    if (bus) {
+      const escalationTargets: Record<number, string[]> = {
+        1: ['coo-productivity'],
+        2: ['ceo-strategic'],
+        3: ['ceo-strategic', 'coo-productivity'],
+      };
+      const targets = escalationTargets[sched.escalationLevel] ?? ['ceo-strategic'];
+      for (const targetAgent of targets) {
+        if (bus.isConnected(targetAgent)) {
+          bus.publish(targetAgent, {
+            message_id: `escalate-${task.id}-${sched.escalationLevel}`,
+            thread_id: 'scheduler:escalation',
+            from: 'system:scheduler',
+            to: targetAgent,
+            content: JSON.stringify({
+              action: 'escalated_task',
+              taskId: task.id,
+              taskName: task.name,
+              escalationLevel: sched.escalationLevel,
+              reason: `Task stalled after ${sched.retryCount} retries — manual intervention needed`,
+            }),
+            priority: 'P1',
+            requires_response: false,
+            created_at: Date.now(),
+          });
+        }
+      }
+    }
   } catch (err) {
     console.error(`[Scheduler] FAILED to escalate task ${task.id}:`, err);
     throw err;
@@ -194,6 +264,25 @@ export async function blockTask(task: any, reason: string): Promise<void> {
       .where(eq(tasks.id, task.id));
 
     console.log(`[Scheduler] BLOCK task ${task.id} ("${task.name}") — reason: "${reason}"`);
+
+    // Notify admin via Telegram
+    try {
+      const { getTelegramBot } = await import('../../src/integrations/telegram');
+      const bot = getTelegramBot();
+      if (bot) {
+        const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID;
+        if (chatId) {
+          await bot.telegram.sendMessage(chatId,
+            `⚠️ Task "${task.name}" (ID: ${task.id}) has been BLOCKED.\n` +
+            `All automated recovery exhausted.\n` +
+            `Reason: ${reason}\n` +
+            `Manual intervention required.`,
+          );
+        }
+      }
+    } catch {
+      // Telegram not available — skip gracefully
+    }
   } catch (err) {
     console.error(`[Scheduler] FAILED to block task ${task.id}:`, err);
     throw err;

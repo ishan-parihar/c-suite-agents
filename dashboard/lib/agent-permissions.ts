@@ -50,7 +50,8 @@ export type EntityType =
   | 'session'
   | 'kanban'
   | 'message'
-  | 'account';
+  | 'account'
+  | 'note';
 
 // ── Agent Policy ─────────────────────────────────────────────────────────────
 
@@ -68,8 +69,8 @@ export const AGENT_POLICY: Record<string, AgentPolicy> = {
   // dispatches all other C-suite agents.
   'ceo-strategic': {
     role: 'coordinator',
-    canRead: ['goal', 'task', 'meeting', 'journal', 'project', 'campaign', 'content', 'person', 'financial', 'report', 'session', 'kanban', 'message', 'account'],
-    canWrite: ['goal', 'project', 'campaign'],
+    canRead: ['goal', 'task', 'meeting', 'journal', 'project', 'campaign', 'content', 'person', 'financial', 'report', 'session', 'kanban', 'message', 'account', 'note'],
+    canWrite: ['goal', 'project', 'campaign', 'note'],
     canDelete: [],
     canDispatch: ['coo-productivity', 'cpo-psychologist', 'cro-relational', 'cfo-financial', 'cmo-content', 'cio-intelligence', 'physician'],
   },
@@ -119,7 +120,7 @@ export const AGENT_POLICY: Record<string, AgentPolicy> = {
   'cmo-content': {
     role: 'executor',
     canRead: ['content', 'campaign'],
-    canWrite: ['content', 'campaign'],
+    canWrite: ['content', 'campaign', 'note'],
     canDelete: [],
     canDispatch: [],
   },
@@ -128,7 +129,7 @@ export const AGENT_POLICY: Record<string, AgentPolicy> = {
   // Observer with read-everything access. Writes reports only.
   'cio-intelligence': {
     role: 'observer',
-    canRead: ['goal', 'task', 'meeting', 'journal', 'project', 'campaign', 'content', 'person', 'financial', 'report', 'session', 'kanban', 'message', 'account'],
+    canRead: ['goal', 'task', 'meeting', 'journal', 'project', 'campaign', 'content', 'person', 'financial', 'report', 'session', 'kanban', 'message', 'account', 'note'],
     canWrite: ['report'],
     canDelete: [],
     canDispatch: [],
@@ -180,7 +181,9 @@ export function assertAgentCan(
   entityType: EntityType,
 ): void {
   const policy = AGENT_POLICY[agentId];
-  if (!policy) return; // Unknown agents not blocked (forward compat)
+  if (!policy) {
+    throw new PermissionError(`Unknown agent: ${agentId}`);
+  }
 
   const actionMap: Record<string, EntityType[]> = {
     read: policy.canRead,

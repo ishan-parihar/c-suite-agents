@@ -6,8 +6,8 @@ import { createHmac, randomBytes } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
 import { mkdir, readFile, writeFile } from "fs/promises";
-import { logger } from "../logger.js";
-import { SystemEventQueue } from "./system-events.js";
+import { logger } from "../logger";
+import { SystemEventQueue } from "./system-events";
 
 const WEBHOOKS_FILE = join(homedir(), ".operant", "webhooks.json");
 

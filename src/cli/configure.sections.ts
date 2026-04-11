@@ -2,10 +2,10 @@ import readline from "node:readline";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type WizardSection, type SectionHandler } from "./configure.shared.js";
-import { maskValue } from "./config-snapshot.js";
-import { runMcpCommand } from "./mcp.js";
-import { runDoctor } from "./doctor.js";
+import { type WizardSection, type SectionHandler } from "./configure.shared";
+import { maskValue } from "./config-snapshot";
+import { runMcpCommand } from "./mcp";
+import { runDoctor } from "./doctor";
 
 // ---------------------------------------------------------------------------
 // ANSI Color Helpers

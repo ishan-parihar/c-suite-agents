@@ -5,8 +5,8 @@ import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import * as path from "path";
 import * as fs from "fs";
-import { logger } from "../logger.js";
-import { initWorkspace } from "../agents/workspace-manager.js";
+import { logger } from "../logger";
+import { initWorkspace } from "../agents/workspace-manager";
 
 export type TransportMode = "ws" | "sse" | "polling";
 

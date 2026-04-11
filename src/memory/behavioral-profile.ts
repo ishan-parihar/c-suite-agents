@@ -2,9 +2,9 @@
 // Tracks interaction outcomes, user corrections, tone preferences,
 // and proactivity effectiveness to evolve agent behavior over time.
 
-import { logger } from "../logger.js";
-import { getMemoryFacade } from "../memory/index.js";
-import type { MemoryEntry } from "./types.js";
+import { logger } from "../logger";
+import { getMemoryFacade } from "../memory/index";
+import type { MemoryEntry } from "./types";
 
 export interface InteractionOutcome {
   timestamp: number;

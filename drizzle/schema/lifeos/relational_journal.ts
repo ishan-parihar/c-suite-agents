@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, boolean, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 import { days } from './days';
 import { people } from './people';
 
@@ -15,6 +15,7 @@ export const relationalJournal = pgTable('relational_journal', {
   followUpNeeded: boolean('follow_up_needed'),
   relationshipStatus: text('relationship_status').array(),
   relationalJson: text('relational_json'),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

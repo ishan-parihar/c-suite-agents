@@ -1,9 +1,9 @@
 // Retrieval — Query builder with vector + metadata + temporal + tag filtering
 
-import { logger } from "../logger.js";
-import type { MemoryStore } from "./store.js";
-import type { EmbeddingService } from "./embeddings.js";
-import type { MemoryEntry, MemoryQuery, MemoryScope } from "./types.js";
+import { logger } from "../logger";
+import type { MemoryStore } from "./store";
+import type { EmbeddingService } from "./embeddings";
+import type { MemoryEntry, MemoryQuery, MemoryScope } from "./types";
 
 export class MemoryRetriever {
   constructor(

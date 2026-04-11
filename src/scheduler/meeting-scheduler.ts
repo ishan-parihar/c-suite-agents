@@ -1,7 +1,7 @@
 // Meeting Scheduler - Automatically executes scheduled meetings
 
-import { logger } from "../logger.js";
-import { getMeetingGovernance } from "../organic/meetings.js";
+import { logger } from "../logger";
+import { getMeetingGovernance } from "../organic/meetings";
 
 export class MeetingScheduler {
   private intervalMs: number;

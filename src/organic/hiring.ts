@@ -4,12 +4,12 @@ import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
-import { getStaffById, CORE_STAFF_ROLES } from "../staff/core-staff.js";
-import { getMessagingSystem, type MessagingSystem } from "./messaging.js";
-import { Memory } from "../memory/lancedb.js";
-import { Kanban } from "../kanban/sqlite.js";
-import { SystemEventQueue } from "../scheduler/system-events.js";
+import { logger } from "../logger";
+import { getStaffById, CORE_STAFF_ROLES } from "../staff/core-staff";
+import { getMessagingSystem, type MessagingSystem } from "./messaging";
+import { Memory } from "../memory/lancedb";
+import { Kanban } from "../kanban/sqlite";
+import { SystemEventQueue } from "../scheduler/system-events";
 
 function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }

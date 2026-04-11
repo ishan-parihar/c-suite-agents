@@ -1,7 +1,7 @@
 // Operant MCP Client — Full Suite Integration
 // All Operant databases and tools accessible to all core staff agents
 
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 
 export type OperantQuery = {
   database: string;

@@ -6,7 +6,7 @@ import {
   type HookContext,
   type HookResult,
   type HookType,
-} from "../runtime/hooks.js";
+} from "../runtime/hooks";
 
 const baseCtx: HookContext = {
   toolName: "memory.search",

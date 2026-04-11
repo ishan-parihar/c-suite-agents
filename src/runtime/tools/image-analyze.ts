@@ -6,8 +6,8 @@ import { lookup } from "node:dns/promises";
 import { homedir } from "node:os";
 import { join, extname, resolve, normalize, sep } from "node:path";
 import OpenAI from "openai";
-import { logger } from "../../logger.js";
-import { loadConfig } from "../../config/loader.js";
+import { logger } from "../../logger";
+import { loadConfig } from "../../config/loader";
 
 interface AnyAgentTool {
   name: string;

@@ -1,12 +1,12 @@
 // Memory Lifecycle — TTL, decay, consolidation pipeline
 
 import { createHash } from "node:crypto";
-import { logger } from "../logger.js";
-import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
-import type { MemoryStore } from "./store.js";
-import type { EmbeddingService } from "./embeddings.js";
-import type { MemoryDedup } from "./dedup.js";
-import type { MemoryScope, MemoryEntry, DecayConfig } from "./types.js";
+import { logger } from "../logger";
+import { getNativeRuntime } from "../runtime/native-agent-runtime";
+import type { MemoryStore } from "./store";
+import type { EmbeddingService } from "./embeddings";
+import type { MemoryDedup } from "./dedup";
+import type { MemoryScope, MemoryEntry, DecayConfig } from "./types";
 import { v4 as uuidv4 } from "uuid";
 
 export class MemoryLifecycle {

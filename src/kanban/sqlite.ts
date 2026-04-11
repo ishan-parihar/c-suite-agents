@@ -2,9 +2,9 @@ import Database from "better-sqlite3";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
-import { getDirectReports } from "../staff/core-staff.js";
-import { validateAgentIdentity } from "../auth/session.js";
+import { logger } from "../logger";
+import { getDirectReports } from "../staff/core-staff";
+import { validateAgentIdentity } from "../auth/session";
 
 function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }

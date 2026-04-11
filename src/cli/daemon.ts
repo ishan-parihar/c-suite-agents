@@ -9,7 +9,7 @@ import { join, dirname } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync, copyFileSync, renameSync } from "node:fs";
 import * as crypto from "node:crypto";
-import { loadConfig, getConfigPath } from "../config/loader.js";
+import { loadConfig, getConfigPath } from "../config/loader";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -254,7 +254,7 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
 
   // Resolve paths
   const appDir = resolveAppDir();
-  const scriptPath = join(appDir, "build", "index.js");
+  const scriptPath = join(appDir, "build", "index");
   if (!existsSync(scriptPath)) {
     console.log(err(`Application not built: ${scriptPath}`));
     console.log(info(`Run: npm run build`));

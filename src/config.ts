@@ -1,4 +1,4 @@
-import { loadConfig, getConfigPath } from "./config/loader.js";
+import { loadConfig, getConfigPath } from "./config/loader";
 
 // Load config once at module initialization (defaults < .env < ~/.operant/config.json)
 let _config: ReturnType<typeof loadConfig> | null = null;

@@ -2,9 +2,9 @@
 
 import { createHash } from "crypto";
 import ollama from "ollama";
-import { logger } from "../logger.js";
-import { loadConfig } from "../config/loader.js";
-import type { EmbeddingConfig } from "../config/schema.js";
+import { logger } from "../logger";
+import { loadConfig } from "../config/loader";
+import type { EmbeddingConfig } from "../config/schema";
 
 const CACHE_SIZE = 5000;
 

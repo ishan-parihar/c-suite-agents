@@ -12,19 +12,19 @@
  * - Debug logging per cycle
  *
  * Usage:
- *   import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor.js";
+ *   import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor";
  *   HeartbeatMonitor.start();
  *
  * @module heartbeat-monitor
  */
 
-import { logger } from "../logger.js";
-import { ErrorBus } from "../runtime/error-emitter.js";
-import { HeartbeatError } from "../runtime/error-types.js";
-import { SelfHealer } from "../runtime/self-healer.js";
-import { FailureScenario } from "../runtime/recovery.js";
-import { getCoreStaffIds } from "../staff/core-staff.js";
-import { getAgentHealthRegistry, type AgentHealth } from "./agent-health.js";
+import { logger } from "../logger";
+import { ErrorBus } from "../runtime/error-emitter";
+import { HeartbeatError } from "../runtime/error-types";
+import { SelfHealer } from "../runtime/self-healer";
+import { FailureScenario } from "../runtime/recovery";
+import { getCoreStaffIds } from "../staff/core-staff";
+import { getAgentHealthRegistry, type AgentHealth } from "./agent-health";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -548,7 +548,7 @@ export class HeartbeatMonitorClass {
  *
  * Import this directly:
  * ```ts
- * import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor.js";
+ * import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor";
  * HeartbeatMonitor.start();
  * ```
  */

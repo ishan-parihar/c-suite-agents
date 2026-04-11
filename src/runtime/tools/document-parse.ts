@@ -4,8 +4,8 @@
 import { realpathSync, statSync, type Stats } from "node:fs";
 import { promises as fs } from "node:fs";
 import { extname, isAbsolute, resolve, sep } from "node:path";
-import { logger } from "../../logger.js";
-import { getAgentWorkspace } from "../../agents/workspace-manager.js";
+import { logger } from "../../logger";
+import { getAgentWorkspace } from "../../agents/workspace-manager";
 
 interface AnyAgentTool {
   name: string;
@@ -26,7 +26,7 @@ const TEXT_TYPES = new Set([
 ]);
 
 const CODE_TYPES = new Set([
-  ".js", ".ts", ".py", ".rb", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
+  "", ".ts", ".py", ".rb", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
 ]);
 
 const MARKUP_TYPES = new Set([

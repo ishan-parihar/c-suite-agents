@@ -1,10 +1,10 @@
 // Meeting Governance — Organic Board Meeting System
 
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
-import { getBoardMembers, getStaffById } from "../staff/core-staff.js";
-import { getMessagingSystem, type MessagingSystem } from "./messaging.js";
-import { validateAgentIdentity } from "../auth/session.js";
+import { logger } from "../logger";
+import { getBoardMembers, getStaffById } from "../staff/core-staff";
+import { getMessagingSystem, type MessagingSystem } from "./messaging";
+import { validateAgentIdentity } from "../auth/session";
 import { promises as fs } from "fs";
 import { resolve } from "path";
 

@@ -220,7 +220,7 @@ create_config_json() {
     "lancedb": "$DATA_DIR/lancedb",
     "kanbanDb": "$DATA_DIR/kanban/kanban.db",
     "messagesDb": "$DATA_DIR/messages/messages.db",
-    "agentOffices": "$DEV_DIR/agents",
+    "agentOffices": "$DATA_DIR/agents",
     "logFile": "$LOG_DIR/operant.log"
   },
   "telegram": {
@@ -275,8 +275,9 @@ EOFSERVICE
     chmod 644 /etc/systemd/system/operant.service
     systemctl daemon-reload
     systemctl enable operant.service
+    systemctl start operant.service
 
-    log_success "Operant service created (Restart=always)"
+    log_success "Operant service created and started (Restart=always)"
 }
 
 # ── Dashboard ──────────────────────────────────────────────────────
@@ -302,17 +303,40 @@ install_dashboard() {
 create_dashboard_env() {
     log_info "Creating dashboard environment configuration..."
 
-    cat > "$DEV_DIR/dashboard/.env.local" << EOFDASHENV
+    local env_file="$DEV_DIR/dashboard/.env.local"
+
+    # Preserve existing auth vars if file already exists
+    local existing_hash=""
+    local existing_cookie_secret=""
+    local existing_session_hours=""
+    if [ -f "$env_file" ]; then
+        existing_hash=$(grep '^DASHBOARD_PASSWORD_HASH=' "$env_file" 2>/dev/null || true)
+        existing_cookie_secret=$(grep '^COOKIE_SECRET=' "$env_file" 2>/dev/null || true)
+        existing_session_hours=$(grep '^SESSION_DURATION_HOURS=' "$env_file" 2>/dev/null || true)
+    fi
+
+    cat > "$env_file" << EOFDASHENV
 # Operant Dashboard Environment Configuration
 NODE_ENV=production
 PORT=$DASHBOARD_PORT
 DATABASE_URL=postgresql://operant:operant_password@localhost:5432/operant
 EOFDASHENV
 
-    chmod 600 "$DEV_DIR/dashboard/.env.local"
-    chown "$DEV_USER:$DEV_GROUP" "$DEV_DIR/dashboard/.env.local"
+    # Restore preserved auth vars
+    if [ -n "$existing_hash" ]; then
+        echo "$existing_hash" >> "$env_file"
+    fi
+    if [ -n "$existing_cookie_secret" ]; then
+        echo "$existing_cookie_secret" >> "$env_file"
+    fi
+    if [ -n "$existing_session_hours" ]; then
+        echo "$existing_session_hours" >> "$env_file"
+    fi
 
-    log_success "Dashboard env created at $DEV_DIR/dashboard/.env.local"
+    chmod 600 "$env_file"
+    chown "$DEV_USER:$DEV_GROUP" "$env_file"
+
+    log_success "Dashboard env created at $env_file"
 }
 
 create_dashboard_systemd_service() {
@@ -419,22 +443,148 @@ EOFCF
         log_warn "Could not restart cloudflared — do: sudo systemctl restart cloudflared"
     }
 
+    # Sync user-level config to prevent duplicate tunnel conflicts
+    local user_cf_config="/home/$DEV_USER/.config/cloudflared/config.yml"
+    if [ -f "$cf_config" ] && [ -d "$(dirname "$user_cf_config")" ]; then
+        cp "$cf_config" "$user_cf_config"
+        chown "$DEV_USER:$DEV_GROUP" "$user_cf_config" 2>/dev/null || true
+        log_info "Synced user-level cloudflared config"
+    fi
+
     log_success "Cloudflare Tunnel: https://$DASHBOARD_DOMAIN → http://localhost:$DASHBOARD_PORT"
+}
+
+# ── Agent Office Seeding ───────────────────────────────────────────
+
+seed_agent_office() {
+    local office_dir="$1"
+    local agent_id="$2"
+    local agent_name="$3"
+    local agent_role="$4"
+    local agent_responsibilities="$5"
+
+    mkdir -p "$office_dir"
+
+    # AGENTS.md
+    if [ ! -f "$office_dir/AGENTS.md" ]; then
+        cat > "$office_dir/AGENTS.md" << EOFAGENTS
+# ${agent_name}
+
+## Role
+${agent_role}
+
+## Responsibilities
+${agent_responsibilities}
+EOFAGENTS
+    fi
+
+    # BOOTSTRAP.md
+    if [ ! -f "$office_dir/BOOTSTRAP.md" ]; then
+        cat > "$office_dir/BOOTSTRAP.md" << EOFBOOTSTRAP
+# Bootstrap Protocol
+
+This file triggers the first-run initialization ritual.
+On completion, this file should be removed.
+
+## Steps
+1. Read IDENTITY.md for role context
+2. Read USER.md for user context
+3. Initialize memory systems
+4. Report readiness to CEO
+5. Remove this file
+EOFBOOTSTRAP
+    fi
+
+    # IDENTITY.md
+    if [ ! -f "$office_dir/IDENTITY.md" ]; then
+        cat > "$office_dir/IDENTITY.md" << EOFIDENTITY
+# Identity
+
+- **Agent**: ${agent_name}
+- **Role**: ${agent_role}
+- **Status**: Initializing
+- **Office**: ${office_dir}
+EOFIDENTITY
+    fi
+
+    # USER.md
+    if [ ! -f "$office_dir/USER.md" ]; then
+        cat > "$office_dir/USER.md" << EOFUSER
+# User Context
+
+This file will be populated during onboarding with user preferences,
+working style, and context.
+EOFUSER
+    fi
+}
+
+seed_agent_offices() {
+    local agents_dir="$DATA_DIR/agents"
+
+    log_info "Seeding agent offices with bootstrap files..."
+
+    seed_agent_office "$agents_dir/ceo-strategic" "ceo-strategic" \
+        "CEO-Strategic" "CEO — Chief Executive Officer" \
+        "Overall system orchestration, strategic decisions, user communication"
+
+    seed_agent_office "$agents_dir/coo-productivity" "coo-productivity" \
+        "COO" "COO — Chief Operating Officer" \
+        "Task management, kanban operations, workflow optimization"
+
+    seed_agent_office "$agents_dir/cpo-psychologist" "cpo-psychologist" \
+        "CPO" "CPO — Chief Psychology Officer" \
+        "Mental health monitoring, behavioral analysis, mood tracking"
+
+    seed_agent_office "$agents_dir/cro-relational" "cro-relational" \
+        "CRO" "CRO — Chief Relational Officer" \
+        "Relationship management, social network analysis, people operations"
+
+    seed_agent_office "$agents_dir/cfo-financial" "cfo-financial" \
+        "CFO" "CFO — Chief Financial Officer" \
+        "Financial tracking, budget analysis, revenue monitoring"
+
+    seed_agent_office "$agents_dir/cmo-content" "cmo-content" \
+        "CMO" "CMO — Chief Marketing Officer" \
+        "Content strategy, social media management, brand operations"
+
+    seed_agent_office "$agents_dir/cio-intelligence" "cio-intelligence" \
+        "CIO" "CIO — Chief Intelligence Officer" \
+        "Research, information synthesis, competitive analysis"
+
+    seed_agent_office "$agents_dir/physician-health" "physician-health" \
+        "Physician" "Chief Health Officer" \
+        "Health metrics, diet tracking, exercise monitoring, vital analysis"
+
+    chown -R "$DEV_USER:$DEV_GROUP" "$agents_dir"
+
+    log_success "Agent offices seeded (8 agents × 4 files each)"
 }
 
 # ── CLI Symlink ────────────────────────────────────────────────────
 create_cli_symlink() {
     log_info "Installing CLI command..."
 
-    local bin_target="/usr/local/bin/operant"
     local cli_source="$DEV_DIR/bin/operant.mjs"
 
-    if [ -f "$cli_source" ]; then
-        ln -sf "$cli_source" "$bin_target"
+    if [ ! -f "$cli_source" ]; then
+        log_warn "CLI source not found at $cli_source"
+        return 0
+    fi
+
+    # Try system-wide first, fall back to user-local bin
+    local bin_target="/usr/local/bin/operant"
+    if ln -sf "$cli_source" "$bin_target" 2>/dev/null; then
         chmod +x "$bin_target"
         log_success "CLI installed: operant → $bin_target"
     else
-        log_warn "CLI source not found at $cli_source"
+        local user_bin="$HOME/.local/bin"
+        mkdir -p "$user_bin"
+        ln -sf "$cli_source" "$user_bin/operant"
+        chmod +x "$user_bin/operant"
+        log_success "CLI installed: operant → $user_bin/operant (user-local)"
+        if ! echo "$PATH" | grep -q "$user_bin"; then
+            log_warn "  $user_bin not on PATH — add it to your shell config"
+        fi
     fi
 }
 
@@ -510,6 +660,7 @@ main() {
     install_system_deps
     install_nodejs
     create_directories
+    seed_agent_offices
     install_application
     create_env_file
     create_config_json

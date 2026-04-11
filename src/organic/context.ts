@@ -1,13 +1,13 @@
 // Agent Context Management — Wake-up Context & Memory Recall
 
-import { logger } from "../logger.js";
-import { getMessagingSystem, type MessageSearchResult, type MessageThread } from "./messaging.js";
-import { getMeetingGovernance } from "./meetings.js";
-import { getHiringSystem } from "./hiring.js";
-import { getStaffById } from "../staff/core-staff.js";
-import { Kanban, type KanbanBoard } from "../kanban/sqlite.js";
-import { Memory } from "../memory/lancedb.js";
-import { getBehavioralProfile, formatBehavioralPrompt } from "../memory/behavioral-profile.js";
+import { logger } from "../logger";
+import { getMessagingSystem, type MessageSearchResult, type MessageThread } from "./messaging";
+import { getMeetingGovernance } from "./meetings";
+import { getHiringSystem } from "./hiring";
+import { getStaffById } from "../staff/core-staff";
+import { Kanban, type KanbanBoard } from "../kanban/sqlite";
+import { Memory } from "../memory/lancedb";
+import { getBehavioralProfile, formatBehavioralPrompt } from "../memory/behavioral-profile";
 
 export interface AgentWakeContext {
   agent_id: string;

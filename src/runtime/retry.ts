@@ -3,7 +3,7 @@
  * Designed for LLM API calls with configurable retry predicates,
  * Retry-After header support, and observability hooks.
  *
- * Import pattern: `import { retryAsync, isRetryableError } from "./retry.js"`
+ * Import pattern: `import { retryAsync, isRetryableError } from "./retry"`
  */
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import os from "os";
 import {
   SessionPersistence,
   type SessionEntry,
-} from "../runtime/session-persistence.js";
+} from "../runtime/session-persistence";
 
 describe("SessionPersistence", () => {
   let tmpDir: string;

@@ -12,7 +12,7 @@
  * - Singleton access via exported `ErrorAggregator` constant
  *
  * Usage:
- *   import { ErrorAggregator } from "./runtime/error-aggregator.js";
+ *   import { ErrorAggregator } from "./runtime/error-aggregator";
  *
  *   ErrorAggregator.start();
  *
@@ -27,9 +27,9 @@
  * @module error-aggregator
  */
 
-import { ErrorBus, ErrorEventType, ErrorEvent } from "./error-emitter.js";
-import { ErrorSeverity } from "./error-types.js";
-import { logger } from "../logger.js";
+import { ErrorBus, ErrorEventType, ErrorEvent } from "./error-emitter";
+import { ErrorSeverity } from "./error-types";
+import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Severity ordering
@@ -583,7 +583,7 @@ export class ErrorAggregatorClass {
  *
  * Import this directly:
  * ```ts
- * import { ErrorAggregator } from "./runtime/error-aggregator.js";
+ * import { ErrorAggregator } from "./runtime/error-aggregator";
  * ErrorAggregator.start();
  * ```
  */

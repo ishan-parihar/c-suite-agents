@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { sql } from 'drizzle-orm';
-import { outboxEvents } from '@/drizzle/schema';
+import { withOutbox, type OutboxEventInput } from '@/lib/outbox-helper';
 import { PermissionError } from '@/lib/agent-permissions';
 import {
   extractAgentHeaders,
@@ -78,14 +78,12 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
         return null;
       }
 
-      await tx.insert(outboxEvents).values({
+      await withOutbox(tx, {
         eventType: 'kanban.card_deleted',
         entityId: result.rows[0].id as string,
         entityType: 'kanban',
         payload: { title: result.rows[0].title, agentId: headers.agentId, userId: headers.userId },
-        published: false,
-        attempts: 0,
-      });
+      } satisfies OutboxEventInput);
 
       return result.rows[0];
     });

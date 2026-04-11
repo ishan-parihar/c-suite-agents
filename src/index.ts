@@ -1,33 +1,33 @@
 import "dotenv/config";
-import { startOperant, toolImpls } from "./mcp/server.js";
-import { startHeartbeat, stopHeartbeat } from "./scheduler/heartbeat.js";
-import { startTelegram, sendTelegramMessage, getTelegramBot, flushChatState } from "./integrations/telegram.js";
-import { startMessageProcessor } from "./scheduler/message-processor.js";
-import { startAgentExecutor } from "./scheduler/agent-executor.js";
-import { startMeetingScheduler } from "./scheduler/meeting-scheduler.js";
-import { startAgentScheduler, getAgentScheduler } from "./scheduler/agent-scheduler.js";
-import { getWebhookHandler } from "./scheduler/webhooks.js";
-import { startBoardMeetingScheduler, getBoardMeetingScheduler } from "./scheduler/board-meeting-scheduler.js";
-import { getMemoryFacade } from "./memory/index.js";
-import type { DecayConfig } from "./memory/index.js";
-import { getCoreStaffIds } from "./staff/core-staff.js";
-import { getAgentToolScope } from "./staff/tool-scoping.js";
-import { logger } from "./logger.js";
+import { startOperant, toolImpls } from "./mcp/server";
+import { startHeartbeat, stopHeartbeat } from "./scheduler/heartbeat";
+import { startTelegram, sendTelegramMessage, getTelegramBot, flushChatState } from "./integrations/telegram";
+import { startMessageProcessor } from "./scheduler/message-processor";
+import { startAgentExecutor } from "./scheduler/agent-executor";
+import { startMeetingScheduler } from "./scheduler/meeting-scheduler";
+import { startAgentScheduler, getAgentScheduler } from "./scheduler/agent-scheduler";
+import { getWebhookHandler } from "./scheduler/webhooks";
+import { startBoardMeetingScheduler, getBoardMeetingScheduler } from "./scheduler/board-meeting-scheduler";
+import { getMemoryFacade } from "./memory/index";
+import type { DecayConfig } from "./memory/index";
+import { getCoreStaffIds } from "./staff/core-staff";
+import { getAgentToolScope } from "./staff/tool-scoping";
+import { logger } from "./logger";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { writeFileSync, readFileSync, unlinkSync, openSync, writeSync, closeSync } from "fs";
 import { createServer } from "http";
-import { initWorkspace, initAllWorkspaces } from "./agents/workspace-manager.js";
-import { initNativeRuntime, getNativeRuntime } from "./runtime/native-agent-runtime.js";
-import { getSessionRegistry } from "./scheduler/session-registry.js";
-import { loadConfig, getConfigPath } from "./config/loader.js";
-import { setLogLevel } from "./logger.js";
-import { connectAllMcpServers, type McpServerConnection } from "./mcp/client.js";
-import { createBridge } from "./mcp/bridge.js";
-import { getMeetingScheduler } from "./scheduler/meeting-scheduler.js";
-import { getMessageProcessor } from "./scheduler/message-processor.js";
-import { getAgentExecutor } from "./scheduler/agent-executor.js";
+import { initWorkspace, initAllWorkspaces } from "./agents/workspace-manager";
+import { initNativeRuntime, getNativeRuntime } from "./runtime/native-agent-runtime";
+import { getSessionRegistry } from "./scheduler/session-registry";
+import { loadConfig, getConfigPath } from "./config/loader";
+import { setLogLevel } from "./logger";
+import { connectAllMcpServers, type McpServerConnection } from "./mcp/client";
+import { createBridge } from "./mcp/bridge";
+import { getMeetingScheduler } from "./scheduler/meeting-scheduler";
+import { getMessageProcessor } from "./scheduler/message-processor";
+import { getAgentExecutor } from "./scheduler/agent-executor";
 import {
   registerComponent,
   markHealthy,
@@ -36,16 +36,16 @@ import {
   markStopped,
   healthResponse,
   getComponent,
-} from "./health.js";
-import { discoverAndLoadPlugins, listPlugins, getPluginHealth } from "./runtime/plugin-registry.js";
-import { ErrorBus } from "./runtime/error-emitter.js";
-import { ErrorAggregator } from "./runtime/error-aggregator.js";
-import { AlertManagerInstance as AlertManager } from "./runtime/alert-manager.js";
-import { SelfHealer } from "./runtime/self-healer.js";
-import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor.js";
-import { CronErrorHandler } from "./scheduler/cron-error-handler.js";
-import { getWsGateway } from "./transport/ws-server.js";
-import { getMessageBus } from "./transport/message-bus.js";
+} from "./health";
+import { discoverAndLoadPlugins, listPlugins, getPluginHealth } from "./runtime/plugin-registry";
+import { ErrorBus } from "./runtime/error-emitter";
+import { ErrorAggregator } from "./runtime/error-aggregator";
+import { AlertManagerInstance as AlertManager } from "./runtime/alert-manager";
+import { SelfHealer } from "./runtime/self-healer";
+import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor";
+import { CronErrorHandler } from "./scheduler/cron-error-handler";
+import { getWsGateway } from "./transport/ws-server";
+import { getMessageBus } from "./transport/message-bus";
 
 // Load config early (defaults < .env < ~/.operant/config.json)
 const config = loadConfig();
@@ -962,7 +962,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
     let healthProbeTimer: ReturnType<typeof setInterval> | null = null;
     healthProbeTimer = setInterval(async () => {
       try {
-        const { probeTelegram, getTelegramBot } = await import("./integrations/telegram.js");
+        const { probeTelegram, getTelegramBot } = await import("./integrations/telegram");
         const bot = getTelegramBot();
         if (!bot) {
           markDegraded("telegram", "bot instance lost");
@@ -1011,7 +1011,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
 
       try {
         try {
-          const { recordShutdownTimestamp, flushChatState } = await import("./integrations/telegram.js");
+          const { recordShutdownTimestamp, flushChatState } = await import("./integrations/telegram");
           recordShutdownTimestamp();
           flushChatState();
         } catch { /* ignore */ }
@@ -1024,8 +1024,8 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         SelfHealer.stop();
 
         // Stop session manager cleanup timer + close CTO approval DB
-        try { const { stopSessionManager } = await import("./auth/session.js"); stopSessionManager(); } catch { /* ignore */ }
-        try { const { closeCtoDb } = await import("./cto/approval-handler.js"); closeCtoDb(); } catch { /* ignore */ }
+        try { const { stopSessionManager } = await import("./auth/session"); stopSessionManager(); } catch { /* ignore */ }
+        try { const { closeCtoDb } = await import("./cto/approval-handler"); closeCtoDb(); } catch { /* ignore */ }
 
         // Stop schedulers first (prevent new work)
         getMessageProcessor()?.stop();
@@ -1053,27 +1053,27 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         clearTimeout(shutdownTimeout);
 
         // Close MemoryFacade
-        try { const { getMemoryFacade } = await import("./memory/index.js"); const mf = await getMemoryFacade(); mf.close?.(); logger.info("MemoryFacade closed"); } catch { /* ignore */ }
+        try { const { getMemoryFacade } = await import("./memory/index"); const mf = await getMemoryFacade(); mf.close?.(); logger.info("MemoryFacade closed"); } catch { /* ignore */ }
 
         // Close kanban database
         if (rt.ctx.kanban) { await rt.ctx.kanban.close(); logger.info("Kanban database closed"); }
 
         // Close messaging system
         try {
-          const messaging = await import("./organic/messaging.js");
+          const messaging = await import("./organic/messaging");
           const ms = await messaging.getMessagingSystem();
           if (ms?.close) { await ms.close(); }
           logger.info("Messaging system closed");
         } catch { /* ignore */ }
 
         // Clear session registry
-        try { const { getSessionRegistry } = await import("./scheduler/session-registry.js"); const sr = getSessionRegistry(); await sr.close?.(); logger.info("Session registry closed"); } catch { /* ignore */ }
+        try { const { getSessionRegistry } = await import("./scheduler/session-registry"); const sr = getSessionRegistry(); await sr.close?.(); logger.info("Session registry closed"); } catch { /* ignore */ }
 
         // Clear ToolSearch cache (unbounded Map)
-        try { const { cleanupAll } = await import("./runtime/tool-search.js"); cleanupAll(); logger.info("ToolSearch cache cleared"); } catch { /* ignore */ }
+        try { const { cleanupAll } = await import("./runtime/tool-search"); cleanupAll(); logger.info("ToolSearch cache cleared"); } catch { /* ignore */ }
 
         // Close WebSocket gateway
-        try { const { getWsGateway } = await import("./transport/ws-server.js"); const ws = getWsGateway(); await ws.shutdown(); logger.info("WebSocket gateway shutdown complete"); } catch { /* ignore */ }
+        try { const { getWsGateway } = await import("./transport/ws-server"); const ws = getWsGateway(); await ws.shutdown(); logger.info("WebSocket gateway shutdown complete"); } catch { /* ignore */ }
 
         // Close MCP connections
         if (mcpShutdown) { try { await mcpShutdown(); logger.info("MCP server shutdown complete"); } catch { /* ignore */ } }

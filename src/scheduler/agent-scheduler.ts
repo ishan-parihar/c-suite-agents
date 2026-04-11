@@ -2,23 +2,23 @@
 // Refactored: Uses SessionRegistry for persistent sessions, passes agent param,
 // pushes task results to SystemEventQueue for heartbeat injection.
 
-import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
-import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
-import { getMessagingSystem } from "../organic/messaging.js";
-import { Memory } from "../memory/lancedb.js";
-import { getMemoryFacade } from "../memory/index.js";
-import { getPromptForRole } from "../staff/prompts.js";
-import { sendTelegramMessage } from "../integrations/telegram.js";
+import { logger } from "../logger";
+import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff";
+import { getNativeRuntime } from "../runtime/native-agent-runtime";
+import { getMessagingSystem } from "../organic/messaging";
+import { Memory } from "../memory/lancedb";
+import { getMemoryFacade } from "../memory/index";
+import { getPromptForRole } from "../staff/prompts";
+import { sendTelegramMessage } from "../integrations/telegram";
 import { v4 as uuidv4 } from "uuid";
 import { CronExpressionParser } from "cron-parser";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
-import { getSessionRegistry } from "./session-registry.js";
-import { SystemEventQueue, currentTimeLine } from "./system-events.js";
-import { ErrorBus, createErrorEvent } from "../runtime/error-emitter.js";
-import { autoStore } from "../memory/auto.js";
+import { getSessionRegistry } from "./session-registry";
+import { SystemEventQueue, currentTimeLine } from "./system-events";
+import { ErrorBus, createErrorEvent } from "../runtime/error-emitter";
+import { autoStore } from "../memory/auto";
 
 export type ScheduleType =
   | "interval"

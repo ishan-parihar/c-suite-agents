@@ -1,26 +1,26 @@
 import { Telegraf, Markup } from "telegraf";
-import { logger } from "../logger.js";
-import { cfg, getConfig } from "../config.js";
-import type { OperantRuntime } from "../types.js";
-import { getOrgChart, getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
-import { getMessagingSystem } from "../organic/messaging.js";
-import { getMeetingGovernance } from "../organic/meetings.js";
-import { getHiringSystem } from "../organic/hiring.js";
-import { AgentContextManager } from "../organic/context.js";
-import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
-import { autoStore, autoRecall } from "../memory/auto.js";
-import { getMemoryFacade } from "../memory/index.js";
-import { getSessionRegistry } from "../scheduler/session-registry.js";
-import { getAgentHealthRegistry } from "../scheduler/agent-health.js";
-import { getReportsAndSessions } from "../mcp/tools-reports.js";
-import { getAgentScheduler } from "../scheduler/agent-scheduler.js";
+import { logger } from "../logger";
+import { cfg, getConfig } from "../config";
+import type { OperantRuntime } from "../types";
+import { getOrgChart, getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff";
+import { getMessagingSystem } from "../organic/messaging";
+import { getMeetingGovernance } from "../organic/meetings";
+import { getHiringSystem } from "../organic/hiring";
+import { AgentContextManager } from "../organic/context";
+import { getNativeRuntime } from "../runtime/native-agent-runtime";
+import { autoStore, autoRecall } from "../memory/auto";
+import { getMemoryFacade } from "../memory/index";
+import { getSessionRegistry } from "../scheduler/session-registry";
+import { getAgentHealthRegistry } from "../scheduler/agent-health";
+import { getReportsAndSessions } from "../mcp/tools-reports";
+import { getAgentScheduler } from "../scheduler/agent-scheduler";
 import os from "node:os";
 import path from "node:path";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
-import { ErrorBus } from "../runtime/error-emitter.js";
-import { GatewayError } from "../runtime/error-types.js";
-import { AsyncMutex } from "../runtime/async-mutex.js";
+import { ErrorBus } from "../runtime/error-emitter";
+import { GatewayError } from "../runtime/error-types";
+import { AsyncMutex } from "../runtime/async-mutex";
 
 type AgentRegistry = { agents: Map<string, { id: string; role: string; boardId: string }>; cards: Map<string, string> };
 
@@ -800,7 +800,7 @@ Your messages will be sent to all participants concurrently. Each agent will res
       const decision = action === "approve" ? "approved" as const : "negated" as const;
 
       try {
-        const { applyUserDecision } = await import("../organic/board-meeting.js");
+        const { applyUserDecision } = await import("../organic/board-meeting");
         await applyUserDecision(meetingId, decision);
         await ctx.answerCbQuery(decision === "approved" ? "✅ Decision applied" : "❌ Meeting discarded");
 
@@ -827,7 +827,7 @@ Your messages will be sent to all participants concurrently. Each agent will res
       const decision = action === "approve" ? "approved" as const : "rejected" as const;
 
       try {
-        const { handleUpgradeApproval } = await import("../cto/approval-handler.js");
+        const { handleUpgradeApproval } = await import("../cto/approval-handler");
         const result = await handleUpgradeApproval(proposalId, decision);
 
         await ctx.answerCbQuery(result.success
@@ -1576,7 +1576,7 @@ Usage:
 
       await ctx.sendChatAction("typing");
       try {
-        const { getActiveMeeting } = await import("../organic/board-meeting.js");
+        const { getActiveMeeting } = await import("../organic/board-meeting");
         const governance = getMeetingGovernance();
         const active = getActiveMeeting();
         const proposals = governance ? await governance.getActiveProposals() : [];
@@ -2587,7 +2587,7 @@ Example:
         let typingInterval: ReturnType<typeof setInterval> | undefined;
         try {
           // Import media pipeline
-          const { detectMedia, downloadTelegramFile, buildMediaContext, resolveMediaPlaceholder } = await import("./telegram-media.js");
+          const { detectMedia, downloadTelegramFile, buildMediaContext, resolveMediaPlaceholder } = await import("./telegram-media");
 
           // Detect media
           const detected = detectMedia(ctx);
@@ -2609,7 +2609,7 @@ Example:
           let parsedContent = "";
           if (detected.mediaType === "document" && media.path) {
             try {
-              const { createDocumentParseTool } = await import("../runtime/tools/document-parse.js");
+              const { createDocumentParseTool } = await import("../runtime/tools/document-parse");
               const docTool = createDocumentParseTool();
               if (docTool) {
                 const result = await docTool.execute("", { file_path: media.path, max_length: 50000 });
@@ -2624,7 +2624,7 @@ Example:
           let transcript = "";
           if ((detected.mediaType === "audio" || detected.mediaType === "voice") && media.path) {
             try {
-              const { createAudioTranscribeTool } = await import("../runtime/tools/audio-transcribe.js");
+              const { createAudioTranscribeTool } = await import("../runtime/tools/audio-transcribe");
               const audioTool = createAudioTranscribeTool();
               if (audioTool) {
                 const result = await audioTool.execute("", { file_path: media.path });
@@ -3037,7 +3037,7 @@ Example:
       }
       const meetingId = ctx.match[1];
       try {
-        const { applyUserDecision } = await import("../organic/board-meeting.js");
+        const { applyUserDecision } = await import("../organic/board-meeting");
         await applyUserDecision(meetingId, "approved");
         await ctx.answerCbQuery("✅ Vote recorded: Yes");
         logger.info({ meetingId, vote: "yes" }, "Meeting vote recorded");
@@ -3056,7 +3056,7 @@ Example:
       }
       const meetingId = ctx.match[1];
       try {
-        const { applyUserDecision } = await import("../organic/board-meeting.js");
+        const { applyUserDecision } = await import("../organic/board-meeting");
         await applyUserDecision(meetingId, "negated");
         await ctx.answerCbQuery("❌ Vote recorded: No");
         logger.info({ meetingId, vote: "no" }, "Meeting vote recorded");

@@ -10,8 +10,8 @@
 // This ensures memory is always fresh and always available — agents don't
 // need to "remember to remember."
 
-import { logger } from "../logger.js";
-import { getMemoryFacade, type MemoryFacade } from "../memory/index.js";
+import { logger } from "../logger";
+import { getMemoryFacade, type MemoryFacade } from "../memory/index";
 import { v4 as uuidv4 } from "uuid";
 
 // ---------------------------------------------------------------------------

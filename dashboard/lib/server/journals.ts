@@ -78,10 +78,12 @@ export type DietEntry = {
 export type SubjectiveDetail = SubjectiveEntry & {
   subjectiveJson: string | null;
   sleepHours: string | null;
+  content: string | null;
 };
 
 export type RelationalDetail = RelationalEntry & {
   relationalJson: string | null;
+  content: string | null;
 };
 
 export type SystemicDetail = SystemicEntry & {
@@ -89,6 +91,7 @@ export type SystemicDetail = SystemicEntry & {
   projects: string[] | null;
   directivesRiskLog: string[] | null;
   opportunitiesStrengths: string[] | null;
+  content: string | null;
 };
 
 export type DietDetail = DietEntry & {
@@ -98,6 +101,7 @@ export type DietDetail = DietEntry & {
   sleepQuality: string | null;
   nutrition: string | null;
   dietJson: string | null;
+  content: string | null;
 };
 
 export type JournalListEntry = SubjectiveEntry | RelationalEntry | SystemicEntry | DietEntry;
@@ -214,7 +218,7 @@ export async function getSubjectiveEntryDetail(id: string): Promise<SubjectiveDe
   try {
     const result = await db.execute(sql`
       SELECT id, name, date, stress_level, energy_level, mood_trigger, psychograph,
-             subjective_json, sleep_hours
+             subjective_json, sleep_hours, content
       FROM subjective_journal
       WHERE id = ${id}
       LIMIT 1
@@ -231,6 +235,7 @@ export async function getSubjectiveEntryDetail(id: string): Promise<SubjectiveDe
       psychograph: r.psychograph,
       subjectiveJson: r.subjective_json,
       sleepHours: r.sleep_hours,
+      content: r.content ? JSON.stringify(r.content) : null,
     };
   } catch {
     return null;
@@ -241,7 +246,7 @@ export async function getRelationalEntryDetail(id: string): Promise<RelationalDe
   try {
     const result = await db.execute(sql`
       SELECT id, name, date, interaction_type, sentiment, follow_up_needed, relationship_status,
-             relational_json
+             relational_json, content
       FROM relational_journal
       WHERE id = ${id}
       LIMIT 1
@@ -257,6 +262,7 @@ export async function getRelationalEntryDetail(id: string): Promise<RelationalDe
       followUpNeeded: r.follow_up_needed,
       relationshipStatus: parsePgArray(r.relationship_status),
       relationalJson: r.relational_json,
+      content: r.content ? JSON.stringify(r.content) : null,
     };
   } catch {
     return null;
@@ -267,7 +273,7 @@ export async function getSystemicEntryDetail(id: string): Promise<SystemicDetail
   try {
     const result = await db.execute(sql`
       SELECT id, name, date, impact, ai_generated_report, systemic_json,
-             projects, directives_risk_log, opportunities_strengths
+             projects, directives_risk_log, opportunities_strengths, content
       FROM systemic_journal
       WHERE id = ${id}
       LIMIT 1
@@ -284,6 +290,7 @@ export async function getSystemicEntryDetail(id: string): Promise<SystemicDetail
       projects: parsePgArray(r.projects),
       directivesRiskLog: parsePgArray(r.directives_risk_log),
       opportunitiesStrengths: parsePgArray(r.opportunities_strengths),
+      content: r.content ? JSON.stringify(r.content) : null,
     };
   } catch {
     return null;
@@ -296,7 +303,7 @@ export async function getDietEntryDetail(id: string): Promise<DietDetail | null>
       SELECT id, name, date, log_type, meal_type, calories, protein_g,
              water_ml, caffeine_mg, mood, energy_level, symptoms,
              supplements, environment, vitals_notes, sleep_quality,
-             nutrition, diet_json
+             nutrition, diet_json, content
       FROM diet_log
       WHERE id = ${id}
       LIMIT 1
@@ -322,6 +329,7 @@ export async function getDietEntryDetail(id: string): Promise<DietDetail | null>
       sleepQuality: r.sleep_quality,
       nutrition: r.nutrition,
       dietJson: r.diet_json,
+      content: r.content ? JSON.stringify(r.content) : null,
     };
   } catch {
     return null;

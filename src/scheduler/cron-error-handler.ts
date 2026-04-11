@@ -14,18 +14,18 @@
  * - Cooldown enforcement to prevent alert spam
  *
  * Usage:
- *   import { CronErrorHandler } from "./scheduler/cron-error-handler.js";
+ *   import { CronErrorHandler } from "./scheduler/cron-error-handler";
  *   CronErrorHandler.start();
  *
  * @module cron-error-handler
  */
 
-import { logger } from "../logger.js";
-import { ErrorBus } from "../runtime/error-emitter.js";
-import type { ErrorEvent } from "../runtime/error-emitter.js";
-import { CronJobError } from "../runtime/error-types.js";
-import { SelfHealer } from "../runtime/self-healer.js";
-import { FailureScenario } from "../runtime/recovery.js";
+import { logger } from "../logger";
+import { ErrorBus } from "../runtime/error-emitter";
+import type { ErrorEvent } from "../runtime/error-emitter";
+import { CronJobError } from "../runtime/error-types";
+import { SelfHealer } from "../runtime/self-healer";
+import { FailureScenario } from "../runtime/recovery";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -662,7 +662,7 @@ export class CronErrorHandlerClass {
  *
  * Import this directly:
  * ```ts
- * import { CronErrorHandler } from "./scheduler/cron-error-handler.js";
+ * import { CronErrorHandler } from "./scheduler/cron-error-handler";
  * CronErrorHandler.start();
  * ```
  */

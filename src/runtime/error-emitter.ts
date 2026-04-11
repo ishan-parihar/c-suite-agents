@@ -6,7 +6,7 @@
  * This enables monitoring, aggregation, and self-healing.
  *
  * Usage:
- *   import { ErrorBus, createErrorEvent } from "./runtime/error-emitter.js";
+ *   import { ErrorBus, createErrorEvent } from "./runtime/error-emitter";
  *
  *   // Emit an error event
  *   ErrorBus.emit({
@@ -42,12 +42,12 @@
 
 import { EventEmitter } from "events";
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 import {
   OperantError,
   ErrorSeverity,
   classifyError,
-} from "./error-types.js";
+} from "./error-types";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -442,7 +442,7 @@ export class ErrorEmitter {
  *
  * Import this directly instead of calling `getInstance()`:
  * ```ts
- * import { ErrorBus } from "./runtime/error-emitter.js";
+ * import { ErrorBus } from "./runtime/error-emitter";
  * ErrorBus.on("provider:failed", (evt) => { ... });
  * ```
  */

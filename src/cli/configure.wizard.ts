@@ -1,10 +1,10 @@
 import { writeFileSync, chmodSync, renameSync } from "node:fs";
 import * as crypto from "node:crypto";
-import { CONFIGURE_SECTIONS, type WizardSection, promptSection } from "./configure.shared.js";
-import { SECTION_HANDLERS } from "./configure.sections.js";
-import { readConfigSnapshot, summarizeConfig } from "./config-snapshot.js";
-import { applyWizardMetadata } from "./onboard-helpers.js";
-import { OperantConfigSchema } from "../config/schema.js";
+import { CONFIGURE_SECTIONS, type WizardSection, promptSection } from "./configure.shared";
+import { SECTION_HANDLERS } from "./configure.sections";
+import { readConfigSnapshot, summarizeConfig } from "./config-snapshot";
+import { applyWizardMetadata } from "./onboard-helpers";
+import { OperantConfigSchema } from "../config/schema";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";

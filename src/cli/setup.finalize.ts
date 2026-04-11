@@ -2,7 +2,7 @@ import { homedir, userInfo } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { ensureWorkspaceDirs } from "./onboard-helpers.js";
+import { ensureWorkspaceDirs } from "./onboard-helpers";
 
 // ---------------------------------------------------------------------------
 // ANSI Color Helpers (matching doctor.ts / setup-wizard.ts patterns)
@@ -455,7 +455,7 @@ export async function runFinalize(
 
   if (runDoctor) {
     try {
-      const { runDoctor: runDoctorCheck } = await import("./doctor.js");
+      const { runDoctor: runDoctorCheck } = await import("./doctor");
       console.log(`\n${BOLD}${CYAN}── Running Doctor Check ──${RESET}`);
       const doctorOk = await runDoctorCheck();
       if (!doctorOk) {
@@ -477,7 +477,7 @@ export async function runFinalize(
 // ---------------------------------------------------------------------------
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { loadConfig } = await import("../config/loader.js");
+  const { loadConfig } = await import("../config/loader");
   const config = loadConfig();
   const ok = await runFinalize(config, { installService: true, runDoctor: true });
   process.exit(ok ? 0 : 1);
