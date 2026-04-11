@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, numeric, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 import { quarterlyGoals } from './quarterly_goals';
 
 export const projects = pgTable('projects', {
@@ -43,6 +43,7 @@ export const projects = pgTable('projects', {
   durationDays: text('duration_days'),
   costToDate: numeric('cost_to_date', { precision: 12, scale: 2 }),
   lastEditedAt: timestamp('last_edited_at', { withTimezone: true }),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

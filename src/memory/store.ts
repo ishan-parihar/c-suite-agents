@@ -1,8 +1,8 @@
 // LanceDB Storage Layer — 3 isolated tables, proper indexing, decay
 
 import { connect, type Connection, type Table } from "@lancedb/lancedb";
-import { logger } from "../logger.js";
-import type { MemoryEntry, MemoryScope, MemoryQuery, DecayConfig } from "./types.js";
+import { logger } from "../logger";
+import type { MemoryEntry, MemoryScope, MemoryQuery, DecayConfig } from "./types";
 
 const TABLES: Record<MemoryScope, string> = {
   personal: "memory_personal",

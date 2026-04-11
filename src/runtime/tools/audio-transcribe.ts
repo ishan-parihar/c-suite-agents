@@ -5,8 +5,8 @@ import { spawn } from "node:child_process";
 import { statSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, dirname, basename, extname, isAbsolute, sep } from "node:path";
-import { logger } from "../../logger.js";
-import { getAgentWorkspace } from "../../agents/workspace-manager.js";
+import { logger } from "../../logger";
+import { getAgentWorkspace } from "../../agents/workspace-manager";
 
 interface AnyAgentTool {
   name: string;

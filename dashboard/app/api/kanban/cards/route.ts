@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { sql } from 'drizzle-orm';
-import { outboxEvents } from '@/drizzle/schema';
+import { withOutbox, type OutboxEventInput } from '@/lib/outbox-helper';
 import { PermissionError } from '@/lib/agent-permissions';
 import {
   extractAgentHeaders,
@@ -81,14 +81,12 @@ export async function PATCH(request: NextRequest) {
         return null;
       }
 
-      await tx.insert(outboxEvents).values({
+      await withOutbox(tx, {
         eventType: 'kanban.card_moved',
         entityId: validation.data.cardId as string,
         entityType: 'kanban',
         payload: { columnId: validation.data.columnId, agentId: headers.agentId, userId: headers.userId },
-        published: false,
-        attempts: 0,
-      });
+      } satisfies OutboxEventInput);
 
       return result.rows[0];
     });
@@ -148,14 +146,12 @@ export async function POST(request: NextRequest) {
         return null;
       }
 
-      await tx.insert(outboxEvents).values({
+      await withOutbox(tx, {
         eventType: 'kanban.card_created',
         entityId: result.rows[0].id as string,
         entityType: 'kanban',
         payload: { title: validation.data.title, agentId: headers.agentId, userId: headers.userId },
-        published: false,
-        attempts: 0,
-      });
+      } satisfies OutboxEventInput);
 
       return result.rows[0];
     });

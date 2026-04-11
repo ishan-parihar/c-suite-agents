@@ -1,7 +1,7 @@
 // Role-Specific System Prompts for Core Staff
 // Each agent gets their specialized prompt with Operant database access
 
-import { CORE_STAFF_ROLES, type CoreStaffRole } from "./core-staff.js";
+import { CORE_STAFF_ROLES, type CoreStaffRole } from "./core-staff";
 
 export function getSystemPrompt(roleId: string): string {
   const role = CORE_STAFF_ROLES[roleId];

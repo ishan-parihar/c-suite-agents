@@ -1,6 +1,6 @@
 // Inactivity Tracker - Monitors user activity and triggers proactive behavior
 
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 
 export class InactivityTracker {
   private lastActivity: number;

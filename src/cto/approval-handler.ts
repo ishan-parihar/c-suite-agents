@@ -3,9 +3,9 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { spawnSync } from "child_process";
 import Database from "better-sqlite3";
-import { logger } from "../logger.js";
-import { AsyncMutex } from "../runtime/async-mutex.js";
-import type { UpgradeProposal, ProposalItem } from "./upgrade-proposer.js";
+import { logger } from "../logger";
+import { AsyncMutex } from "../runtime/async-mutex";
+import type { UpgradeProposal, ProposalItem } from "./upgrade-proposer";
 
 // Extended types for execution-layer fields
 export interface ProposalItemWithEdits extends ProposalItem {

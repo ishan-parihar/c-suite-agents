@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { logger } from '../logger.js';
+import { logger } from '../logger';
 
 /**
  * Tracks which toolName+argsHash combinations have been circuit-broken.

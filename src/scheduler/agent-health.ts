@@ -2,8 +2,8 @@
 // Each agent reports health metrics on heartbeat, execution, and error events.
 // Provides team-wide visibility into agent status, workload, and silent detection.
 
-import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
+import { logger } from "../logger";
+import { getCoreStaffIds, getStaffById } from "../staff/core-staff";
 
 export interface AgentHealth {
   agentId: string;

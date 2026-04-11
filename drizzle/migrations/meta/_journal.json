@@ -15,6 +15,20 @@
       "when": 1775855590002,
       "tag": "0001_fresh_the_twelve",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775919424612,
+      "tag": "0002_abnormal_kronos",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1775920310850,
+      "tag": "0003_plain_psylocke",
+      "breakpoints": true
     }
   ]
 }

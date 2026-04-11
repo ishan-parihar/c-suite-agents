@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { assertAgentCan, PermissionError, type EntityType } from '@/lib/agent-permissions';
 import { sanitizeInput, isValidTitle } from '@/lib/sanitize';
+import { authenticateAgent } from '../server/agent-auth';
 
 export interface CrudContext {
   entityType: EntityType;
@@ -24,11 +25,11 @@ export function validateAgentAction(
   action: 'read' | 'write' | 'delete',
   entityType: EntityType,
 ) {
-  if (headers.agentId) {
-    assertAgentCan(headers.agentId, action, entityType);
-  } else {
-    throw new PermissionError('Missing x-agent-id header');
+  const auth = authenticateAgent(headers.agentId);
+  if (!auth.ok) {
+    throw new PermissionError(auth.error);
   }
+  assertAgentCan(headers.agentId!, action, entityType);
 }
 
 export function sanitizePayload(body: Record<string, unknown>) {

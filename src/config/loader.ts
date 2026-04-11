@@ -1,8 +1,8 @@
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { OperantConfigSchema, type OperantConfig, type ProviderDef, type ModelDef } from "./schema.js";
-import { runMigrations } from "../cli/migrations.js";
+import { OperantConfigSchema, type OperantConfig, type ProviderDef, type ModelDef } from "./schema";
+import { runMigrations } from "../cli/migrations";
 
 const CONFIG_DIR = path.join(os.homedir(), ".operant");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");

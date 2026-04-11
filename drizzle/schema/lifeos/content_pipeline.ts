@@ -27,6 +27,7 @@ export const contentPipeline = pgTable('content_pipeline', {
   engagement: integer('engagement'),
   clicks: integer('clicks'),
   engagementRate: numeric('engagement_rate', { precision: 5, scale: 4 }),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

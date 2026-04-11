@@ -2,8 +2,8 @@
 // Fires the daily board meeting at configured cron time.
 // The engine (board-meeting.ts) handles everything complex.
 
-import { logger } from "../logger.js";
-import { loadConfig } from "../config/loader.js";
+import { logger } from "../logger";
+import { loadConfig } from "../config/loader";
 import { CronExpressionParser } from "cron-parser";
 
 let boardMeetingScheduler: BoardMeetingScheduler | null = null;
@@ -66,13 +66,13 @@ export class BoardMeetingScheduler {
         this.lastFiredDate = today;
         logger.info("Board meeting triggered by scheduler");
 
-        const { runFullBoardMeeting } = await import("../organic/board-meeting.js");
+        const { runFullBoardMeeting } = await import("../organic/board-meeting");
 
         const meeting = await runFullBoardMeeting();
 
         if (meeting && meeting.report) {
           try {
-            const { deliverMeetingReport } = await import("../integrations/telegram.js");
+            const { deliverMeetingReport } = await import("../integrations/telegram");
             const delivered = await deliverMeetingReport(meeting.report, meeting.id);
             if (delivered) {
               logger.info({ meetingId: meeting.id }, "Board meeting report delivered to Telegram");

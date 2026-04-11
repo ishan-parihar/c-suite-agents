@@ -1,7 +1,7 @@
 // Tool Scoping Tests — 3-tier scoping system validation
 import { describe, test, expect } from "bun:test";
-import { OperantConfigSchema } from "../config/schema.js";
-import { getAgentToolScope } from "../staff/tool-scoping.js";
+import { OperantConfigSchema } from "../config/schema";
+import { getAgentToolScope } from "../staff/tool-scoping";
 
 // ---------------------------------------------------------------------------
 // Schema validation tests — toolScoping record with optional nativeTools

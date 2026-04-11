@@ -1,17 +1,17 @@
 // Organic Messaging System — Persistent with Vector Embeddings
 
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
-import { getStaffById, getBoardMembers } from "../staff/core-staff.js";
+import { logger } from "../logger";
+import { getStaffById, getBoardMembers } from "../staff/core-staff";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
-import { getEmbeddingService } from "../memory/embeddings.js";
-import { validateAgentIdentity } from "../auth/session.js";
+import { getEmbeddingService } from "../memory/embeddings";
+import { validateAgentIdentity } from "../auth/session";
 import { EventEmitter } from "node:events";
-import { ErrorBus } from "../runtime/error-emitter.js";
-import { getMessageBus } from "../transport/message-bus.js";
-import type { MessagePayload } from "../transport/ws-types.js";
+import { ErrorBus } from "../runtime/error-emitter";
+import { getMessageBus } from "../transport/message-bus";
+import type { MessagePayload } from "../transport/ws-types";
 
 export type MessagePriority = "P1" | "P2" | "P3" | "P4";
 

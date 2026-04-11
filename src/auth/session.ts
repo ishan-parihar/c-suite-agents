@@ -2,9 +2,9 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { randomBytes } from "node:crypto";
-import { logger } from "../logger.js";
-import { getStaffById, getDirectReports, type CoreStaffRole } from "../staff/core-staff.js";
-import { getHiringSystem } from "../organic/hiring.js";
+import { logger } from "../logger";
+import { getStaffById, getDirectReports, type CoreStaffRole } from "../staff/core-staff";
+import { getHiringSystem } from "../organic/hiring";
 
 export interface AgentSession {
   sessionId: string;

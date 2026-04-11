@@ -1,4 +1,4 @@
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 
 /**
  * Recovery Recipes — encoded failure playbooks with auto-attempt + escalation.
@@ -6,12 +6,12 @@ import { logger } from "../logger.js";
  * Pattern: each failure scenario gets exactly 1 automatic recovery attempt
  * before escalation is triggered. Following claw-code's recovery_recipes.rs.
  *
- * Import pattern: `import { RecoveryRegistry, attemptRecovery } from "./recovery.js"`
+ * Import pattern: `import { RecoveryRegistry, attemptRecovery } from "./recovery"`
  *
  * Integration into agent-executor.ts:
  * ┌─────────────────────────────────────────────────────────────────────────┐
  * │ 1. Import & initialise at module level:                                 │
- * │    import { RecoveryRegistry, attemptRecovery } from "./recovery.js";  │
+ * │    import { RecoveryRegistry, attemptRecovery } from "./recovery";  │
  * │    const recovery = RecoveryRegistry.getInstance();                     │
  * │                                                                         │
  * │ 2. Register recipes during bootstrapping:                               │
@@ -165,13 +165,13 @@ async function reconnectSubsystem(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
   try {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.info(
       { scenario: ctx.scenario, agentId: ctx.agentId },
       `recovery:reconnectSubsystem — attempting reconnection for ${ctx.scenario}`,
     );
 
-    const { SelfHealer } = await import("./self-healer.js");
+    const { SelfHealer } = await import("./self-healer");
     const result = await SelfHealer.executeRecovery(ctx.scenario, {
       agentId: ctx.agentId,
       error: ctx.error,
@@ -185,7 +185,7 @@ async function reconnectSubsystem(
       error: result.success ? undefined : new Error(result.message),
     };
   } catch (err: unknown) {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.error(
       { scenario: ctx.scenario, agentId: ctx.agentId, err },
       `recovery:reconnectSubsystem — failed for ${ctx.scenario}`,
@@ -202,13 +202,13 @@ async function retryOperation(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
   try {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.info(
       { scenario: ctx.scenario, agentId: ctx.agentId },
       `recovery:retryOperation — attempting retry for ${ctx.scenario}`,
     );
 
-    const { retryAsync } = await import("./retry.js");
+    const { retryAsync } = await import("./retry");
     const operation = ctx.metadata?.operation as
       | (() => Promise<unknown>)
       | undefined;
@@ -231,7 +231,7 @@ async function retryOperation(
     switch (ctx.scenario) {
       case FailureScenario.LLMProviderFailure: {
         const { getNativeRuntime } = await import(
-          "./native-agent-runtime.js"
+          "./native-agent-runtime"
         );
         const runtime = getNativeRuntime();
         const sessions = runtime.listSessions();
@@ -241,7 +241,7 @@ async function retryOperation(
         };
       }
       case FailureScenario.MemoryStoreFailure: {
-        const { getMemoryFacade } = await import("../memory/index.js");
+        const { getMemoryFacade } = await import("../memory/index");
         const facade = await getMemoryFacade();
         await facade.stats();
         return {
@@ -256,7 +256,7 @@ async function retryOperation(
         };
     }
   } catch (err: unknown) {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.error(
       { scenario: ctx.scenario, agentId: ctx.agentId, err },
       `recovery:retryOperation — failed for ${ctx.scenario}`,
@@ -273,13 +273,13 @@ async function switchToFallback(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
   try {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.info(
       { scenario: ctx.scenario, agentId: ctx.agentId },
       `recovery:switchToFallback — attempting failover for ${ctx.scenario}`,
     );
 
-    const { SelfHealer } = await import("./self-healer.js");
+    const { SelfHealer } = await import("./self-healer");
     const result = await SelfHealer.executeRecovery(ctx.scenario, {
       agentId: ctx.agentId,
       error: ctx.error,
@@ -293,7 +293,7 @@ async function switchToFallback(
       error: result.success ? undefined : new Error(result.message),
     };
   } catch (err: unknown) {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.error(
       { scenario: ctx.scenario, agentId: ctx.agentId, err },
       `recovery:switchToFallback — failed for ${ctx.scenario}`,
@@ -310,13 +310,13 @@ async function flushAndReinitialise(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
   try {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.info(
       { scenario: ctx.scenario, agentId: ctx.agentId },
       `recovery:flushAndReinitialise — attempting flush and re-init for ${ctx.scenario}`,
     );
 
-    const { SelfHealer } = await import("./self-healer.js");
+    const { SelfHealer } = await import("./self-healer");
     const result = await SelfHealer.executeRecovery(ctx.scenario, {
       agentId: ctx.agentId,
       error: ctx.error,
@@ -330,7 +330,7 @@ async function flushAndReinitialise(
       error: result.success ? undefined : new Error(result.message),
     };
   } catch (err: unknown) {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.error(
       { scenario: ctx.scenario, agentId: ctx.agentId, err },
       `recovery:flushAndReinitialise — failed for ${ctx.scenario}`,
@@ -347,13 +347,13 @@ async function restartAgent(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
   try {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.info(
       { scenario: ctx.scenario, agentId: ctx.agentId },
       `recovery:restartAgent — attempting restart for agent ${ctx.agentId ?? "unknown"}`,
     );
 
-    const { SelfHealer } = await import("./self-healer.js");
+    const { SelfHealer } = await import("./self-healer");
     const result = await SelfHealer.executeRecovery(ctx.scenario, {
       agentId: ctx.agentId,
       error: ctx.error,
@@ -367,7 +367,7 @@ async function restartAgent(
       error: result.success ? undefined : new Error(result.message),
     };
   } catch (err: unknown) {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.error(
       { scenario: ctx.scenario, agentId: ctx.agentId, err },
       `recovery:restartAgent — failed for agent ${ctx.agentId ?? "unknown"}`,
@@ -384,13 +384,13 @@ async function drainAndReplayQueue(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
   try {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.info(
       { scenario: ctx.scenario, agentId: ctx.agentId },
       `recovery:drainAndReplayQueue — attempting drain and replay for ${ctx.scenario}`,
     );
 
-    const { SelfHealer } = await import("./self-healer.js");
+    const { SelfHealer } = await import("./self-healer");
     const result = await SelfHealer.executeRecovery(ctx.scenario, {
       agentId: ctx.agentId,
       error: ctx.error,
@@ -404,7 +404,7 @@ async function drainAndReplayQueue(
       error: result.success ? undefined : new Error(result.message),
     };
   } catch (err: unknown) {
-    const { logger } = await import("../logger.js");
+    const { logger } = await import("../logger");
     logger.error(
       { scenario: ctx.scenario, agentId: ctx.agentId, err },
       `recovery:drainAndReplayQueue — failed for ${ctx.scenario}`,
@@ -421,7 +421,7 @@ async function reconnectTelegram(
   _ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
   try {
-    const { sendTelegramMessage } = await import("../integrations/telegram.js");
+    const { sendTelegramMessage } = await import("../integrations/telegram");
     const ok = await sendTelegramMessage("🔧 **System check** — connectivity test.", "info");
     if (ok) {
       return { success: true, message: "Telegram reconnection successful — test message delivered" };
@@ -435,7 +435,7 @@ async function reconnectTelegram(
 async function alertOperatorViaLog(
   ctx: RecoveryContext,
 ): Promise<RecoveryStepResult> {
-  const { logger } = await import("../logger.js");
+  const { logger } = await import("../logger");
   logger.error(
     { scenario: ctx.scenario, agentId: ctx.agentId, error: ctx.error },
     "recovery:operator_alert — recovery exhausted, alerting via log",

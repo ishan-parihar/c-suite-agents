@@ -15,21 +15,21 @@
  * - Timeout-bounded recovery actions via Promise.race
  *
  * Usage:
- *   import { SelfHealer } from "./runtime/self-healer.js";
+ *   import { SelfHealer } from "./runtime/self-healer";
  *   SelfHealer.start();
  *
  * @module self-healer
  */
 
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 import {
   classifyError,
   toFailureScenario,
-} from "./error-types.js";
-import { ErrorBus } from "./error-emitter.js";
-import type { ErrorEvent, ErrorEventType } from "./error-emitter.js";
-import { FailureScenario } from "./recovery.js";
-import { retryAsync } from "./retry.js";
+} from "./error-types";
+import { ErrorBus } from "./error-emitter";
+import type { ErrorEvent, ErrorEventType } from "./error-emitter";
+import { FailureScenario } from "./recovery";
+import { retryAsync } from "./retry";
 
 // ---------------------------------------------------------------------------
 // Circuit Breaker
@@ -1000,7 +1000,7 @@ export class SelfHealerClass {
       case "telegram": {
         try {
           const { sendTelegramMessage } = await import(
-            "../integrations/telegram.js"
+            "../integrations/telegram"
           );
           const ok = await sendTelegramMessage(
             "🔧 System connectivity test",
@@ -1028,7 +1028,7 @@ export class SelfHealerClass {
 
       case "memory": {
         try {
-          const { getMemoryFacade } = await import("../memory/index.js");
+          const { getMemoryFacade } = await import("../memory/index");
           const facade = await getMemoryFacade();
           const stats = await facade.stats();
           const totalEntries = Object.values(stats).reduce(
@@ -1050,7 +1050,7 @@ export class SelfHealerClass {
       case "llm-provider": {
         try {
           const { getNativeRuntime } = await import(
-            "./native-agent-runtime.js"
+            "./native-agent-runtime"
           );
           const runtime = getNativeRuntime();
           const sessions = runtime.listSessions();
@@ -1168,10 +1168,10 @@ export class SelfHealerClass {
     try {
       switch (target) {
         case "fallback-model": {
-          await import("./model-fallback.js");
+          await import("./model-fallback");
           try {
             const { getNativeRuntime } = await import(
-              "./native-agent-runtime.js"
+              "./native-agent-runtime"
             );
             const runtime = getNativeRuntime();
             const sessions = runtime.listSessions();
@@ -1224,7 +1224,7 @@ export class SelfHealerClass {
     switch (subsystem) {
       case "memory": {
         try {
-          const { getMemoryFacade } = await import("../memory/index.js");
+          const { getMemoryFacade } = await import("../memory/index");
           const facade = await getMemoryFacade();
           const stats = await facade.stats();
           const totalBefore = Object.values(stats).reduce(
@@ -1246,7 +1246,7 @@ export class SelfHealerClass {
       case "session": {
         try {
           const { getSessionRegistry } = await import(
-            "../scheduler/session-registry.js"
+            "../scheduler/session-registry"
           );
           const registry = getSessionRegistry();
           const sessions = await registry.list();
@@ -1306,7 +1306,7 @@ export class SelfHealerClass {
 
     try {
       const { getSessionRegistry } = await import(
-        "../scheduler/session-registry.js"
+        "../scheduler/session-registry"
       );
       const registry = getSessionRegistry();
       await registry.invalidate(agentId);
@@ -1353,12 +1353,12 @@ export class SelfHealerClass {
     const { queue } = action;
 
     try {
-      const { getMessagingSystem } = await import("../organic/messaging.js");
+      const { getMessagingSystem } = await import("../organic/messaging");
       const messaging = await getMessagingSystem();
 
       const coreStaffIds = await (async () => {
         try {
-          const { getCoreStaffIds } = await import("../staff/core-staff.js");
+          const { getCoreStaffIds } = await import("../staff/core-staff");
           return getCoreStaffIds();
         } catch {
           return [
@@ -1412,7 +1412,7 @@ export class SelfHealerClass {
 
     try {
       const { getNativeRuntime } = await import(
-        "./native-agent-runtime.js"
+        "./native-agent-runtime"
       );
       const runtime = getNativeRuntime();
 
@@ -1480,7 +1480,7 @@ export class SelfHealerClass {
  *
  * Import this directly:
  * ```ts
- * import { SelfHealer } from "./runtime/self-healer.js";
+ * import { SelfHealer } from "./runtime/self-healer";
  * SelfHealer.start();
  * ```
  */

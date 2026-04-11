@@ -5,8 +5,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { logger } from "../logger.js";
-import { OPERANT_HOME } from "../agents/workspace-manager.js";
+import { logger } from "../logger";
+import { OPERANT_HOME } from "../agents/workspace-manager";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

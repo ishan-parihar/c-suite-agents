@@ -13,7 +13,7 @@
  * - Singleton access via exported `AlertManagerInstance` constant
  *
  * Usage:
- *   import { AlertManagerInstance } from "./runtime/alert-manager.js";
+ *   import { AlertManagerInstance } from "./runtime/alert-manager";
  *
  *   AlertManagerInstance.start();
  *
@@ -34,8 +34,8 @@
  * @module alert-manager
  */
 
-import { ErrorBus, ErrorEventType, ErrorEvent } from "./error-emitter.js";
-import { logger } from "../logger.js";
+import { ErrorBus, ErrorEventType, ErrorEvent } from "./error-emitter";
+import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
 // AlertTier
@@ -1041,7 +1041,7 @@ export class AlertManagerClass {
   private async sendTelegram(message: string): Promise<void> {
     try {
       const { sendTelegramMessage } = await import(
-        "../integrations/telegram.js"
+        "../integrations/telegram"
       );
       const ok = await sendTelegramMessage(message, "urgent");
       if (!ok) {
@@ -1118,13 +1118,13 @@ export class AlertManagerClass {
  *
  * Import this directly:
  * ```ts
- * import { AlertManagerInstance } from "./runtime/alert-manager.js";
+ * import { AlertManagerInstance } from "./runtime/alert-manager";
  * AlertManagerInstance.start();
  * ```
  *
  * To customize options, call getInstance() before the singleton is accessed:
  * ```ts
- * import { AlertManagerClass } from "./runtime/alert-manager.js";
+ * import { AlertManagerClass } from "./runtime/alert-manager";
  * AlertManagerClass.getInstance({ defaultThreshold: 5 });
  * ```
  */

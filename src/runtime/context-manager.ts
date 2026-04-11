@@ -10,10 +10,10 @@
 // - LRU eviction for old sessions
 // - Identifier preservation in summaries
 
-import { logger } from "../logger.js";
-import type { ContextWindowInfo } from "./context-window.js";
-import { isRealConversation } from "./utils.js";
-import { AsyncMutex } from "./async-mutex.js";
+import { logger } from "../logger";
+import type { ContextWindowInfo } from "./context-window";
+import { isRealConversation } from "./utils";
+import { AsyncMutex } from "./async-mutex";
 
 // ── Token Estimation ──────────────────────────────────────────────
 // OpenClaw: CHARS_PER_TOKEN = 4 with SAFETY_MARGIN = 1.2 (20% buffer)

@@ -3,7 +3,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { format } from "date-fns";
-import { CalendarDays, Clock } from "lucide-react";
+import { CalendarDays, Clock, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { KanbanCard as KanbanCardType } from "@/lib/server/kanban";
 
@@ -23,9 +23,10 @@ interface KanbanCardProps {
   card: KanbanCardType;
   onDoubleClick: () => void;
   isDragging?: boolean;
+  onDelete?: () => void;
 }
 
-export function KanbanCard({ card, onDoubleClick, isDragging }: KanbanCardProps) {
+export function KanbanCard({ card, onDoubleClick, isDragging, onDelete }: KanbanCardProps) {
   const {
     attributes,
     listeners,
@@ -71,7 +72,18 @@ export function KanbanCard({ card, onDoubleClick, isDragging }: KanbanCardProps)
         <div {...listeners} className="mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab">
           <Clock className="h-3 w-3 text-text-muted" />
         </div>
-        <span className={cn("text-xs font-medium", priorityColor)}>{priorityLabel}</span>
+        <div className="flex items-center gap-1">
+          <span className={cn("text-xs font-medium", priorityColor)}>{priorityLabel}</span>
+          {onDelete && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-critical"
+              aria-label="Delete card"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       <p className="text-sm text-text-primary mt-1 line-clamp-2">{card.title}</p>

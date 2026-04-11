@@ -1,8 +1,8 @@
-import type { ToolDefinition, ToolResult, ToolExecutor } from "../runtime/tool-bridge.js";
-import { buildToolDefinitions, mcpResponseToToolResult } from "../runtime/tool-bridge.js";
-import type { McpServerConnection } from "./client.js";
-import { logger } from "../logger.js";
-import { ErrorBus } from "../runtime/error-emitter.js";
+import type { ToolDefinition, ToolResult, ToolExecutor } from "../runtime/tool-bridge";
+import { buildToolDefinitions, mcpResponseToToolResult } from "../runtime/tool-bridge";
+import type { McpServerConnection } from "./client";
+import { logger } from "../logger";
+import { ErrorBus } from "../runtime/error-emitter";
 
 export interface BridgeResult {
   executor: ToolExecutor;

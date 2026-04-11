@@ -1,33 +1,33 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse";
 import { z } from "zod";
-import { logger } from "../logger.js";
-import { createImageAnalyzeTool } from "../runtime/tools/image-analyze.js";
-import { createImageGenerateTool } from "../runtime/tools/image-generate.js";
-import { createTtsSynthesizeTool } from "../runtime/tools/tts-synthesize.js";
-import { createFsReadTool } from "../runtime/tools/fs-read.js";
-import { createFsWriteTool } from "../runtime/tools/fs-write.js";
-import { createFsEditTool } from "../runtime/tools/fs-edit.js";
-import { createBashTool } from "../runtime/tools/bash-exec.js";
-import { createCodeReadTool } from "../runtime/tools/code-read.js";
-import { createCodeWriteTool } from "../runtime/tools/code-write.js";
-import { createCodeEditTool } from "../runtime/tools/code-edit.js";
-import { Memory } from "../memory/lancedb.js";
-import { getMemoryFacade } from "../memory/index.js";
-import type { MemoryFacade } from "../memory/index.js";
-import { Kanban } from "../kanban/sqlite.js";
-import type { OperantRuntime, ToolExecutor } from "../types.js";
+import { logger } from "../logger";
+import { createImageAnalyzeTool } from "../runtime/tools/image-analyze";
+import { createImageGenerateTool } from "../runtime/tools/image-generate";
+import { createTtsSynthesizeTool } from "../runtime/tools/tts-synthesize";
+import { createFsReadTool } from "../runtime/tools/fs-read";
+import { createFsWriteTool } from "../runtime/tools/fs-write";
+import { createFsEditTool } from "../runtime/tools/fs-edit";
+import { createBashTool } from "../runtime/tools/bash-exec";
+import { createCodeReadTool } from "../runtime/tools/code-read";
+import { createCodeWriteTool } from "../runtime/tools/code-write";
+import { createCodeEditTool } from "../runtime/tools/code-edit";
+import { Memory } from "../memory/lancedb";
+import { getMemoryFacade } from "../memory/index";
+import type { MemoryFacade } from "../memory/index";
+import { Kanban } from "../kanban/sqlite";
+import type { OperantRuntime, ToolExecutor } from "../types";
 import { v4 as uuidv4 } from "uuid";
-import { CORE_STAFF_ROLES, getCoreStaffIds, getOrgChart, getStaffById, getDirectReports } from "../staff/core-staff.js";
-import { getMessagingSystem } from "../organic/messaging.js";
-import { getReportsAndSessions } from "./tools-reports.js";
-import { getMeetingGovernance } from "../organic/meetings.js";
-import { getHiringSystem } from "../organic/hiring.js";
-import { AgentContextManager } from "../organic/context.js";
-import { sendTelegramMessage } from "../integrations/telegram.js";
+import { CORE_STAFF_ROLES, getCoreStaffIds, getOrgChart, getStaffById, getDirectReports } from "../staff/core-staff";
+import { getMessagingSystem } from "../organic/messaging";
+import { getReportsAndSessions } from "./tools-reports";
+import { getMeetingGovernance } from "../organic/meetings";
+import { getHiringSystem } from "../organic/hiring";
+import { AgentContextManager } from "../organic/context";
+import { sendTelegramMessage } from "../integrations/telegram";
 import { createServer } from "http";
-import { startBoardMeeting, runFullBoardMeeting, getActiveMeeting, getMeeting, getBoardMeetingEngine } from "../organic/board-meeting.js";
+import { startBoardMeeting, runFullBoardMeeting, getActiveMeeting, getMeeting, getBoardMeetingEngine } from "../organic/board-meeting";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 const ok = (text: string): ToolResult => ({ content: [{ type: "text" as const, text }] });
@@ -60,7 +60,7 @@ export async function startOperant(): Promise<OperantRuntime> {
   await initializeCoreStaff(kanban, memory);
 
   // Import scheduler (needed by cron tools in createSessionServer below)
-  const { getAgentScheduler } = await import("../scheduler/agent-scheduler.js");
+  const { getAgentScheduler } = await import("../scheduler/agent-scheduler");
 
   // Start HTTP server for MCP (SSE transport — compatible with OpenCode remote MCP)
   const MCP_PORT = parseInt(process.env.MCP_PORT || "3001", 10);
@@ -535,8 +535,8 @@ export async function startOperant(): Promise<OperantRuntime> {
 
     // === TEAM HEALTH ===
     const agentStatus = async (args: { agent_id: string }): Promise<ToolResult> => {
-      const { getAgentHealthRegistry } = await import("../scheduler/agent-health.js");
-      const { getStaffById } = await import("../staff/core-staff.js");
+      const { getAgentHealthRegistry } = await import("../scheduler/agent-health");
+      const { getStaffById } = await import("../staff/core-staff");
       const health = getAgentHealthRegistry().getStatus(args.agent_id);
       const staff = getStaffById(args.agent_id);
       if (!health) return ok(`No health data for ${args.agent_id}`);
@@ -557,7 +557,7 @@ export async function startOperant(): Promise<OperantRuntime> {
     sessionServer.registerTool("agent.status", { description: "Get agent health and workload status — heartbeat recency, pending messages, failure counts.", inputSchema: z.object({ agent_id: z.string().describe("Agent ID to check") }) }, agentStatus);
 
     const orgHealth = async (): Promise<ToolResult> => {
-      const { getAgentHealthRegistry } = await import("../scheduler/agent-health.js");
+      const { getAgentHealthRegistry } = await import("../scheduler/agent-health");
       const team = getAgentHealthRegistry().getTeamStatus();
       const statusEmoji: Record<string, string> = { healthy: "🟢", degraded: "🟡", silent: "⚫", error: "🔴" };
       const silent = getAgentHealthRegistry().getSilentAgents();

@@ -35,7 +35,7 @@ export type HealthSummary = {
   componentsByName: Record<string, ComponentHealth>;
 };
 
-import { ErrorBus } from "./runtime/error-emitter.js";
+import { ErrorBus } from "./runtime/error-emitter";
 
 type ComponentRegistry = Map<string, ComponentHealth>;
 

@@ -2,16 +2,16 @@ import type http from "node:http";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
-import { validateAgentIdentity } from "../auth/session.js";
-import { getMessageBus } from "./message-bus.js";
+import { logger } from "../logger";
+import { validateAgentIdentity } from "../auth/session";
+import { getMessageBus } from "./message-bus";
 import {
   serializeFrame,
   deserializeFrame,
   type WsSession,
   type ClientFrame,
   type ServerFrame,
-} from "./ws-types.js";
+} from "./ws-types";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const IDLE_TIMEOUT_MS = 60_000;

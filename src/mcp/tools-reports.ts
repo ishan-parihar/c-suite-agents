@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 
 function safeJsonParse<T>(raw: string | undefined | null, fallback: T): T {
   try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }

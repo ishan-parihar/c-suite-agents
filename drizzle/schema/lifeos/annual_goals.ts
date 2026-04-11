@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, boolean, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 import { years } from './years';
 
 export const annualGoals = pgTable('annual_goals', {
@@ -23,6 +23,7 @@ export const annualGoals = pgTable('annual_goals', {
   successCondition: text('success_condition'),
   keyRisks: text('key_risks'),
   targetValue: text('target_value'),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

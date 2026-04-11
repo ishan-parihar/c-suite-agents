@@ -12,6 +12,7 @@ export const boardMeetings = pgTable('board_meetings', {
   userFeedback: text('user_feedback'),
   startedAt: timestamp('started_at', { withTimezone: true }),
   concludedAt: timestamp('concluded_at', { withTimezone: true }),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
 

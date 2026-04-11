@@ -1,10 +1,10 @@
 // Deduplication — Content hashing + near-duplicate detection
 
 import { createHash } from "node:crypto";
-import type { MemoryEntry, MemoryScope } from "./types.js";
-import type { MemoryStore } from "./store.js";
-import type { EmbeddingService } from "./embeddings.js";
-import { logger } from "../logger.js";
+import type { MemoryEntry, MemoryScope } from "./types";
+import type { MemoryStore } from "./store";
+import type { EmbeddingService } from "./embeddings";
+import { logger } from "../logger";
 
 export class MemoryDedup {
   constructor(

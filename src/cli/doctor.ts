@@ -1,7 +1,7 @@
 import fs, { accessSync, constants } from "node:fs";
 import path, { join, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
-import { loadConfig, getConfigPath } from "../config/loader.js";
+import { loadConfig, getConfigPath } from "../config/loader";
 
 // ── Safe executable resolution (no shell injection) ─────────────────────
 function findInPath(cmd: string): boolean {

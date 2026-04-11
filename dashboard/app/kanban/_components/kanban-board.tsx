@@ -26,7 +26,9 @@ import type { KanbanColumn as KanbanColumnType, KanbanCard as KanbanCardType } f
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChartCard } from "@/components/ui/chart-card";
+import { DeleteDialog } from "@/components/crud/delete-dialog";
 import dynamic from "next/dynamic";
+import { useSSE } from "@/lib/sse/client";
 
 const CardDistributionChart = dynamic(() => import("./card-distribution-chart"), {
   ssr: false,
@@ -43,6 +45,10 @@ export function KanbanBoard({ columns: initialColumns, cards: initialCards }: Ka
   const [cards, setCards] = useState(initialCards);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [selectedCard, setSelectedCard] = useState<KanbanCardType | null>(null);
+  const [deleteCardId, setDeleteCardId] = useState<string | null>(null);
+  const [deletingCardTitle, setDeletingCardTitle] = useState("");
+
+  useSSE("/api/cron/outbox", [["kanban"], ["kanban-cards"]]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -171,6 +177,74 @@ export function KanbanBoard({ columns: initialColumns, cards: initialCards }: Ka
     });
   };
 
+  const handleDeleteCard = async (cardId: string) => {
+    const card = cards.find((c) => c.id === cardId);
+    if (!card) return;
+    setDeleteCardId(cardId);
+    setDeletingCardTitle(card.title);
+  };
+
+  const confirmDeleteCard = async () => {
+    if (!deleteCardId) return;
+    const snapshot = [...cards];
+    setCards((prev) => prev.filter((c) => c.id !== deleteCardId));
+
+    try {
+      const res = await fetch(`/api/kanban/cards/${deleteCardId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete card");
+      toast.success("Card deleted");
+    } catch {
+      setCards(snapshot);
+      toast.error("Failed to delete card. Changes rolled back.");
+    } finally {
+      setDeleteCardId(null);
+      setDeletingCardTitle("");
+    }
+  };
+
+  const handleRenameColumn = async (columnId: string, newName: string) => {
+    const snapshot = [...columns];
+    setColumns((prev) => prev.map((c) => (c.id === columnId ? { ...c, name: newName } : c)));
+
+    try {
+      const res = await fetch("/api/kanban/cards", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ columnId, name: newName }),
+      });
+      if (!res.ok) throw new Error("Failed to rename column");
+    } catch {
+      setColumns(snapshot);
+      toast.error("Failed to rename column.");
+    }
+  };
+
+  const handleDeleteColumn = async (columnId: string) => {
+    const col = columns.find((c) => c.id === columnId);
+    if (!col) return;
+    const colCards = cards.filter((c) => c.columnId === columnId);
+    if (colCards.length > 0) {
+      toast.error(`Cannot delete column "${col.name}" — it has ${colCards.length} card(s). Move them first.`);
+      return;
+    }
+
+    const snapshot = [...columns];
+    setColumns((prev) => prev.filter((c) => c.id !== columnId));
+
+    try {
+      const res = await fetch(`/api/kanban/cards`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ columnId }),
+      });
+      if (!res.ok) throw new Error("Failed to delete column");
+      toast.success(`Column "${col.name}" deleted`);
+    } catch {
+      setColumns(snapshot);
+      toast.error("Failed to delete column.");
+    }
+  };
+
   const activeCard = activeId ? cards.find((c) => c.id === activeId) : null;
 
   return (
@@ -217,6 +291,9 @@ export function KanbanBoard({ columns: initialColumns, cards: initialCards }: Ka
                 cards={getColumnCards(column.id)}
                 onCardDoubleClick={setSelectedCard}
                 onCardAdd={handleCardAdd}
+                onDeleteCard={handleDeleteCard}
+                onRenameColumn={handleRenameColumn}
+                onDeleteColumn={handleDeleteColumn}
               />
             </SortableContext>
           ))}
@@ -237,6 +314,15 @@ export function KanbanBoard({ columns: initialColumns, cards: initialCards }: Ka
           onClose={() => setSelectedCard(null)}
         />
       )}
+
+      <DeleteDialog
+        open={deleteCardId !== null}
+        onClose={() => { setDeleteCardId(null); setDeletingCardTitle(""); }}
+        onConfirm={confirmDeleteCard}
+        title="Delete Card"
+        description="This action cannot be undone. The card will be permanently removed."
+        itemName={deletingCardTitle}
+      />
     </div>
   );
 }

@@ -3,17 +3,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, existsSync, chmodSync, renameSync } from "node:fs";
 import * as crypto from "node:crypto";
-import { OperantConfigSchema } from "../config/schema.js";
-import { loadConfig } from "../config/loader.js";
+import { OperantConfigSchema } from "../config/schema";
+import { loadConfig } from "../config/loader";
 import {
   detectExistingConfig,
   handleReset,
   applyWizardMetadata,
   ensureWorkspaceDirs,
   probeLLMReachable,
-} from "./onboard-helpers.js";
-import { initializeWorkspace } from "./workspace-bootstrap.js";
-import { runDoctor } from "./doctor.js";
+} from "./onboard-helpers";
+import { initializeWorkspace } from "./workspace-bootstrap";
+import { runDoctor } from "./doctor";
 
 // ---------------------------------------------------------------------------
 // ANSI Color Helpers
@@ -662,7 +662,7 @@ export async function runSetupWizard(): Promise<boolean> {
 
     if (existing.config) {
       // Use summarizeExistingConfig if available
-      const { summarizeExistingConfig } = await import("./onboard-helpers.js");
+      const { summarizeExistingConfig } = await import("./onboard-helpers");
       console.log(summarizeExistingConfig(existing.config));
     } else {
       console.log(`${YELLOW}⚠ Config file exists but could not be parsed:${RESET}`);

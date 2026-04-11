@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, numeric, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 import { days } from './days';
 
 export const subjectiveJournal = pgTable('subjective_journal', {
@@ -14,6 +14,7 @@ export const subjectiveJournal = pgTable('subjective_journal', {
   moodTrigger: text('mood_trigger').array(),
   psychograph: text('psychograph'),
   subjectiveJson: text('subjective_json'),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

@@ -2,32 +2,32 @@
 // Uses NativeAgentRuntime instead of OpenCode HTTP client
 // Agents respond via direct LLM calls with tool calling support
 
-import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
-import { getMessagingSystem } from "../organic/messaging.js";
-import { AgentContextManager } from "../organic/context.js";
-import { Kanban } from "../kanban/sqlite.js";
-import { Memory } from "../memory/lancedb.js";
-import { InactivityTracker } from "./inactivity-tracker.js";
-import { sendTelegramMessage } from "../integrations/telegram.js";
-import { getMemoryFacade } from "../memory/index.js";
-import { getSessionRegistry } from "./session-registry.js";
-import { SystemEventQueue, buildSystemEventPrompt, currentTimeLine, stripHeartbeatToken } from "./system-events.js";
-import { resolveHeartbeatConfig } from "./heartbeat.js";
-import { autoStore } from "../memory/auto.js";
+import { logger } from "../logger";
+import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff";
+import { getMessagingSystem } from "../organic/messaging";
+import { AgentContextManager } from "../organic/context";
+import { Kanban } from "../kanban/sqlite";
+import { Memory } from "../memory/lancedb";
+import { InactivityTracker } from "./inactivity-tracker";
+import { sendTelegramMessage } from "../integrations/telegram";
+import { getMemoryFacade } from "../memory/index";
+import { getSessionRegistry } from "./session-registry";
+import { SystemEventQueue, buildSystemEventPrompt, currentTimeLine, stripHeartbeatToken } from "./system-events";
+import { resolveHeartbeatConfig } from "./heartbeat";
+import { autoStore } from "../memory/auto";
 import {
   NativeAgentRuntime,
   getNativeRuntime,
   initNativeRuntime,
-} from "../runtime/native-agent-runtime.js";
-import type { ToolExecutor } from "../runtime/tool-bridge.js";
-import { RecoveryRegistry, attemptRecovery, FailureScenario, type RecoveryEvent } from "../runtime/recovery.js";
-import { PolicyEngine, LaneContext, getPrebuiltPolicies } from "../runtime/policy.js";
-import { discoverInstructionFiles, formatInstructionFiles } from "../runtime/instruction-files.js";
-import { getHookRegistry, HookType } from "../runtime/hooks.js";
-import { getAgentHealthRegistry } from "./agent-health.js";
-import { getBehavioralProfile, formatBehavioralPrompt, recordInteractionOutcome } from "../memory/behavioral-profile.js";
-import { ErrorBus } from "../runtime/error-emitter.js";
+} from "../runtime/native-agent-runtime";
+import type { ToolExecutor } from "../runtime/tool-bridge";
+import { RecoveryRegistry, attemptRecovery, FailureScenario, type RecoveryEvent } from "../runtime/recovery";
+import { PolicyEngine, LaneContext, getPrebuiltPolicies } from "../runtime/policy";
+import { discoverInstructionFiles, formatInstructionFiles } from "../runtime/instruction-files";
+import { getHookRegistry, HookType } from "../runtime/hooks";
+import { getAgentHealthRegistry } from "./agent-health";
+import { getBehavioralProfile, formatBehavioralPrompt, recordInteractionOutcome } from "../memory/behavioral-profile";
+import { ErrorBus } from "../runtime/error-emitter";
 
 export interface AgentExecutorConfig {
   checkIntervalMs: number;

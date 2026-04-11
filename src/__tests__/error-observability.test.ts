@@ -1,10 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { ErrorBus, ErrorEmitter, MAX_HISTORY, createErrorEvent } from "../runtime/error-emitter.js";
-import { ErrorAggregatorClass } from "../runtime/error-aggregator.js";
-import { AlertManagerClass } from "../runtime/alert-manager.js";
-import { SelfHealerClass } from "../runtime/self-healer.js";
-import { HeartbeatMonitorClass } from "../scheduler/heartbeat-monitor.js";
-import { CronErrorHandlerClass } from "../scheduler/cron-error-handler.js";
+import { ErrorBus, ErrorEmitter, MAX_HISTORY, createErrorEvent } from "../runtime/error-emitter";
+import { ErrorAggregatorClass } from "../runtime/error-aggregator";
+import { AlertManagerClass } from "../runtime/alert-manager";
+import { SelfHealerClass } from "../runtime/self-healer";
+import { HeartbeatMonitorClass } from "../scheduler/heartbeat-monitor";
+import { CronErrorHandlerClass } from "../scheduler/cron-error-handler";
 import {
   OperantError,
   ProviderError,
@@ -16,9 +16,9 @@ import {
   AgentError,
   classifyError,
   toFailureScenario,
-} from "../runtime/error-types.js";
-import { FailureScenario } from "../runtime/recovery.js";
-import { RecoveryRegistry, attemptRecovery } from "../runtime/recovery.js";
+} from "../runtime/error-types";
+import { FailureScenario } from "../runtime/recovery";
+import { RecoveryRegistry, attemptRecovery } from "../runtime/recovery";
 
 describe("Error Observability Integration", () => {
   beforeEach(() => {

@@ -15,8 +15,8 @@
  * @module error-types
  */
 
-import { logger } from "../logger.js";
-import { FailureScenario } from "./recovery.js";
+import { logger } from "../logger";
+import { FailureScenario } from "./recovery";
 
 // ---------------------------------------------------------------------------
 // Re-exported / replicated types (avoid circular deps with model-fallback.ts)

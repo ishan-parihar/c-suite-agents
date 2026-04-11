@@ -2,13 +2,13 @@
 // Provides tool definitions (JSON Schema) and execution wrappers
 
 import { z } from "zod";
-import { logger } from "../logger.js";
-import { createFsReadTool } from "./tools/fs-read.js";
-import { createFsWriteTool } from "./tools/fs-write.js";
-import { createFsEditTool } from "./tools/fs-edit.js";
-import { createBashTool } from "./tools/bash-exec.js";
-import { ErrorBus } from "./error-emitter.js";
-import { ToolExecutionError } from "./error-types.js";
+import { logger } from "../logger";
+import { createFsReadTool } from "./tools/fs-read";
+import { createFsWriteTool } from "./tools/fs-write";
+import { createFsEditTool } from "./tools/fs-edit";
+import { createBashTool } from "./tools/bash-exec";
+import { ErrorBus } from "./error-emitter";
+import { ToolExecutionError } from "./error-types";
 
 export type PermissionTier = "read" | "write" | "danger";
 

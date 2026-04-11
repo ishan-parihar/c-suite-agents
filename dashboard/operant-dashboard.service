@@ -1,0 +1,29 @@
+[Unit]
+Description=Operant Dashboard (Next.js Dev)
+After=network.target operant.service
+Wants=operant.service
+
+[Service]
+Type=simple
+User=ishanp
+Group=ishanp
+WorkingDirectory=/home/ishanp/Documents/GitHub/operant/dashboard
+Environment=NODE_ENV=production
+Environment=PORT=3088
+Environment=DATABASE_URL=postgresql://operant:operant_password@localhost:5432/operant
+Environment=DASHBOARD_PASSWORD_HASH=ea3b4769e96e2d5f31a19c51cbf863bb851dbf4e0df3d053cb1e4035ee755882
+Environment=COOKIE_SECRET=905a96cc4ecca22bb730d5808b4ed50ad8c3df5f7992cfeb5601e1f9f9a9d286
+Environment=SESSION_DURATION_HOURS=24
+ExecStart=/usr/bin/node /home/ishanp/Documents/GitHub/operant/dashboard/node_modules/next/dist/bin/next start -p 3088
+Restart=always
+RestartSec=5
+
+StandardOutput=append:/home/ishanp/Documents/GitHub/operant/.operant-logs/dashboard.log
+StandardError=append:/home/ishanp/Documents/GitHub/operant/.operant-logs/dashboard.error.log
+
+LimitNOFILE=65536
+MemoryMax=1G
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

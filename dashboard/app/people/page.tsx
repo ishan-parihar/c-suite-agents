@@ -1,21 +1,35 @@
 import { Suspense } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getPeopleList } from "@/lib/server/people";
-import { PeopleListClient } from "./people-list-client";
+import { PeopleCrudClient } from "./people-crud-client";
+import type { PersonListItem } from "@/lib/server/people";
 
 function PeopleSkeleton() {
   return (
-    <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <Skeleton key={i} variant="card" lines={3} />
-      ))}
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Skeleton variant="card" lines={1} />
+      </div>
+      <Skeleton variant="table" lines={10} />
     </div>
   );
 }
 
 async function PeopleList() {
   const people = await getPeopleList();
-  return <PeopleListClient people={people} />;
+  const rows = people.map((p: PersonListItem) => ({
+    id: p.id,
+    name: p.name,
+    email: p.email,
+    relationshipStatus: p.relationshipStatus,
+    city: p.city,
+    lastConnectedDate: p.lastConnectedDate,
+    connectionFrequencyDays: p.connectionFrequencyDays,
+    networkingProfile: p.networkingProfile,
+    professionalDomain: p.professionalDomain,
+    lastInteractionSentiment: p.lastInteractionSentiment,
+  }));
+  return <PeopleCrudClient people={rows} />;
 }
 
 export default async function PeoplePage() {

@@ -1,7 +1,7 @@
 // Context Window Resolution — Model-aware context limits
 // Replaces hardcoded 128K limit with per-model configuration
 
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

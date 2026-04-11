@@ -8,7 +8,7 @@ import {
   type RecoveryContext,
   type RecoveryRecipe,
   type RecoveryStepResult,
-} from "../runtime/recovery.js";
+} from "../runtime/recovery";
 
 describe("RecoveryRegistry", () => {
   beforeEach(() => {

@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { canTransition, TaskState, getTerminalStates } from '@/lib/task-state-machine';
 import { db } from '@/lib/db';
 import { tasks } from '@/drizzle/schema/lifeos/tasks';
+import { transitionLog } from '@/drizzle/schema/operations/transition-log';
 
 const OLD_TO_NEW_STATE_MAP: Record<string, TaskState> = {
   'Up Next': 'active',
@@ -102,56 +103,35 @@ export async function performTransition(
     throw err;
   }
 
-  await db
-    .update(tasks)
-    .set({ status: targetStatus, updatedAt: new Date() })
-    .where(eq(tasks.id, taskId));
+  await db.transaction(async (tx) => {
+    await tx
+      .update(tasks)
+      .set({ status: targetStatus, updatedAt: new Date() })
+      .where(eq(tasks.id, taskId));
 
-  recordTransitionConsole(taskId, currentStatus, targetStatus);
+    await recordTransition(tx, taskId, currentStatus, targetStatus, 'performTransition');
+  });
 
   return { success: true };
 }
 
-// -- Audit trail (inline, no new table) ------------------------------------
+// -- Audit trail ------------------------------------------------------------
 
-/**
- * Record a transition for audit purposes.
- *
- * Accepts a Drizzle transaction object so callers can include this call
- * inside their own atomic transactions when a dedicated transition_log
- * table is added later.  For now the record is logged to stdout and
- * kept as a template for the future INSERT.
- */
 export async function recordTransition(
-  _tx: unknown,
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   taskId: string,
   from: string,
   to: string,
   reason: string,
   agentId?: string,
 ): Promise<void> {
-  // Future implementation when transition_log table exists:
-  //
-  // await tx.insert(transitionLog).values({
-  //   taskId,
-  //   fromState: from,
-  //   toState: to,
-  //   reason,
-  //   agentId: agentId ?? null,
-  //   occurredAt: new Date(),
-  // });
-
-  console.log(
-    `[state-transition] ${taskId}: ${from} -> ${to} | reason: ${reason}${
-      agentId ? ` | agent: ${agentId}` : ''
-    }`,
-  );
+  await tx.insert(transitionLog).values({
+    taskId,
+    fromState: from,
+    toState: to,
+    reason,
+    agentId: agentId ?? null,
+    occurredAt: new Date(),
+  });
 }
 
-function recordTransitionConsole(
-  taskId: string,
-  from: string,
-  to: string,
-): void {
-  console.log(`[state-transition] ${taskId}: ${from} -> ${to}`);
-}

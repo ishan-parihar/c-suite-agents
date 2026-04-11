@@ -1,12 +1,12 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
 import type { Server } from "http";
-import type { Memory } from "./memory/lancedb.js";
-import type { MemoryFacade } from "./memory/index.js";
-import type { Kanban } from "./kanban/sqlite.js";
-import type { HierarchicalMemory } from "./memory/hierarchical.js";
-import type { MessagingSystem } from "./organic/messaging.js";
-import type { MeetingGovernance } from "./organic/meetings.js";
-import type { HiringSystem } from "./organic/hiring.js";
+import type { Memory } from "./memory/lancedb";
+import type { MemoryFacade } from "./memory/index";
+import type { Kanban } from "./kanban/sqlite";
+import type { HierarchicalMemory } from "./memory/hierarchical";
+import type { MessagingSystem } from "./organic/messaging";
+import type { MeetingGovernance } from "./organic/meetings";
+import type { HiringSystem } from "./organic/hiring";
 
 export type ToolExecutor = {
   executeTool: (name: string, args: Record<string, unknown>) => Promise<any>;

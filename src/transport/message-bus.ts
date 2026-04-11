@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import { logger } from "../logger.js";
-import type { MessagePayload, ServerFrame, WsSession } from "./ws-types.js";
+import { logger } from "../logger";
+import type { MessagePayload, ServerFrame, WsSession } from "./ws-types";
 
 interface QueuedMessage {
   agentId: string;

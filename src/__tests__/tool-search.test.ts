@@ -1,6 +1,6 @@
 // Tool Search Tests
 import { describe, test, expect } from "bun:test";
-import { ToolSearch, searchTools } from "../runtime/tool-search.js";
+import { ToolSearch, searchTools } from "../runtime/tool-search";
 
 const mockTools = [
   {

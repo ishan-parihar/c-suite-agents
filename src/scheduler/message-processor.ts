@@ -1,16 +1,16 @@
 // Message Processor - Polls for messages and triggers agent responses
 
-import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
-import { getMessagingSystem } from "../organic/messaging.js";
-import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
-import { AgentContextManager } from "../organic/context.js";
-import { Kanban } from "../kanban/sqlite.js";
-import { Memory } from "../memory/lancedb.js";
-import { getSessionRegistry } from "./session-registry.js";
-import { autoStore, autoRecall } from "../memory/auto.js";
-import { ErrorBus } from "../runtime/error-emitter.js";
-import { AsyncMutex } from "../runtime/async-mutex.js";
+import { logger } from "../logger";
+import { getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff";
+import { getMessagingSystem } from "../organic/messaging";
+import { getNativeRuntime } from "../runtime/native-agent-runtime";
+import { AgentContextManager } from "../organic/context";
+import { Kanban } from "../kanban/sqlite";
+import { Memory } from "../memory/lancedb";
+import { getSessionRegistry } from "./session-registry";
+import { autoStore, autoRecall } from "../memory/auto";
+import { ErrorBus } from "../runtime/error-emitter";
+import { AsyncMutex } from "../runtime/async-mutex";
 
 const MAX_THREAD_RETRIES = 3;
 
@@ -194,8 +194,8 @@ export class MessageProcessor {
               // If initiating agent is the current active agent, deliver conclusion to user
               if (conv.initiated_by === agentId) {
                 try {
-                  const { sendTelegramMessage } = await import("../integrations/telegram.js");
-                  const { getStaffById } = await import("../staff/core-staff.js");
+                  const { sendTelegramMessage } = await import("../integrations/telegram");
+                  const { getStaffById } = await import("../staff/core-staff");
                   const staff = getStaffById(agentId);
                   if (staff) {
                     const prefix = `${staff.avatar} **${staff.name}** (${staff.title}):\n\n`;

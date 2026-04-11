@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { AsyncMutex } from "../async-mutex.js";
+import { AsyncMutex } from "../async-mutex";
 
 const fileEditMutex = new AsyncMutex();
 

@@ -152,7 +152,7 @@ export async function initializeWorkspace(config: any): Promise<void> {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { loadConfig } = await import("../config/loader.js");
+  const { loadConfig } = await import("../config/loader");
   const config = loadConfig();
   await initializeWorkspace(config);
   console.log("Workspace initialized successfully");

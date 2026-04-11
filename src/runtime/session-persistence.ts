@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "node:crypto";
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 
 export interface SessionEntry {
   timestamp: number;

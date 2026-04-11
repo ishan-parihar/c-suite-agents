@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, numeric, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, numeric, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 
 export const campaigns = pgTable('campaigns', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -27,6 +27,7 @@ export const campaigns = pgTable('campaigns', {
   budgetAllocated: numeric('budget_allocated', { precision: 12, scale: 2 }),
   projects: uuid('projects').array(),
   contentPipeline: uuid('content_pipeline').array(),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

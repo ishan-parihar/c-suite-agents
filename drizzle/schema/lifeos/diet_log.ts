@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, numeric, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, numeric, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 import { days } from './days';
 
 export const dietLog = pgTable('diet_log', {
@@ -22,6 +22,7 @@ export const dietLog = pgTable('diet_log', {
   environment: text('environment').array(),
   vitalsNotes: text('vitals_notes'),
   dietJson: text('diet_json'),
+  content: jsonb('content'),
   daysId: uuid('days_id').references(() => days.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -2,9 +2,9 @@
 // Pattern: scheduled tasks push events here → heartbeat runner peeks and injects into agent prompts
 // Based on OpenClaw's system-events.ts architecture
 
-import { logger } from "../logger.js";
-import { AsyncMutex } from "../runtime/async-mutex.js";
-export { currentTimeLine, isSilentAck, stripHeartbeatToken } from "../runtime/utils.js";
+import { logger } from "../logger";
+import { AsyncMutex } from "../runtime/async-mutex";
+export { currentTimeLine, isSilentAck, stripHeartbeatToken } from "../runtime/utils";
 
 export interface SystemEvent {
   id: string;

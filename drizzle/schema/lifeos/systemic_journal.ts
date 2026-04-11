@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, index, jsonb } from 'drizzle-orm/pg-core';
 import { days } from './days';
 
 export const systemicJournal = pgTable('systemic_journal', {
@@ -15,6 +15,7 @@ export const systemicJournal = pgTable('systemic_journal', {
   opportunitiesStrengths: uuid('opportunities_strengths').array(),
   aiGeneratedReport: text('ai_generated_report'),
   systemicJson: text('systemic_json'),
+  content: jsonb('content'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

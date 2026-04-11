@@ -4,11 +4,11 @@
 // Instruction file content (CLAUDE.md, .cursorrules, etc.) is discovered by
 // the caller and injected via the instructionFiles option.
 
-import { loadBootstrapFiles, buildWorkspaceContext, CORE_FILES, AGENTS_DIR } from "../agents/workspace-manager.js";
-import { getStaffById } from "../staff/core-staff.js";
-import { currentTimeLine } from "./utils.js";
-import { estimateTokens } from "./context-manager.js";
-import { logger } from "../logger.js";
+import { loadBootstrapFiles, buildWorkspaceContext, CORE_FILES, AGENTS_DIR } from "../agents/workspace-manager";
+import { getStaffById } from "../staff/core-staff";
+import { currentTimeLine } from "./utils";
+import { estimateTokens } from "./context-manager";
+import { logger } from "../logger";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -347,4 +347,4 @@ export function buildMessagePrompt(agentId: string, messages: string[], wakeCont
   return lines.join("\n");
 }
 
-export { currentTimeLine, isSilentAck, stripHeartbeatToken, hasSubstantiveFinding } from "./utils.js";
+export { currentTimeLine, isSilentAck, stripHeartbeatToken, hasSubstantiveFinding } from "./utils";

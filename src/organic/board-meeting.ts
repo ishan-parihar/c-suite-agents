@@ -2,13 +2,13 @@
 // Orchestrates multi-turn board meetings, persists to scheduler.db, enforces safety guards
 
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
-import { getBoardMembers, getStaffById } from "../staff/core-staff.js";
+import { logger } from "../logger";
+import { getBoardMembers, getStaffById } from "../staff/core-staff";
 import initSqlJs from "sql.js";
 import * as fs from "node:fs/promises";
 import { resolve } from "node:path";
-import { getNativeRuntime } from "../runtime/native-agent-runtime.js";
-import { getMessagingSystem } from "./messaging.js";
+import { getNativeRuntime } from "../runtime/native-agent-runtime";
+import { getMessagingSystem } from "./messaging";
 
 // ── Data Types ────────────────────────────────────────────────────────
 

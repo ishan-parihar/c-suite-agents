@@ -41,3 +41,4 @@ coverage/
 *.tsbuildinfo
 /.sisyphus
 /.icode
+/.operant-data

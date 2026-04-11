@@ -5,8 +5,8 @@
 
 import { connect, type Connection, type Table } from "@lancedb/lancedb";
 import { v4 as uuidv4 } from "uuid";
-import { logger } from "../logger.js";
-import { getEmbeddingService } from "./embeddings.js";
+import { logger } from "../logger";
+import { getEmbeddingService } from "./embeddings";
 
 export type MemoryScope = "personal" | "project" | "company";
 

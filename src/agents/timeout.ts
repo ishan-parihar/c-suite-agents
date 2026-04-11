@@ -10,7 +10,7 @@
  * All timeout values across the codebase should flow through these functions.
  */
 
-import type { OperantConfig } from "../config/schema.js";
+import type { OperantConfig } from "../config/schema";
 
 // ── Constants ──────────────────────────────────────────────────────────
 

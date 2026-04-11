@@ -3,7 +3,7 @@ import {
   PromptCacheTracker,
   createPromptFingerprint,
   OpenAICompatibleProvider,
-} from "../runtime/provider.js";
+} from "../runtime/provider";
 
 describe("PromptCacheTracker", () => {
   let tracker: PromptCacheTracker;

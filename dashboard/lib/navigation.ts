@@ -92,6 +92,12 @@ export const navigation: NavSection[] = [
     ],
   },
   {
+    section: "Knowledge",
+    items: [
+      { href: "/notes", label: "Notes", icon: FileText },
+    ],
+  },
+  {
     section: "Goals",
     items: [
       { href: "/goals", label: "Goals Dashboard", icon: Target },

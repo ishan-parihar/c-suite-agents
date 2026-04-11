@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { OperantConfigSchema } from "../config/schema.js";
-import { getConfigPath } from "../config/loader.js";
+import { OperantConfigSchema } from "../config/schema";
+import { getConfigPath } from "../config/loader";
 
 // ---------------------------------------------------------------------------
 // Types

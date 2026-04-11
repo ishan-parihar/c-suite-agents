@@ -16,15 +16,15 @@
 // the full agent system. This keeps commands fast and lightweight.
 //
 
-import { runSetupWizard } from "./setup-wizard.js";
-import { runDoctor } from "./doctor.js";
-import { runFinalize } from "./setup.finalize.js";
-import { handleReset, detectExistingConfig, randomToken } from "./onboard-helpers.js";
-import { runMigrations, hasLegacyKeys, checkVersionUpgrade, stampConfigVersion, LEGACY_KEYS } from "./migrations.js";
-import { runConfigureWizard } from "./configure.wizard.js";
-import { runMcpCommand } from "./mcp.js";
-import { runDaemon } from "./daemon.js";
-import { loadConfig, getConfigPath } from "../config/loader.js";
+import { runSetupWizard } from "./setup-wizard";
+import { runDoctor } from "./doctor";
+import { runFinalize } from "./setup.finalize";
+import { handleReset, detectExistingConfig, randomToken } from "./onboard-helpers";
+import { runMigrations, hasLegacyKeys, checkVersionUpgrade, stampConfigVersion, LEGACY_KEYS } from "./migrations";
+import { runConfigureWizard } from "./configure.wizard";
+import { runMcpCommand } from "./mcp";
+import { runDaemon } from "./daemon";
+import { loadConfig, getConfigPath } from "../config/loader";
 import { readFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";

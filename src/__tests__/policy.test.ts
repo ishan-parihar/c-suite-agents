@@ -5,7 +5,7 @@ import {
   getPrebuiltPolicies,
   type PolicyRule,
   type LaneContext,
-} from "../runtime/policy.js";
+} from "../runtime/policy";
 
 const sampleCtx: LaneContext = {
   agentId: "coo",

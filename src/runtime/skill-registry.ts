@@ -7,7 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { logger } from "../logger.js";
+import { logger } from "../logger";
 
 // =========================================================================
 // Skill Interface

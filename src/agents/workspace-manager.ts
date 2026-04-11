@@ -5,8 +5,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { logger } from "../logger.js";
-import { getCoreStaffIds, getStaffById, CORE_STAFF_ROLES, type CoreStaffRole } from "../staff/core-staff.js";
+import { logger } from "../logger";
+import { getCoreStaffIds, getStaffById, CORE_STAFF_ROLES, type CoreStaffRole } from "../staff/core-staff";
 
 export const OPERANT_HOME = path.join(os.homedir(), ".operant");
 export const AGENTS_DIR = path.join(OPERANT_HOME, "agents");
