@@ -54,16 +54,23 @@
   --z-toast: 100;
   --z-command: 200;
 
-  /* Spacing — multiples of 4px only */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
-  --space-12: 48px;
+  /* Spacing — visual rhythm with fluid clamp() scaling */
+  /* Tight: closely related elements (icon+label, label+input) */
+  --space-1: clamp(2px, 0.125rem, 4px);     /* 2-4px */
+  --space-2: clamp(4px, 0.375rem, 6px);     /* 4-6px */
+
+  /* Base: standard content gaps */
+  --space-3: clamp(8px, 0.625rem, 12px);    /* 8-12px */
+  --space-4: clamp(12px, 1rem, 16px);       /* 12-16px */
+
+  /* Section: logical group separations */
+  --space-6: clamp(16px, 1.25rem, 24px);    /* 16-24px */
+  --space-8: clamp(24px, 2rem, 32px);       /* 24-32px */
+
+  /* Page: major section breaks */
+  --space-12: clamp(32px, 3rem, 48px);      /* 32-48px */
+  --space-16: clamp(48px, 4rem, 64px);      /* 48-64px */
+  --space-20: clamp(64px, 5rem, 80px);      /* 64-80px */
 }
 
 /* Light mode override via prefers-color-scheme — NOT default */
