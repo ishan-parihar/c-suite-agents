@@ -52,7 +52,7 @@ export default function RootLayout({
         </a>
         <Sidebar />
         <MobileSidebar />
-        <main id="main-content" role="main" className="lg:pl-64 min-h-screen">
+        <main id="main-content" role="main" className="lg:pl-64 min-h-screen pb-16 lg:pb-0">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
             {children}
           </div>
