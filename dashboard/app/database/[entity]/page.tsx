@@ -2,13 +2,14 @@
 
 import { use, useMemo, useCallback, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { type ColumnDef } from '@tanstack/react-table';
 import { ArrowLeft, Database, Table2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { DataTable, type DataTableColumnMeta } from '@/components/database/data-table';
 import { RowDetailPanel } from '@/components/database/row-detail-panel';
+import { FilterBar } from '@/components/database/filter-bar';
 import { useTableData, useInvalidateTable } from '@/lib/database/use-table-data';
 import { useUpdateEntity } from '@/lib/database/mutations';
 import { entityRegistry, type EntitySlug } from '@/lib/crud/entities';
@@ -107,8 +108,9 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
   const limit = Number(searchParams.get('limit')) || 25;
   const sort = searchParams.get('sort') || 'created_at';
   const order = (searchParams.get('order') as 'asc' | 'desc') || 'desc';
+  const [filter, setFilter] = useState<Record<string, string> | null>(null);
 
-  const { data, isLoading } = useTableData(entity, { page, limit, sort, order });
+  const { data, isLoading } = useTableData(entity, { page, limit, sort, order, filter: filter ?? undefined });
   const invalidate = useInvalidateTable(entity);
   const updateEntity = useUpdateEntity(entity);
 
@@ -184,6 +186,8 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
           </p>
         </div>
       </div>
+
+      <FilterBar entity={entity} config={config} onFilterChange={setFilter} />
 
       <DataTable
         entity={entity}
