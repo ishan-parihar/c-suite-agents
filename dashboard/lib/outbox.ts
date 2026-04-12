@@ -1,6 +1,7 @@
 import { db } from '@/lib/db';
 import { outboxEvents } from '@/drizzle/schema';
 import { and, eq, lt, asc } from 'drizzle-orm';
+import { getWsGateway } from '@/src/transport/ws-server';
 
 export interface RelayResult {
   relayed: number;
@@ -45,5 +46,19 @@ export async function relayOutbox(): Promise<RelayResult> {
 }
 
 async function publishEvent(event: typeof outboxEvents.$inferSelect): Promise<void> {
-  void event;
+  const gateway = getWsGateway();
+
+  if (!gateway.isConnected) {
+    console.warn(`[Outbox] WS not connected, skipping publish: ${event.eventType}`);
+    return;
+  }
+
+  const wsEvent = {
+    eventType: event.eventType,
+    entityId: event.entityId,
+    entityType: event.entityType,
+    payload: event.payload as Record<string, unknown>,
+  };
+
+  gateway.broadcastOutboxEvent(wsEvent);
 }
