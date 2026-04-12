@@ -17,7 +17,7 @@ export function Badge({ status, children, className }: BadgeProps) {
         className
       )}
       style={{
-        backgroundColor: `${config.color}20`,
+        backgroundColor: `color-mix(in oklch, ${config.color} 15%, transparent)`,
         color: config.color,
       }}
       role="status"

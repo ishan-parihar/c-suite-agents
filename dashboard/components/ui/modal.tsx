@@ -48,7 +48,7 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
     <div
       ref={overlayRef}
       onClick={handleOverlayClick}
-      className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-modal flex items-center justify-center bg-background/80 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
