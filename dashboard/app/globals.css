@@ -7,32 +7,32 @@
    ============================================================ */
 
 :root {
-  /* Background surfaces */
-  --bg-primary: #0A0E27;      /* Page background (midnight blue) */
-  --bg-surface: #121212;      /* Card backgrounds */
-  --bg-elevated: #1A1A2E;     /* Modals, dropdowns, sidebar */
-  --bg-hover: #1F2937;        /* Hover states */
+  /* Background surfaces — warm charcoal, NOT blue-black */
+  --bg-primary: oklch(0.16 0.01 85);      /* Deepest surface, page background */
+  --bg-surface: oklch(0.21 0.01 85);       /* Card backgrounds */
+  --bg-elevated: oklch(0.26 0.01 85);      /* Modals, dropdowns, sidebar */
+  --bg-hover: oklch(0.31 0.01 85);         /* Hover states */
 
-  /* Borders */
-  --border-default: rgba(255, 255, 255, 0.08);  /* Card borders, dividers */
-  --border-strong: rgba(255, 255, 255, 0.16);   /* Active states */
+  /* Borders — subtle warm separators */
+  --border-default: oklch(0.35 0.01 85 / 0.5);  /* Card borders, dividers — semi-transparent */
+  --border-strong: oklch(0.42 0.01 85);         /* Active states, focus */
 
-  /* Text */
-  --text-primary: #FFFFFF;      /* Headings, labels */
-  --text-secondary: #A1A1AA;    /* Subtitles, metadata */
-  --text-muted: #71717A;        /* Placeholders, disabled */
+  /* Text — warm-tinted, never pure white or pure gray */
+  --text-primary: oklch(0.96 0.003 85);    /* Headings, labels */
+  --text-secondary: oklch(0.72 0.008 85);  /* Subtitles, metadata */
+  --text-muted: oklch(0.52 0.008 85);      /* Placeholders, disabled */
 
-  /* Accent colors */
-  --accent-primary: #1E40AF;    /* Primary buttons, links */
-  --accent-hover: #2563EB;
-  --accent-secondary: #3B82F6;  /* Secondary actions */
-  --accent-cta: #D97706;        /* Highlights, warnings */
+  /* Accent — deep teal, NOT generic blue */
+  --accent-primary: oklch(0.55 0.12 175);    /* Primary buttons, links */
+  --accent-hover: oklch(0.60 0.13 175);
+  --accent-secondary: oklch(0.68 0.10 165);  /* Secondary actions */
+  --accent-cta: oklch(0.70 0.14 80);         /* Highlights, CTAs — warm amber */
 
-  /* Status — always paired with text labels, never color alone */
-  --status-healthy: #10B981;
-  --status-warning: #F59E0B;
-  --status-critical: #EF4444;
-  --status-neutral: #6B7280;
+  /* Status — earth tones, NOT neon */
+  --status-healthy: oklch(0.62 0.13 145);  /* Forest green */
+  --status-warning: oklch(0.75 0.14 80);   /* Amber */
+  --status-critical: oklch(0.58 0.18 25);  /* Brick red */
+  --status-neutral: oklch(0.55 0.015 85);  /* Warm gray */
 
   /* Typography */
   --font-heading: var(--font-fira-code);
@@ -69,15 +69,15 @@
 /* Light mode override via prefers-color-scheme — NOT default */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg-primary: #F8FAFC;
-    --bg-surface: #FFFFFF;
-    --bg-elevated: #F1F5F9;
-    --bg-hover: #E2E8F0;
-    --border-default: #E2E8F0;
-    --border-strong: #CBD5E1;
-    --text-primary: #0F172A;
-    --text-secondary: #475569;
-    --text-muted: #94A3B8;
+    --bg-primary: oklch(0.97 0.005 85);
+    --bg-surface: oklch(1.0 0 0);
+    --bg-elevated: oklch(0.95 0.005 85);
+    --bg-hover: oklch(0.92 0.008 85);
+    --border-default: oklch(0.88 0.008 85);
+    --border-strong: oklch(0.78 0.01 85);
+    --text-primary: oklch(0.20 0.01 85);
+    --text-secondary: oklch(0.45 0.01 85);
+    --text-muted: oklch(0.60 0.01 85);
   }
 }
 
@@ -138,12 +138,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #a1a1aa;
+  background: oklch(0.72 0.008 85);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #71717a;
+  background: oklch(0.52 0.008 85);
 }
 
 /* Selection */
