@@ -254,14 +254,14 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
 
   // Resolve paths
   const appDir = resolveAppDir();
-  const scriptPath = join(appDir, "build", "index");
+  const scriptPath = join(appDir, "build", "index.js");
   if (!existsSync(scriptPath)) {
     console.log(err(`Application not built: ${scriptPath}`));
     console.log(info(`Run: npm run build`));
     return false;
   }
 
-  const nodePath = "/usr/bin/node";
+  const nodePath = process.execPath;
   if (!existsSync(nodePath)) {
     console.log(err(`Node.js not found at ${nodePath}`));
     return false;

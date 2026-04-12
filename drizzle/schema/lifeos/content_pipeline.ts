@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, integer, boolean, jsonb, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, numeric, integer, boolean, jsonb, timestamp, index, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { campaigns } from './campaigns';
 
 export const contentPipeline = pgTable('content_pipeline', {
@@ -15,7 +15,7 @@ export const contentPipeline = pgTable('content_pipeline', {
   isEvergreen: boolean('is_evergreen'),
   actionDate: timestamp('action_date', { withTimezone: true }),
   publishDate: timestamp('publish_date', { withTimezone: true }),
-  parentContentId: uuid('parent_content_id').references(() => contentPipeline.id),
+  parentContentId: uuid('parent_content_id').references((): AnyPgColumn => contentPipeline.id),
   childContent: uuid('child_content').array(),
   campaignId: uuid('campaign_id').references(() => campaigns.id),
   projects: uuid('projects').array(),

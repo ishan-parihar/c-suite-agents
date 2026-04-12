@@ -1,6 +1,6 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { logger } from "../logger";
 import { createImageAnalyzeTool } from "../runtime/tools/image-analyze";
@@ -28,6 +28,9 @@ import { AgentContextManager } from "../organic/context";
 import { sendTelegramMessage } from "../integrations/telegram";
 import { createServer } from "http";
 import { startBoardMeeting, runFullBoardMeeting, getActiveMeeting, getMeeting, getBoardMeetingEngine } from "../organic/board-meeting";
+import { dbAuditLogger, DbAuditLogger } from "../lifeos/audit-logger";
+import { DbHealthMonitor } from "../lifeos/health-monitor";
+import { PostgresClient } from "../lifeos/postgres/client";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 const ok = (text: string): ToolResult => ({ content: [{ type: "text" as const, text }] });
@@ -70,7 +73,7 @@ export async function startOperant(): Promise<OperantRuntime> {
   const ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
 
   // Factory: create a new McpServer with all tools registered for a given SSE session
-  function createSessionServer(callerAgentId?: string): { server: McpServer; toolImpls: Record<string, (args: any) => Promise<ToolResult>> } {
+  function createSessionServer(callerAgentId?: string, pgClient?: PostgresClient | null): { server: McpServer; toolImpls: Record<string, (args: any) => Promise<ToolResult>> } {
     const sessionServer = new McpServer({ name: "operant", version: "0.1.0" }, { capabilities: { logging: {} } });
     const sessionToolImpls: Record<string, (args: any) => Promise<ToolResult>> = {};
 
@@ -987,11 +990,270 @@ export async function startOperant(): Promise<OperantRuntime> {
       const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
     });
 
+    // === DATABASE TOOLS (PostgreSQL with domain scoping) ===
+    // Table-to-domain mapping — derived from LifeOS schema structure
+    const TABLE_DOMAIN_MAP: Record<string, string> = {
+      // Strategic domain (CEO, CIO)
+      years: "strategic", quarters: "strategic", months: "strategic", weeks: "strategic", days: "strategic",
+      annual_goals: "strategic", quarterly_goals: "strategic",
+      projects: "strategic", campaigns: "strategic",
+      directives_risk_log: "strategic", opportunities_strengths: "strategic",
+      reports: "strategic", notes_management: "strategic",
+      // Relations (strategic sub-domain)
+      project_directives: "strategic", project_opportunities: "strategic", project_people: "strategic",
+      campaign_platforms: "strategic", content_platforms: "strategic",
+      // Productivity domain (COO)
+      tasks: "productivity", activity_log: "productivity", activity_types: "productivity",
+      // Operations (productivity sub-domain)
+      kanban_cards: "productivity", kanban_boards: "productivity", kanban_columns: "productivity",
+      messaging_threads: "productivity", messaging_messages: "productivity",
+      outbox: "productivity", transition_log: "productivity",
+      agent_sessions: "productivity", board_meetings: "productivity",
+      // Journaling domain (CPO)
+      subjective_journal: "journaling", relational_journal: "journaling", systemic_journal: "journaling",
+      // Financial domain (CFO)
+      financial_log: "financial", financial_accounts: "financial",
+      // Health domain (Physician)
+      diet_log: "health",
+      // Content domain (CMO)
+      content_pipeline: "content",
+      // Relational domain (CRO)
+      people: "relational",
+      // Intelligence domain (CIO)
+      notion_unmapped: "intelligence",
+    };
+
+    // Helper: get domains for an agent
+    async function getAgentDomains(agentId: string | undefined): Promise<string[]> {
+      if (!agentId || !pgClient) return [];
+      try {
+        const result = await pgClient.getPool().query(
+          "SELECT domain FROM agent_domain_mapping WHERE agent_id = $1",
+          [agentId]
+        );
+        return result.rows.map((r: any) => r.domain);
+      } catch {
+        return [];
+      }
+    }
+
+    // Helper: check if agent can access a table
+    async function canAccessTable(agentId: string | undefined, tableName: string): Promise<{ allowed: boolean; reason?: string }> {
+      if (!agentId) return { allowed: false, reason: "No agent identity" };
+      if (!pgClient) return { allowed: false, reason: "Database not configured" };
+      const domain = TABLE_DOMAIN_MAP[tableName];
+      if (!domain) return { allowed: false, reason: `Table '${tableName}' not found in domain map` };
+      const agentDomains = await getAgentDomains(agentId);
+      if (agentDomains.length === 0) return { allowed: false, reason: `No domain mapping for agent '${agentId}'` };
+      if (!agentDomains.includes(domain)) return { allowed: false, reason: `Agent '${agentId}' not authorized for domain '${domain}' (table: ${tableName}). Allowed domains: ${agentDomains.join(", ")}` };
+      return { allowed: true };
+    }
+
+    // Helper: get allowed tables for an agent
+    async function getAllowedTables(agentId: string | undefined): Promise<string[]> {
+      if (!agentId || !pgClient) return [];
+      const agentDomains = await getAgentDomains(agentId);
+      if (agentDomains.length === 0) return [];
+      return Object.entries(TABLE_DOMAIN_MAP)
+        .filter(([_, domain]) => agentDomains.includes(domain))
+        .map(([table]) => table);
+    }
+
+    if (pgClient) {
+      // db.listTables — list tables the agent has access to
+      const dbListTables = async (args: any): Promise<ToolResult> => {
+        const agentId = callerAgentId;
+        const tables = await getAllowedTables(agentId);
+        if (tables.length === 0) {
+          const domains = await getAgentDomains(agentId);
+          return ok(`No tables accessible for agent '${agentId}'. Domains: ${domains.length > 0 ? domains.join(", ") : "none configured"}.`);
+        }
+        return ok(`Accessible tables for agent '${agentId}':\n${tables.map(t => `  - ${t} (${TABLE_DOMAIN_MAP[t]})`).join("\n")}\n\nTotal: ${tables.length} tables`);
+      };
+      sessionToolImpls["db.listTables"] = dbListTables;
+      sessionServer.registerTool("db.listTables", {
+        description: "List all database tables the calling agent has access to, based on their domain mapping.",
+        inputSchema: z.object({}),
+      }, dbListTables);
+
+      // db.schema — get schema info for allowed tables
+      const dbSchema = async (args: any): Promise<ToolResult> => {
+        const agentId = callerAgentId;
+        const tableName = args.table;
+        if (tableName) {
+          const access = await canAccessTable(agentId, tableName);
+          if (!access.allowed) return ok(`Access denied: ${access.reason}`);
+          try {
+            const schema = await pgClient.getSchemaInfo();
+            const cols = schema.tables[tableName];
+            if (!cols) return ok(`Table '${tableName}' not found in schema.`);
+            return ok(`Schema for '${tableName}' (domain: ${TABLE_DOMAIN_MAP[tableName]}):\n${cols.map(c => `  - ${c}`).join("\n")}`);
+          } catch (err: any) { return ok(`Error fetching schema: ${err.message}`); }
+        }
+        // Return schema for all allowed tables
+        const allowed = await getAllowedTables(agentId);
+        if (allowed.length === 0) return ok(`No tables accessible for agent '${agentId}'.`);
+        try {
+          const schema = await pgClient.getSchemaInfo();
+          let output = `Schema for accessible tables (${allowed.length}):\n\n`;
+          for (const t of allowed) {
+            const cols = schema.tables[t];
+            output += `## ${t} (${TABLE_DOMAIN_MAP[t]})\n`;
+            if (cols) output += cols.map(c => `  - ${c}`).join("\n") + "\n";
+            output += "\n";
+          }
+          return ok(output);
+        } catch (err: any) { return ok(`Error fetching schema: ${err.message}`); }
+      };
+      sessionToolImpls["db.schema"] = dbSchema;
+      sessionServer.registerTool("db.schema", {
+        description: "Get schema information for database tables. Specify a table name for a single table, or omit to get all accessible tables.",
+        inputSchema: z.object({
+          table: z.string().optional().describe("Specific table name to inspect (optional)."),
+        }),
+      }, dbSchema);
+
+      // db.query — read data from a table
+      const dbQuery = async (args: any): Promise<ToolResult> => {
+        const agentId = callerAgentId;
+        const { table, filters, limit, offset, orderBy, orderDir } = args;
+        if (!table) return ok("Error: 'table' parameter is required.");
+        const access = await canAccessTable(agentId, table);
+        if (!access.allowed) return ok(`Access denied: ${access.reason}`);
+        try {
+          const result = await pgClient.query(table, filters || {}, {
+            limit: limit || 50,
+            offset: offset || 0,
+            orderBy,
+            orderDir,
+          });
+          if (!result.success) return ok(`Query failed: ${result.error}`);
+          const rows = result.data || [];
+          if (rows.length === 0) return ok(`No rows found in '${table}'.`);
+          return ok(`Query result from '${table}' (${rows.length} rows):\n\n${JSON.stringify(rows, null, 2)}`);
+        } catch (err: any) { return ok(`Query error: ${err.message}`); }
+      };
+      sessionToolImpls["db.query"] = dbQuery;
+      sessionServer.registerTool("db.query", {
+        description: "Query data from a database table with optional filters, ordering, and pagination.",
+        inputSchema: z.object({
+          table: z.string().describe("Table name to query."),
+          filters: z.record(z.any()).optional().describe("Filter conditions (e.g., { status: 'active', priority: { $gt: 2 } })."),
+          limit: z.number().optional().describe("Max rows to return (default: 50)."),
+          offset: z.number().optional().describe("Rows to skip (default: 0)."),
+          orderBy: z.string().optional().describe("Column to order by."),
+          orderDir: z.enum(["asc", "desc"]).optional().describe("Order direction."),
+        }),
+      }, dbQuery);
+
+      // db.insert — insert data into a table
+      const dbInsert = async (args: any): Promise<ToolResult> => {
+        const agentId = callerAgentId;
+        const { table, data } = args;
+        if (!table) return ok("Error: 'table' parameter is required.");
+        if (!data) return ok("Error: 'data' parameter is required.");
+        const access = await canAccessTable(agentId, table);
+        if (!access.allowed) return ok(`Access denied: ${access.reason}`);
+        try {
+          const result = await pgClient.insert(table, data);
+          if (!result.success) return ok(`Insert failed: ${result.error}`);
+          return ok(`Inserted ${result.count} row(s) into '${table}'.`);
+        } catch (err: any) { return ok(`Insert error: ${err.message}`); }
+      };
+      sessionToolImpls["db.insert"] = dbInsert;
+      sessionServer.registerTool("db.insert", {
+        description: "Insert one or more rows into a database table.",
+        inputSchema: z.object({
+          table: z.string().describe("Table name to insert into."),
+          data: z.union([z.record(z.any()), z.array(z.record(z.any()))]).describe("Single row object or array of row objects."),
+        }),
+      }, dbInsert);
+
+      // db.update — update rows in a table
+      const dbUpdate = async (args: any): Promise<ToolResult> => {
+        const agentId = callerAgentId;
+        const { table, filters, data } = args;
+        if (!table) return ok("Error: 'table' parameter is required.");
+        if (!filters || Object.keys(filters).length === 0) return ok("Error: 'filters' parameter is required (at least one filter).");
+        if (!data) return ok("Error: 'data' parameter is required.");
+        const access = await canAccessTable(agentId, table);
+        if (!access.allowed) return ok(`Access denied: ${access.reason}`);
+        try {
+          const result = await pgClient.update(table, filters, data);
+          if (!result.success) return ok(`Update failed: ${result.error}`);
+          return ok(`Updated ${result.count} row(s) in '${table}'.`);
+        } catch (err: any) { return ok(`Update error: ${err.message}`); }
+      };
+      sessionToolImpls["db.update"] = dbUpdate;
+      sessionServer.registerTool("db.update", {
+        description: "Update rows in a database table matching filters.",
+        inputSchema: z.object({
+          table: z.string().describe("Table name to update."),
+          filters: z.record(z.any()).describe("Filter conditions to identify rows to update."),
+          data: z.record(z.any()).describe("Column values to update."),
+        }),
+      }, dbUpdate);
+
+      // db.delete — delete rows from a table
+      const dbDelete = async (args: any): Promise<ToolResult> => {
+        const agentId = callerAgentId;
+        const { table, filters } = args;
+        if (!table) return ok("Error: 'table' parameter is required.");
+        if (!filters || Object.keys(filters).length === 0) return ok("Error: 'filters' parameter is required (at least one filter).");
+        const access = await canAccessTable(agentId, table);
+        if (!access.allowed) return ok(`Access denied: ${access.reason}`);
+        try {
+          const result = await pgClient.delete(table, filters);
+          if (!result.success) return ok(`Delete failed: ${result.error}`);
+          return ok(`Deleted ${result.count} row(s) from '${table}'.`);
+        } catch (err: any) { return ok(`Delete error: ${err.message}`); }
+      };
+      sessionToolImpls["db.delete"] = dbDelete;
+      sessionServer.registerTool("db.delete", {
+        description: "Delete rows from a database table matching filters.",
+        inputSchema: z.object({
+          table: z.string().describe("Table name to delete from."),
+          filters: z.record(z.any()).describe("Filter conditions to identify rows to delete."),
+        }),
+      }, dbDelete);
+    } else {
+      // Register placeholder tools when postgres is not configured
+      const dbNotConfigured = async (): Promise<ToolResult> => ok("Database not configured. Set DATABASE_URL to enable DB tools.");
+      for (const toolName of ["db.listTables", "db.schema", "db.query", "db.insert", "db.update", "db.delete"]) {
+        sessionToolImpls[toolName] = dbNotConfigured;
+        sessionServer.registerTool(toolName, {
+          description: "Database tool (disabled — DATABASE_URL not set).",
+          inputSchema: z.object({}),
+        }, dbNotConfigured);
+      }
+    }
+
     return { server: sessionServer, toolImpls: sessionToolImpls };
   }
 
+  // === PostgreSQL DB Integration (optional — requires DATABASE_URL) ===
+  // Must be initialized BEFORE createSessionServer() calls since DB tools are registered inside it
+  const databaseUrl = process.env.DATABASE_URL;
+  let postgresClient: PostgresClient | null = null;
+  let dbHealthMonitor: DbHealthMonitor | null = null;
+  let dbInitialized = false;
+
+  if (databaseUrl) {
+    try {
+      postgresClient = new PostgresClient(databaseUrl, 10, dbAuditLogger);
+      dbHealthMonitor = new DbHealthMonitor(postgresClient.getPool(), { checkIntervalMs: 30000, failureThreshold: 3 });
+      dbHealthMonitor.start();
+      dbInitialized = true;
+      logger.info("PostgreSQL client and health monitor initialized");
+    } catch (err: any) {
+      logger.warn({ err: err.message }, "Failed to initialize PostgreSQL — DB tools disabled");
+    }
+  } else {
+    logger.info("DATABASE_URL not set — PostgreSQL integration disabled");
+  }
+
   // Initialize shared tool implementations (for executor + stdio mode)
-  const { server: initServer, toolImpls: initTools } = createSessionServer();
+  const { server: initServer, toolImpls: initTools } = createSessionServer(undefined, postgresClient);
   await initServer.close(); // We just needed the tool implementations, not the server
   Object.assign(toolImpls, initTools);
 
@@ -1022,8 +1284,40 @@ export async function startOperant(): Promise<OperantRuntime> {
     }
 
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const pathname = url.pathname;
 
-    if (url.pathname === "/mcp" || url.pathname === "/mcp/") {
+    if (pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: "ok",
+        db: dbInitialized ? (dbHealthMonitor?.getStatus().status ?? "unknown") : "not_configured",
+        uptime_ms: process.uptime() * 1000,
+      }));
+      return;
+    }
+
+    if (pathname === "/health/db") {
+      if (!dbInitialized || !dbHealthMonitor) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "unavailable", reason: "PostgreSQL not configured" }));
+        return;
+      }
+      const health = dbHealthMonitor.getStatus();
+      res.writeHead(health.status === "healthy" ? 200 : health.status === "degraded" ? 503 : 500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: health.status, latency_ms: health.latency_ms, pool: health.pool, last_check: health.last_check, consecutive_failures: health.consecutive_failures }));
+      return;
+    }
+
+    if (pathname === "/audit/db") {
+      const logs = dbAuditLogger.getLogs();
+      const stats = dbAuditLogger.getStats();
+      const errors = dbAuditLogger.getRecentErrors(10);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ stats, recent_logs: logs.slice(-50), recent_errors: errors }));
+      return;
+    }
+
+    if (pathname === "/mcp" || pathname === "/mcp/") {
       if (req.method === "GET") {
         if (sseTransports.size >= MAX_SSE_SESSIONS) {
           res.writeHead(503, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
@@ -1052,7 +1346,7 @@ export async function startOperant(): Promise<OperantRuntime> {
           }
         }
 
-        const { server: sessionServer, toolImpls: sessionToolImpls } = createSessionServer(agentId);
+        const { server: sessionServer, toolImpls: sessionToolImpls } = createSessionServer(agentId, postgresClient);
         const sseTransport = new SSEServerTransport("/mcp", res);
 
         res.on('close', () => {
@@ -1164,7 +1458,7 @@ export async function startOperant(): Promise<OperantRuntime> {
   // Also connect stdio transport if MCP_STDIO=1 (for direct CLI usage)
   let stdioServer: McpServer | null = null;
   if (process.env.MCP_STDIO === "1") {
-    const { server: s, toolImpls: stdioTools } = createSessionServer();
+    const { server: s, toolImpls: stdioTools } = createSessionServer(undefined, postgresClient);
     stdioServer = s;
     Object.assign(toolImpls, stdioTools);
     const stdioTransport = new StdioServerTransport();
@@ -1177,6 +1471,8 @@ export async function startOperant(): Promise<OperantRuntime> {
   };
 
   const shutdown = async () => {
+    dbHealthMonitor?.stop();
+    await postgresClient?.close();
     await new Promise<void>(resolve => httpServer.close(() => resolve()));
     for (const { server } of sseTransports.values()) {
       await server.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "shutdown server close error"));

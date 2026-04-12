@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, index, integer, boolean, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, index, integer, boolean, jsonb, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { projects } from './projects';
 
 export const notesManagement = pgTable('notes_management', {
@@ -19,7 +19,7 @@ export const notesManagement = pgTable('notes_management', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 
   // Notion-style metadata columns
-  parentId: uuid('parent_id').references(() => notesManagement.id, { onDelete: 'set null' }),
+  parentId: uuid('parent_id').references((): AnyPgColumn => notesManagement.id, { onDelete: 'set null' }),
   icon: text('icon'),
   coverImage: text('cover_image'),
   tags: text('tags').array(),

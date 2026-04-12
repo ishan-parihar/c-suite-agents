@@ -190,12 +190,30 @@ const watchdogTimer = setInterval(() => {
 async function main() {
   // Single-instance enforcement via exclusive PID file creation (atomic check-and-claim)
   const pidFile = join(homedir(), ".local/run/operant.pid");
+
+  // Ensure parent directory exists before PID operations
+  try { mkdir(join(homedir(), ".local/run"), { recursive: true }); } catch { /* ignore */ }
+
+  // Clean up stale PID file on startup (systemd restart after crash leaves stale file)
+  try {
+    const existingPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+    if (!isNaN(existingPid)) {
+      try { process.kill(existingPid, 0); } catch (e: any) {
+        if (e.code === "ESRCH") {
+          // Process is dead — stale PID file, remove it
+          try { unlinkSync(pidFile); } catch {}
+        }
+      }
+    }
+  } catch { /* PID file doesn't exist or is unreadable — fine, proceed */ }
+
   try {
     const fd = openSync(pidFile, 'wx');
     writeSync(fd, String(process.pid));
     closeSync(fd);
   } catch (err: any) {
     if (err.code === 'EEXIST') {
+      // Another instance holds the lock
       try {
         const existingPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
         try {
@@ -204,7 +222,6 @@ async function main() {
           process.exit(1);
         } catch (e: any) {
           if (e.code === "ESRCH") {
-            // Stale PID file — remove and retry exclusive create
             try { unlinkSync(pidFile); } catch {}
             const fd = openSync(pidFile, 'wx');
             writeSync(fd, String(process.pid));
@@ -214,7 +231,6 @@ async function main() {
           }
         }
       } catch {
-        // Race — another instance took it
         console.error("Operant already running. Exiting.");
         process.exit(1);
       }
@@ -350,6 +366,8 @@ async function main() {
       "cron.status", "cron.list", "cron.create", "cron.pause", "cron.resume", "cron.delete", "cron.run",
       // Media
       "image.analyze", "image.generate", "tts.synthesize",
+      // Database (PostgreSQL with domain scoping)
+      "db.listTables", "db.schema", "db.query", "db.insert", "db.update", "db.delete",
     ];
 
     // Build scoped tool sets per agent

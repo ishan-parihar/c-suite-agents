@@ -117,6 +117,7 @@ export function createBashTool() {
             USER: process.env.USER || "operant",
             LANG: process.env.LANG || "en_US.UTF-8",
             TERM: "dumb",
+            NODE_ENV: process.env.NODE_ENV || "production",
           },
         });
 

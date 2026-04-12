@@ -1,7 +1,8 @@
 import { Suspense } from "react";
 import Link from "next/link";
+import { use } from "react";
 import {
-  use, Crown, Cog, Brain, Handshake, Wallet, Sparkles,
+  Crown, Cog, Brain, Handshake, Wallet, Sparkles,
   Telescope, Stethoscope, ArrowLeft, Activity, MessageSquare,
   BarChart3, Table2, CheckSquare,
 } from "lucide-react";
@@ -153,7 +154,7 @@ async function WorkspaceContent({ agentId }: { agentId: string }) {
                       {report.created_at ? new Date(String(report.created_at)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ""}
                     </span>
                   </div>
-                  {report.summary && (
+                  {String(report.summary || "") && (
                     <p className="text-xs text-text-muted mt-1 truncate">
                       {String(report.summary)}
                     </p>
