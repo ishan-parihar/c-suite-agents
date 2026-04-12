@@ -2,8 +2,8 @@
 
 /* ============================================================
    OPERANT DESIGN SYSTEM — Dark-First Operations Dashboard
-   Style: Dark Mode (OLED-optimized)
-   Typography: Fira Code (headings/mono) + Fira Sans (body)
+   Style: Warm Instrument — utilitarian, calibrated, authoritative
+   Typography: Instrument Sans (headings) + Source Sans 3 (body) + JetBrains Mono (code/data)
    ============================================================ */
 
 :root {
@@ -35,9 +35,9 @@
   --status-neutral: oklch(0.55 0.015 85);  /* Warm gray */
 
   /* Typography */
-  --font-heading: var(--font-fira-code);
-  --font-body: var(--font-fira-sans);
-  --font-mono: var(--font-fira-code);
+  --font-heading: var(--font-instrument-sans);
+  --font-body: var(--font-source-sans);
+  --font-mono: var(--font-jetbrains-mono);
 
   /* Radii */
   --radius-sm: 6px;
@@ -99,8 +99,8 @@
   --color-warning: var(--status-warning);
   --color-critical: var(--status-critical);
   --color-neutral: var(--status-neutral);
-  --font-sans: var(--font-fira-sans);
-  --font-mono: var(--font-fira-code);
+  --font-sans: var(--font-source-sans);
+  --font-mono: var(--font-jetbrains-mono);
 }
 
 /* ============================================================
@@ -110,7 +110,7 @@
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: var(--font-body), system-ui, sans-serif;
+  font-family: var(--font-body), 'Source Sans 3', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
