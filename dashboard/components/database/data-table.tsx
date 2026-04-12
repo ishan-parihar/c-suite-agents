@@ -18,6 +18,7 @@ import { PAGINATION_SIZES } from '@/lib/constants';
 import type { EntitySlug } from '@/lib/crud/entities';
 import type { CellEditType } from '@/components/database/cell-editors';
 import { CellEditor } from '@/components/database/cell-editors';
+import type { ColumnConfig } from '@/components/database/column-config';
 
 function InlineCellEditor(props: React.ComponentProps<typeof CellEditor>) {
   return <CellEditor {...props} />;
@@ -33,11 +34,16 @@ export interface DataTableProps<TData> {
   entity: EntitySlug;
   columns: ColumnDef<TData, unknown>[];
   columnMeta?: DataTableColumnMeta[];
+  columnConfig?: ColumnConfig[];
   data: TData[];
   loading: boolean;
   total: number;
+  page: number;
+  limit: number;
   onRowClick?: (row: TData) => void;
   onCellEdit?: (rowId: string | number, field: string, value: unknown) => void;
+  onPageChange?: (page: number) => void;
+  onLimitChange?: (limit: number) => void;
   searchable?: boolean;
   filterable?: boolean;
 }
@@ -46,21 +52,27 @@ export function DataTable<TData extends Record<string, unknown>>({
   entity,
   columns,
   columnMeta,
+  columnConfig,
   data,
   loading,
   total,
+  page,
+  limit,
   onRowClick,
   onCellEdit,
+  onPageChange,
+  onLimitChange,
   searchable = false,
   filterable = false,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 25,
-  });
   const [search, setSearch] = useState('');
   const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null);
+
+  const pagination = useMemo<PaginationState>(() => ({
+    pageIndex: page - 1,
+    pageSize: limit,
+  }), [page, limit]);
 
   const metaMap = useMemo(() => {
     if (!columnMeta) return new Map<string, DataTableColumnMeta>();
@@ -69,15 +81,31 @@ export function DataTable<TData extends Record<string, unknown>>({
     return m;
   }, [columnMeta]);
 
+  const orderedColumns = useMemo(() => {
+    if (!columnConfig || columnConfig.length === 0) return columns;
+
+    const visibleIds = new Set(columnConfig.filter((c) => c.visible).map((c) => c.id));
+    const pinnedLeft = columnConfig.filter((c) => c.pinned === 'left' && c.visible).map((c) => c.id);
+    const pinnedRight = columnConfig.filter((c) => c.pinned === 'right' && c.visible).map((c) => c.id);
+    const unpinned = columnConfig.filter((c) => !c.pinned && c.visible).map((c) => c.id);
+    const order = [...pinnedLeft, ...unpinned, ...pinnedRight];
+
+    const colMap = new Map(columns.map((c) => [c.id ?? (c as Record<string, unknown>).accessorKey as string, c]));
+    return order.map((id) => colMap.get(id)).filter(Boolean) as ColumnDef<TData, unknown>[];
+  }, [columns, columnConfig]);
+
   const table = useReactTable<TData>({
     data,
-    columns,
+    columns: orderedColumns,
     state: {
       sorting,
       pagination,
     },
     onSortingChange: setSorting,
-    onPaginationChange: setPagination,
+    onPaginationChange: (updater) => {
+      const next = typeof updater === 'function' ? updater(pagination) : updater;
+      onPageChange?.(next.pageIndex + 1);
+    },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
@@ -90,18 +118,17 @@ export function DataTable<TData extends Record<string, unknown>>({
 
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(e.target.value);
-    setPagination((p) => ({ ...p, pageIndex: 0 }));
   }, []);
 
   const handlePageSizeChange = useCallback((size: number) => {
-    setPagination({ pageIndex: 0, pageSize: size });
-  }, []);
+    onLimitChange?.(size);
+  }, [onLimitChange]);
 
   const startIdx = pagination.pageIndex * pagination.pageSize + 1;
   const endIdx = Math.min((pagination.pageIndex + 1) * pagination.pageSize, total);
 
   if (loading) {
-    return <TableSkeleton columns={columns.length} />;
+    return <TableSkeleton columns={orderedColumns.length} />;
   }
 
   if (data.length === 0 && !search) {
@@ -191,7 +218,7 @@ export function DataTable<TData extends Record<string, unknown>>({
             <tbody>
               {table.getRowModel().rows.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-4 py-12 text-center text-text-secondary">
+                  <td colSpan={orderedColumns.length} className="px-4 py-12 text-center text-text-secondary">
                     No results match your search.
                   </td>
                 </tr>
