@@ -1,11 +1,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { WsMessage, WsEventPayload, WsSubscribePayload } from '@/src/transport/ws-types';
+import type { WsMessage, WsEventPayload, WsSubscribePayload, WsNotificationPayload } from '@/src/transport/ws-types';
 
 interface UseWebSocketOptions {
   url: string;
   queryKeys?: string[][];
   onEvent?: (event: WsEventPayload) => void;
+  onNotification?: (notification: WsNotificationPayload) => void;
   enabled?: boolean;
 }
 
@@ -21,6 +22,7 @@ export function useWebSocket({
   url,
   queryKeys = [],
   onEvent,
+  onNotification,
   enabled = true,
 }: UseWebSocketOptions): UseWebSocketReturn {
   const queryClient = useQueryClient();
@@ -89,6 +91,8 @@ export function useWebSocket({
             }
             break;
           case 'notification':
+            const notificationPayload = message.payload as WsNotificationPayload;
+            onNotification?.(notificationPayload);
             break;
         }
       } catch {
@@ -109,7 +113,7 @@ export function useWebSocket({
     ws.onerror = () => {
       ws.close();
     };
-  }, [enabled, queryKeys, queryClient, onEvent]);
+  }, [enabled, queryKeys, queryClient, onEvent, onNotification]);
 
   useEffect(() => {
     if (!enabled) return;
