@@ -3,6 +3,7 @@ import { Instrument_Sans, Source_Sans_3, JetBrains_Mono } from "next/font/google
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 import { MobileSidebar } from "@/components/sidebar-mobile";
+import { TopBar } from "@/components/topbar";
 import { Toaster } from "@/components/ui/toaster";
 import { QueryProvider } from "@/components/providers/query-provider";
 
@@ -52,7 +53,8 @@ export default function RootLayout({
         </a>
         <Sidebar />
         <MobileSidebar />
-        <main id="main-content" role="main" className="lg:pl-64 min-h-screen">
+        <main id="main-content" role="main" className="lg:pl-64 min-h-screen pb-16 lg:pb-0">
+          <TopBar />
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
             {children}
           </div>

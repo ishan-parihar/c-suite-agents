@@ -32,31 +32,29 @@ export function StatCard({
 
   return (
     <Card className={cn("p-4", className)} aria-label={`${title}: ${value}`}>
-      <div className="flex items-start justify-between">
-        <div className="space-y-2">
-          <p className="text-xs uppercase tracking-wider text-text-muted">{title}</p>
-          <p className="font-mono text-2xl font-semibold tabular-nums">{value}</p>
-          {(trend || subtitle) && (
-            <div className="flex items-center gap-2 text-sm">
-              {trend && (
-                <span
-                  className={cn(
-                    "flex items-center gap-0.5 font-medium",
-                    trend.direction === "up" ? "text-healthy" : "text-critical"
-                  )}
-                >
-                  {trend.direction === "up" ? "\u2191" : "\u2193"}
-                  {Math.abs(trend.value)}%
-                </span>
-              )}
-              {subtitle && <span className="text-text-secondary">{subtitle}</span>}
-            </div>
-          )}
+      <div className="flex items-baseline gap-3">
+        <div className="flex-1">
+          <p className="font-heading text-2xl font-semibold tabular-nums">{value}</p>
+          <p className="text-xs tracking-wider text-text-muted mt-1">{title}</p>
         </div>
-        <div className="rounded-md bg-hover p-2 text-text-secondary">
-          <Icon className="h-5 w-5" />
-        </div>
+        <Icon className="h-5 w-5 text-text-muted shrink-0" />
       </div>
+      {trend && (
+        <div className="flex items-center gap-1.5 mt-2 text-xs">
+          <span
+            className={cn(
+              "font-medium",
+              trend.direction === "up" ? "text-healthy" : "text-critical"
+            )}
+          >
+            {trend.direction === "up" ? "↑" : "↓"} {Math.abs(trend.value)}%
+          </span>
+          {subtitle && <span className="text-text-secondary">{subtitle}</span>}
+        </div>
+      )}
+      {!trend && subtitle && (
+        <p className="text-xs text-text-secondary mt-2">{subtitle}</p>
+      )}
     </Card>
   );
 }
