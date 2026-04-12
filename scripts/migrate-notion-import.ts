@@ -47,6 +47,12 @@ async function generatePgId(notionId: string): Promise<string> {
   return pgId;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isNotionId(val: string): boolean {
+  return UUID_RE.test(val);
+}
+
 function resolveNotionIds(ids: string[]): string[] {
   const resolved: string[] = [];
   for (const nid of ids) {
@@ -120,7 +126,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "years",
       dbFile: "years.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Years") ?? getStr(r, "Year Range") ?? r.notion_id,
@@ -135,7 +141,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "weeks",
       dbFile: "weeks.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Week") ?? r.notion_id,
@@ -162,7 +168,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "financial_accounts",
       dbFile: "financial_accounts.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Account Name") ?? getStr(r, "Name") ?? r.notion_id,
@@ -185,7 +191,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "activity_types",
       dbFile: "activity_types.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Activity Type") ?? getStr(r, "Name") ?? r.notion_id,
@@ -201,20 +207,20 @@ function makeMigrations(): TableMigration[] {
     {
       name: "people",
       dbFile: "people.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
-        name: getStr(r, "Name") ?? r.notion_id,
+        name: getStr(r, "People") ?? getStr(r, "Name") ?? r.notion_id,
         first_name: getStr(r, "First Name"),
         custom_name: getStr(r, "Custom Name"),
         summary: getStr(r, "Summary"),
         strategic_context: getStr(r, "Strategic Context"),
         engagement_blueprint: getStr(r, "Engagement Blueprint"),
-        professional_domain: getStr(r, "Professional Domain"),
+        professional_domain: getStr(r, "Professional Domain & Influence") ?? getStr(r, "Professional Domain"),
         origin_context: getStr(r, "Origin Context"),
         key_personal_intel: getStr(r, "Key Personal Intel"),
         email: getStr(r, "email"),
-        connection_frequency_days: getNum(r, "Connection Frequency"),
+        connection_frequency_days: getNum(r, "In days Connection Frequency") ?? getNum(r, "Connection Frequency"),
         last_connected_date: getTs(r, "Last Connected Date"),
         reconnect_by: getStr(r, "Reconnect By"),
         networking_profile: getStr(r, "Networking Profile"),
@@ -243,7 +249,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "quarters",
       dbFile: "quarters.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Quarters") ?? r.notion_id,
@@ -267,7 +273,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "annual_goals",
       dbFile: "annual_goals.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Annual Theme") ?? r.notion_id,
@@ -295,7 +301,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "months",
       dbFile: "months.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Month") ?? r.notion_id,
@@ -329,7 +335,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "quarterly_goals",
       dbFile: "quarterly_goals.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Quarterly Objective") ?? r.notion_id,
@@ -357,7 +363,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "days",
       dbFile: "days.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Days") ?? r.notion_id,
@@ -380,7 +386,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "projects",
       dbFile: "projects.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Project") ?? r.notion_id,
@@ -428,7 +434,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "tasks",
       dbFile: "tasks.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Tasks") ?? r.notion_id,
@@ -456,7 +462,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "activity_log",
       dbFile: "activity_log.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Name") ?? r.notion_id,
@@ -480,7 +486,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "subjective_journal",
       dbFile: "subjective_journal.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Subjective Journal") ?? r.notion_id,
@@ -498,7 +504,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "relational_journal",
       dbFile: "relational_journal.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Relational Journal") ?? r.notion_id,
@@ -516,7 +522,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "systemic_journal",
       dbFile: "systemic_journal.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Systemic Journal") ?? r.notion_id,
@@ -535,7 +541,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "diet_log",
       dbFile: "diet_log.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Name") ?? r.notion_id,
@@ -562,7 +568,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "directives_risk_log",
       dbFile: "directives_risk_log.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Name") ?? r.notion_id,
@@ -584,7 +590,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "opportunities_strengths",
       dbFile: "opportunities_strengths_log.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Name") ?? r.notion_id,
@@ -604,27 +610,27 @@ function makeMigrations(): TableMigration[] {
     {
       name: "notes_management",
       dbFile: "notes_management.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
-        name: getStr(r, "Notes Management") ?? r.notion_id,
+        name: getStr(r, "Title") ?? getStr(r, "Notes Management") ?? r.notion_id,
         status: getStr(r, "Status") ?? "New Note",
         agent: getStr(r, "Agent"),
-        agent_secondary: getStr(r, "Agent Secondary"),
-        report: getStr(r, "Report"),
-        report_extra: getStr(r, "Report Extra"),
+        agent_secondary: getStr(r, "Agent 1") ?? getStr(r, "Agent Secondary"),
+        report: getStr(r, "Report") ?? getStr(r, "Report 1"),
+        report_extra: getStr(r, "Report 1") ?? getStr(r, "Report Extra"),
         project_id: getArr(r, "Projects")[0] ?? null,
         project_status: getStr(r, "Project Status"),
         knowledge_categories: getArr(r, "Knowledge Categories"),
-        created_time: getTs(r, "created_time"),
-        last_edited_at: getTs(r, "last_edited_time"),
+        created_time: getTs(r, "created_time") ?? getTs(r, "Created time"),
+        last_edited_at: getTs(r, "last_edited_time") ?? getTs(r, "Last edited time"),
       }),
     },
     // TIER 5
     {
       name: "financial_log",
       dbFile: "financial_log.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Name") ?? r.notion_id,
@@ -654,7 +660,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "campaigns",
       dbFile: "campaign_management.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Campaign Name") ?? getStr(r, "Name") ?? r.notion_id,
@@ -686,7 +692,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "content_pipeline",
       dbFile: "content_pipeline.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Content Name") ?? getStr(r, "Name") ?? r.notion_id,
@@ -720,7 +726,7 @@ function makeMigrations(): TableMigration[] {
     {
       name: "reports",
       dbFile: "reports.json",
-      conflictCols: ["id"],
+      conflictCols: ["data_source_id"],
       transform: (r) => ({
         data_source_id: r.notion_id,
         name: getStr(r, "Reports") ?? getStr(r, "Name") ?? r.notion_id,
@@ -733,6 +739,46 @@ function makeMigrations(): TableMigration[] {
       }),
     },
   ];
+}
+
+// ── Unmapped Database Discovery ─────────────────────────────────────────────
+
+async function discoverUnmappedDatabases(
+  dbDir: string,
+  explicitMigrations: TableMigration[],
+  manifest: any
+): Promise<TableMigration[]> {
+  const explicitDbFiles = new Set(explicitMigrations.map((m) => m.dbFile));
+  const explicitNames = new Set(explicitMigrations.map((m) => m.name));
+  const unmapped: TableMigration[] = [];
+
+  for (const db of manifest.databases) {
+    if (explicitNames.has(db.normalized_name)) continue;
+    if (db.row_count === 0) continue;
+
+    const genericFile = db.normalized_name.replace(/[^a-z0-9_]/g, "_") + ".json";
+    const filePath = resolve(dbDir, genericFile);
+
+    try {
+      await readFile(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    unmapped.push({
+      name: "notion_unmapped",
+      dbFile: genericFile,
+      conflictCols: [],
+      transform: (r) => ({
+        data_source_id: db.notion_id,
+        database_name: db.notion_name,
+        notion_id: r.notion_id,
+        payload: r,
+      }),
+    });
+  }
+
+  return unmapped;
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -769,7 +815,7 @@ async function main() {
   try {
     // Build existing data_source_id set for resume mode
     if (RESUME) {
-      const tables = manifest.databases.map((d: any) => d.normalized_name);
+      const tables = [...manifest.databases.map((d: any) => d.normalized_name), "notion_unmapped"];
       for (const tbl of tables) {
         try {
           const res = await client.query(`SELECT data_source_id FROM "${tbl}"`);
@@ -785,10 +831,21 @@ async function main() {
 
     const migrations = makeMigrations();
 
+    // Discover unmapped databases and add generic migrations
+    console.log("\n🔍 Discovering unmapped databases...");
+  const unmappedMigrations = await discoverUnmappedDatabases(dbDir, migrations, manifest);
+  if (unmappedMigrations.length > 0) {
+    const unmappedRows = manifest.databases
+      .filter((d: any) => unmappedMigrations.some((m) => m.dbFile === (d.normalized_name.replace(/[^a-z0-9_]/g, "_") + ".json")))
+      .reduce((s: number, d: any) => s + d.row_count, 0);
+    console.log(`  Found ${unmappedMigrations.length} unmapped databases (${unmappedRows} rows)`);
+  }
+  const allMigrations = [...migrations, ...unmappedMigrations];
+
     // Filter if requested
     const active = FILTERED_DBS.length > 0
-      ? migrations.filter((m) => FILTERED_DBS.includes(m.name))
-      : migrations;
+      ? allMigrations.filter((m) => FILTERED_DBS.includes(m.name))
+      : allMigrations;
 
     // Pre-scan ALL tables to build global notionToPg map for cross-table FK resolution
     console.log("\n🔗 Building global ID map across all tables...");
@@ -858,13 +915,13 @@ async function main() {
           const pgId = notionToPg.get(row.notion_id)!;
           const vals: Record<string, any> = { id: pgId };
           for (const [key, val] of Object.entries(transformed)) {
-            // Resolve single FK reference (notion_id string → PG UUID)
-            if (typeof val === "string" && val.includes("-") && notionToPg.has(val)) {
+            // Resolve single FK reference (notion_id UUID → PG UUID)
+            if (typeof val === "string" && isNotionId(val) && notionToPg.has(val)) {
               vals[key] = notionToPg.get(val);
             }
             // Resolve array of FK references
             else if (Array.isArray(val) && val.length > 0) {
-              if (typeof val[0] === "string" && val[0].includes("-")) {
+              if (typeof val[0] === "string" && isNotionId(val[0])) {
                 vals[key] = resolveNotionIds(val);
               } else if (typeof val[0] === "object" && val[0]?.type === "relation") {
                 const allIds: string[] = [];

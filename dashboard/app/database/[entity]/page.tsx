@@ -237,9 +237,6 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
     }
   }, [config, columnConfig]);
 
-  const items = data?.items || [];
-  const total = data?.total || 0;
-
   const kanbanGroupField = useMemo(() => {
     if (!config) return null;
     return config.filterableFields.find((f) => f === 'status' || f === 'phase') ?? null;

@@ -90,7 +90,7 @@ export function DataTable<TData extends Record<string, unknown>>({
     const unpinned = columnConfig.filter((c) => !c.pinned && c.visible).map((c) => c.id);
     const order = [...pinnedLeft, ...unpinned, ...pinnedRight];
 
-    const colMap = new Map(columns.map((c) => [c.id ?? (c as Record<string, unknown>).accessorKey as string, c]));
+    const colMap = new Map(columns.map((c) => [c.id ?? (c as unknown as Record<string, unknown>).accessorKey as string, c]));
     return order.map((id) => colMap.get(id)).filter(Boolean) as ColumnDef<TData, unknown>[];
   }, [columns, columnConfig]);
 

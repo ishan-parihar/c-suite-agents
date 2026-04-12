@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Server } from "http";
 import type { Memory } from "./memory/lancedb";
 import type { MemoryFacade } from "./memory/index";

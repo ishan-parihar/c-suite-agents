@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, numeric, timestamp, index, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { projects } from './projects';
 import { weeks } from './weeks';
 
@@ -8,12 +8,12 @@ export const tasks = pgTable('tasks', {
   name: text('name').notNull(),
   taskId: text('task_id').unique(),
   status: text('status').notNull().default('Up Next'),
-  parentTaskId: uuid('parent_task_id').references(() => tasks.id),
-  subTaskId: uuid('sub_task_id').references(() => tasks.id),
+  parentTaskId: uuid('parent_task_id').references((): AnyPgColumn => tasks.id),
+  subTaskId: uuid('sub_task_id').references((): AnyPgColumn => tasks.id),
   projectId: uuid('project_id').references(() => projects.id),
   weekId: uuid('week_id').references(() => weeks.id),
   blocks: uuid('blocks').array(),
-  blockedBy: uuid('blocked_by').references(() => tasks.id),
+  blockedBy: uuid('blocked_by').references((): AnyPgColumn => tasks.id),
   priority: text('priority'),
   assignee: text('assignee'),
   tags: text('tags').array(),

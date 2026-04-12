@@ -82,7 +82,7 @@ export async function getCampaignDetail(campaignId: string) {
       summary: c.summary,
       demographics: c.demographics,
       psychographics: c.psychographics,
-      seoKeywords: c.seo_keywords,
+      seoKeywords: c.seo_keywords || [],
       contentWaterfall: c.content_waterfall,
       targetReach: c.target_reach,
       actualReach: c.actual_reach,

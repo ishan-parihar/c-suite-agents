@@ -45,44 +45,5 @@ export async function relayOutbox(): Promise<RelayResult> {
 }
 
 async function publishEvent(event: typeof outboxEvents.$inferSelect): Promise<void> {
-  try {
-    const { getWsGateway } = await import('../../src/transport/ws-server');
-    const gateway = getWsGateway();
-    if (gateway) {
-      gateway.broadcastOutboxEvent(
-        event.eventType,
-        event.entityType,
-        event.entityId,
-        event.payload as Record<string, unknown>,
-      );
-    }
-  } catch {
-    // WS gateway may not be available in dashboard context — skip gracefully
-  }
-
-  if (event.payload && typeof event.payload === 'object' && 'agentId' in event.payload) {
-    const targetAgent = (event.payload as Record<string, unknown>).agentId as string;
-    try {
-      const { getWsGateway } = await import('../../src/transport/ws-server');
-      const gateway = getWsGateway();
-      if (gateway && gateway.isConnected(targetAgent)) {
-        gateway.publish(targetAgent, {
-          message_id: `outbox-${event.id}`,
-          thread_id: `outbox:${event.entityType}`,
-          from: 'system',
-          to: targetAgent,
-          content: JSON.stringify({
-            event: event.eventType,
-            entity: event.entityId,
-            data: event.payload,
-          }),
-          priority: 'P3',
-          requires_response: false,
-          created_at: Date.now(),
-        });
-      }
-    } catch {
-      // Agent may not be connected — skip gracefully
-    }
-  }
+  void event;
 }

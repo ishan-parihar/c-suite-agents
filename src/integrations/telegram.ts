@@ -587,13 +587,13 @@ export async function startTelegram(rt: OperantRuntime) {
     return telegramBot;
   }
 
-  if (!cfg.telegramToken || cfg.telegramToken === "your_bot_token_here") {
-    logger.warn("Telegram not configured - set TELEGRAM_BOT_TOKEN in .env");
+  if (!cfg.telegramToken || cfg.telegramToken === "your_bot_token_here" || cfg.telegramToken === "your-bot-token-from-botfather" || cfg.telegramToken.startsWith("your_") || cfg.telegramToken.startsWith("your-")) {
+    logger.warn("Telegram not configured — set a valid TELEGRAM_BOT_TOKEN");
     return null;
   }
 
-  if (!cfg.telegramChatId || cfg.telegramChatId === "your_chat_id_here") {
-    logger.warn("Telegram chat ID not configured - set TELEGRAM_CHAT_ID in .env");
+  if (!cfg.telegramChatId || cfg.telegramChatId === "your_chat_id_here" || cfg.telegramChatId === "your-chat-id-from-userinfobot" || cfg.telegramChatId.startsWith("your_") || cfg.telegramChatId.startsWith("your-")) {
+    logger.warn("Telegram chat ID not configured — set a valid TELEGRAM_CHAT_ID");
     return null;
   }
 
