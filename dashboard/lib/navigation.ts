@@ -152,8 +152,9 @@ export const navigation: NavSection[] = [
 
   // ── SYSTEM ───────────────────────────────────────────────
   {
-    section: "",
+    section: "System",
     items: [
+      { href: "/doctor", label: "System Doctor", icon: Stethoscope },
       { href: "/settings", label: "Settings", icon: Settings, separator: true },
     ],
   },
