@@ -3,20 +3,9 @@ import { type EntitySlug } from '@/lib/crud/entities';
 import { api } from '@/lib/api-client';
 import { toast } from 'sonner';
 
-interface CreateMutationInput {
-  entity: EntitySlug;
-  data: Record<string, unknown>;
-}
-
 interface UpdateMutationInput {
-  entity: EntitySlug;
   id: string | number;
   data: Record<string, unknown>;
-}
-
-interface DeleteMutationInput {
-  entity: EntitySlug;
-  id: string | number;
 }
 
 export function useCreateEntity(entity: EntitySlug) {

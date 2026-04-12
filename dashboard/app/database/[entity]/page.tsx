@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useMemo, useCallback } from 'react';
+import { use, useMemo, useCallback, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { type ColumnDef } from '@tanstack/react-table';
@@ -8,6 +8,7 @@ import { ArrowLeft, Database, Table2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { DataTable, type DataTableColumnMeta } from '@/components/database/data-table';
+import { RowDetailPanel } from '@/components/database/row-detail-panel';
 import { useTableData, useInvalidateTable } from '@/lib/database/use-table-data';
 import { useUpdateEntity } from '@/lib/database/mutations';
 import { entityRegistry, type EntitySlug } from '@/lib/crud/entities';
@@ -160,6 +161,7 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
 
   const items = data?.items || [];
   const total = data?.total || 0;
+  const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
 
   return (
     <div>
@@ -193,6 +195,15 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
         searchable
         filterable
         onCellEdit={handleCellEdit}
+        onRowClick={setSelectedRow}
+      />
+
+      <RowDetailPanel
+        open={!!selectedRow}
+        onClose={() => setSelectedRow(null)}
+        entity={entity}
+        row={selectedRow}
+        fields={config.listFields}
       />
     </div>
   );
