@@ -7,6 +7,7 @@ const PUBLIC_PATHS = new Set([
   '/api/auth/logout',
   '/favicon.ico',
   '/api/ws',
+  '/api/health',
 ]);
 
 export async function middleware(request: NextRequest) {

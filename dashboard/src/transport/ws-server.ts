@@ -50,6 +50,13 @@ export class WsGateway {
     return Array.from(this.clients.values());
   }
 
+  getLastHeartbeat(agentId: string): Date | undefined {
+    for (const client of this.clients.values()) {
+      if (client.agentId === agentId) return client.lastPong;
+    }
+    return undefined;
+  }
+
   listen(server: import('http').Server): void {
     this.wss = new WebSocketServer({
       server,
