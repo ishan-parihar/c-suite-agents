@@ -12,20 +12,32 @@ import {
 } from '@tanstack/react-table';
 import { useState, useMemo, useCallback } from 'react';
 import { ChevronDown, ChevronUp, ChevronsUpDown, ChevronLeft, ChevronRight, Search, Filter, X } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { TableSkeleton } from './table-skeleton';
 import { PAGINATION_SIZES } from '@/lib/constants';
 import type { EntitySlug } from '@/lib/crud/entities';
-import type { ListResponse } from '@/lib/database/use-table-data';
+import type { CellEditType } from '@/components/database/cell-editors';
+import { CellEditor } from '@/components/database/cell-editors';
+
+function InlineCellEditor(props: React.ComponentProps<typeof CellEditor>) {
+  return <CellEditor {...props} />;
+}
+
+export interface DataTableColumnMeta {
+  field: string;
+  editType?: CellEditType;
+  editOptions?: string[];
+}
 
 export interface DataTableProps<TData> {
   entity: EntitySlug;
-  columns: ColumnDef<TData>[];
+  columns: ColumnDef<TData, unknown>[];
+  columnMeta?: DataTableColumnMeta[];
   data: TData[];
   loading: boolean;
   total: number;
   onRowClick?: (row: TData) => void;
+  onCellEdit?: (rowId: string | number, field: string, value: unknown) => void;
   searchable?: boolean;
   filterable?: boolean;
 }
@@ -33,10 +45,12 @@ export interface DataTableProps<TData> {
 export function DataTable<TData extends Record<string, unknown>>({
   entity,
   columns,
+  columnMeta,
   data,
   loading,
   total,
   onRowClick,
+  onCellEdit,
   searchable = false,
   filterable = false,
 }: DataTableProps<TData>) {
@@ -46,6 +60,14 @@ export function DataTable<TData extends Record<string, unknown>>({
     pageSize: 25,
   });
   const [search, setSearch] = useState('');
+  const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null);
+
+  const metaMap = useMemo(() => {
+    if (!columnMeta) return new Map<string, DataTableColumnMeta>();
+    const m = new Map<string, DataTableColumnMeta>();
+    columnMeta.forEach((meta) => m.set(meta.field, meta));
+    return m;
+  }, [columnMeta]);
 
   const table = useReactTable<TData>({
     data,
@@ -65,16 +87,6 @@ export function DataTable<TData extends Record<string, unknown>>({
     manualSorting: true,
     pageCount: Math.ceil(total / pagination.pageSize),
   });
-
-  const filteredData = useMemo(() => {
-    if (!search) return data;
-    const term = search.toLowerCase();
-    return data.filter((row) =>
-      Object.values(row).some((val) =>
-        typeof val === 'string' && val.toLowerCase().includes(term)
-      )
-    );
-  }, [data, search]);
 
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(e.target.value);
@@ -192,14 +204,43 @@ export function DataTable<TData extends Record<string, unknown>>({
                     } ${onRowClick ? 'hover:bg-hover cursor-pointer' : 'hover:bg-hover'}`}
                     onClick={() => onRowClick?.(row.original)}
                   >
-                    {row.getVisibleCells().map((cell) => (
-                      <td
-                        key={cell.id}
-                        className="px-4 py-2.5 text-text-primary overflow-hidden text-ellipsis whitespace-nowrap"
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    ))}
+                    {row.getVisibleCells().map((cell) => {
+                      const field = (cell.column.columnDef.meta as DataTableColumnMeta)?.field ?? cell.column.id;
+                      const meta = metaMap.get(field);
+                      const isEditing = editingCell?.rowId === row.id && editingCell?.field === field;
+                      const isEditable = !!onCellEdit && !!meta?.editType;
+
+                      if (isEditing && isEditable) {
+                        return (
+                          <td key={cell.id} className="px-1 py-1">
+                            <InlineCellEditor
+                              value={cell.getValue()}
+                              type={meta!.editType!}
+                              options={meta?.editOptions}
+                              onSave={(val) => {
+                                const raw = (row.original as Record<string, unknown>).id;
+                                const rowId = typeof raw === 'string' || typeof raw === 'number' ? raw : row.id;
+                                onCellEdit?.(rowId, field, val);
+                                setEditingCell(null);
+                              }}
+                              onCancel={() => setEditingCell(null)}
+                            />
+                          </td>
+                        );
+                      }
+
+                      return (
+                        <td
+                          key={cell.id}
+                          className={`px-4 py-2.5 text-text-primary overflow-hidden text-ellipsis whitespace-nowrap ${
+                            isEditable ? 'cursor-text hover:bg-hover/50 rounded px-2' : ''
+                          }`}
+                          onDoubleClick={() => isEditable && setEditingCell({ rowId: row.id, field })}
+                        >
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))
               )}

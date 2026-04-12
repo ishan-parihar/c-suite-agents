@@ -1,16 +1,18 @@
 'use client';
 
-import { use, useMemo } from 'react';
+import { use, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { type ColumnDef } from '@tanstack/react-table';
 import { ArrowLeft, Database, Table2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { DataTable } from '@/components/database/data-table';
-import { useTableData } from '@/lib/database/use-table-data';
+import { DataTable, type DataTableColumnMeta } from '@/components/database/data-table';
+import { useTableData, useInvalidateTable } from '@/lib/database/use-table-data';
+import { useUpdateEntity } from '@/lib/database/mutations';
 import { entityRegistry, type EntitySlug } from '@/lib/crud/entities';
 import { STATUS_MAP, type StatusKey } from '@/lib/constants';
+import { resolveCellType, resolveCellOptions } from '@/components/database/cell-editors';
 
 function humanize(slug: string) {
   return slug
@@ -106,6 +108,15 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
   const order = (searchParams.get('order') as 'asc' | 'desc') || 'desc';
 
   const { data, isLoading } = useTableData(entity, { page, limit, sort, order });
+  const invalidate = useInvalidateTable(entity);
+  const updateEntity = useUpdateEntity(entity);
+
+  const handleCellEdit = useCallback((rowId: string | number, field: string, value: unknown) => {
+    updateEntity.mutate(
+      { id: rowId, data: { [field]: value } },
+      { onSuccess: () => invalidate() }
+    );
+  }, [updateEntity, invalidate]);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>>[]>(() => {
     if (!config) return [];
@@ -115,6 +126,15 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
       header: humanize(field),
       cell: ({ getValue }) => renderCell(getValue(), field),
       sortDescFirst: isDateField(field) || field === 'priority',
+    }));
+  }, [config]);
+
+  const columnMeta = useMemo<DataTableColumnMeta[]>(() => {
+    if (!config) return [];
+    return config.listFields.map((field) => ({
+      field,
+      editType: resolveCellType(field),
+      editOptions: resolveCellOptions(field),
     }));
   }, [config]);
 
@@ -166,11 +186,13 @@ export default function EntityTablePage(props: { params: Promise<{ entity: strin
       <DataTable
         entity={entity}
         columns={columns}
+        columnMeta={columnMeta}
         data={items}
         loading={isLoading}
         total={total}
         searchable
         filterable
+        onCellEdit={handleCellEdit}
       />
     </div>
   );
