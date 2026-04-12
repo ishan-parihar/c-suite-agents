@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/sidebar";
 import { MobileSidebar } from "@/components/sidebar-mobile";
 import { TopBar } from "@/components/topbar";
 import { Toaster } from "@/components/ui/toaster";
+import { CommandPalette } from "@/components/command-palette";
 import { QueryProvider } from "@/components/providers/query-provider";
 
 const instrumentSans = Instrument_Sans({
@@ -59,6 +60,7 @@ export default function RootLayout({
             {children}
           </div>
         </main>
+        <CommandPalette />
         <Toaster />
         </QueryProvider>
       </body>
