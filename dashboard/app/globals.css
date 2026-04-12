@@ -70,7 +70,7 @@
 @media (prefers-color-scheme: light) {
   :root {
     --bg-primary: oklch(0.97 0.005 85);
-    --bg-surface: oklch(1.0 0 0);
+    --bg-surface: oklch(1.0 0.001 85);
     --bg-elevated: oklch(0.95 0.005 85);
     --bg-hover: oklch(0.92 0.008 85);
     --border-default: oklch(0.88 0.008 85);
@@ -138,12 +138,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: oklch(0.72 0.008 85);
+  background: var(--text-secondary);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.52 0.008 85);
+  background: var(--text-muted);
 }
 
 /* Selection */
