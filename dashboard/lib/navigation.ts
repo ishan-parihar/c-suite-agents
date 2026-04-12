@@ -24,6 +24,19 @@ import {
   FileBarChart,
   Settings,
   Target,
+  Crown,
+  Cog,
+  Brain,
+  Handshake,
+  Wallet,
+  Sparkles,
+  Telescope,
+  Stethoscope,
+  Gavel,
+  MessageSquare,
+  Clock,
+  BarChart2,
+  Database,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 
@@ -39,12 +52,62 @@ export interface NavSection {
   items: NavItem[];
 }
 
+// Three-pillar navigation: Mission Control, Agent's Office, Database Management
 export const navigation: NavSection[] = [
+  // ── MISSION CONTROL ──────────────────────────────────────
   {
-    section: "Overview",
+    section: "Mission Control",
     items: [
-      { href: "/", label: "Daily Briefing", icon: LayoutDashboard },
-      { href: "/monitor", label: "Project Monitor", icon: Activity },
+      { href: "/", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/monitor", label: "System Monitor", icon: Activity },
+    ],
+  },
+
+  // ── AGENT'S OFFICE ───────────────────────────────────────
+  {
+    section: "CEO",
+    items: [
+      { href: "/agents/ceo", label: "CEO Office", icon: Crown },
+    ],
+  },
+  {
+    section: "Operations Team",
+    items: [
+      { href: "/agents/coo", label: "COO — Productivity", icon: Cog },
+      { href: "/agents/cpo", label: "CPO — Psychology", icon: Brain },
+      { href: "/agents/cro", label: "CRO — Relations", icon: Handshake },
+      { href: "/agents/cfo", label: "CFO — Finance", icon: Wallet },
+      { href: "/agents/cmo", label: "CMO — Content", icon: Sparkles },
+      { href: "/agents/cio", label: "CIO — Intelligence", icon: Telescope },
+      { href: "/agents/physician", label: "Physician — Health", icon: Stethoscope },
+    ],
+  },
+  {
+    section: "Agent Operations",
+    items: [
+      { href: "/meetings", label: "Board Meetings", icon: Gavel },
+      { href: "/messages", label: "Messages", icon: MessageSquare },
+      { href: "/sessions", label: "Agent Sessions", icon: Cpu },
+      { href: "/ops-reports", label: "Reports", icon: BarChart2 },
+    ],
+  },
+
+  // ── DATABASE MANAGEMENT ──────────────────────────────────
+  {
+    section: "Strategic",
+    items: [
+      { href: "/goals", label: "Goals", icon: Target },
+      { href: "/projects", label: "Projects", icon: FolderKanban },
+      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
+    ],
+  },
+  {
+    section: "Productivity",
+    items: [
+      { href: "/tasks", label: "Tasks", icon: CheckSquare },
+      { href: "/people", label: "People", icon: Users },
+      { href: "/kanban", label: "Kanban Board", icon: Columns },
+      { href: "/calendar", label: "Calendar", icon: Calendar },
     ],
   },
   {
@@ -58,32 +121,7 @@ export const navigation: NavSection[] = [
     ],
   },
   {
-    section: "Operations",
-    items: [
-      { href: "/projects", label: "Projects", icon: FolderKanban },
-      { href: "/tasks", label: "Tasks", icon: CheckSquare },
-      { href: "/people", label: "People", icon: Users },
-      { href: "/kanban", label: "Kanban Board", icon: Columns },
-    ],
-  },
-  {
-    section: "Financial",
-    items: [
-      { href: "/financial", label: "Dashboard", icon: BarChart3 },
-      { href: "/financial/transactions", label: "Transactions", icon: Receipt },
-      { href: "/financial/accounts", label: "Accounts", icon: Landmark },
-    ],
-  },
-  {
-    section: "Marketing",
-    items: [
-      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
-      { href: "/content", label: "Content Pipeline", icon: FileText },
-      { href: "/calendar", label: "Calendar", icon: Calendar },
-    ],
-  },
-  {
-    section: "Journals",
+    section: "Journaling",
     items: [
       { href: "/journals/subjective", label: "Subjective", icon: Pen },
       { href: "/journals/relational", label: "Relational", icon: UsersRound },
@@ -98,20 +136,21 @@ export const navigation: NavSection[] = [
     ],
   },
   {
-    section: "Goals",
+    section: "Financial",
     items: [
-      { href: "/goals", label: "Goals Dashboard", icon: Target },
+      { href: "/financial", label: "Dashboard", icon: BarChart3 },
+      { href: "/financial/transactions", label: "Transactions", icon: Receipt },
+      { href: "/financial/accounts", label: "Accounts", icon: Landmark },
     ],
   },
   {
-    section: "Ops",
+    section: "Marketing",
     items: [
-      { href: "/meetings", label: "Board Meetings", icon: Users },
-      { href: "/messages", label: "Messages", icon: Mail },
-      { href: "/sessions", label: "Agent Sessions", icon: Cpu },
-      { href: "/ops-reports", label: "Reports", icon: FileBarChart },
+      { href: "/content", label: "Content Pipeline", icon: FileText },
     ],
   },
+
+  // ── SYSTEM ───────────────────────────────────────────────
   {
     section: "",
     items: [
