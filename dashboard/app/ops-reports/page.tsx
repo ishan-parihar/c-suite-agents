@@ -1,24 +1,19 @@
+'use client';
+
 import { Clock, CheckCircle, AlertCircle, Timer, Calendar } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 export const dynamic = 'force-dynamic';
 
-interface Job {
+interface OpsReport {
   id: string;
-  name: string;
-  cron: string;
-  lastRun: string;
-  lastStatus: 'success' | 'failed' | 'running';
-  nextRun: string;
-  avgDuration: string;
+  agent_id: string;
+  period: string | null;
+  summary: string | null;
+  metrics: Record<string, unknown> | null;
+  actions: Record<string, unknown> | null;
+  created_at: string;
 }
-
-const JOBS: Job[] = [
-  { id: 'j1', name: 'Daily Digest', cron: '0 8 * * *', lastRun: '2026-04-12 08:00', lastStatus: 'success', nextRun: '2026-04-13 08:00', avgDuration: '2m 14s' },
-  { id: 'j2', name: 'Weekly Report', cron: '0 9 * * 1', lastRun: '2026-04-07 09:00', lastStatus: 'success', nextRun: '2026-04-14 09:00', avgDuration: '5m 32s' },
-  { id: 'j3', name: 'Health Check', cron: '*/5 * * * *', lastRun: '2026-04-12 14:35', lastStatus: 'running', nextRun: '2026-04-12 14:40', avgDuration: '8s' },
-  { id: 'j4', name: 'Data Sync', cron: '0 */6 * * *', lastRun: '2026-04-12 12:00', lastStatus: 'failed', nextRun: '2026-04-12 18:00', avgDuration: '1m 45s' },
-  { id: 'j5', name: 'Cache Cleanup', cron: '0 2 * * *', lastRun: '2026-04-12 02:00', lastStatus: 'success', nextRun: '2026-04-13 02:00', avgDuration: '30s' },
-];
 
 const statusConfig = {
   success: { icon: CheckCircle, color: 'text-green-500', bg: 'bg-green-50 dark:bg-green-950' },
@@ -27,6 +22,31 @@ const statusConfig = {
 };
 
 export default function OpsReportsPage() {
+  const [reports, setReports] = useState<OpsReport[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/crud/ops-reports?limit=50&sort=created_at&order=desc')
+      .then(r => r.json())
+      .then(data => {
+        setReports(data.data?.items || []);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to load ops reports:', err);
+        setLoading(false);
+      });
+  }, []);
+
+  const statusCounts = reports.reduce(
+    (acc, r) => {
+      const status = r.metrics?.status as string | undefined || 'success';
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+
   return (
     <div>
       <div className="mb-8">
@@ -41,7 +61,7 @@ export default function OpsReportsPage() {
           <div className="flex items-center gap-3">
             <Calendar className="w-5 h-5 text-blue-500" />
             <div>
-              <p className="text-2xl font-semibold">{JOBS.length}</p>
+              <p className="text-2xl font-semibold">{loading ? '...' : reports.length}</p>
               <p className="text-xs text-zinc-500">Total Jobs</p>
             </div>
           </div>
@@ -50,7 +70,7 @@ export default function OpsReportsPage() {
           <div className="flex items-center gap-3">
             <CheckCircle className="w-5 h-5 text-green-500" />
             <div>
-              <p className="text-2xl font-semibold">{JOBS.filter((j) => j.lastStatus === 'success').length}</p>
+              <p className="text-2xl font-semibold">{loading ? '...' : (statusCounts.success || 0)}</p>
               <p className="text-xs text-zinc-500">Healthy</p>
             </div>
           </div>
@@ -59,7 +79,7 @@ export default function OpsReportsPage() {
           <div className="flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-red-500" />
             <div>
-              <p className="text-2xl font-semibold">{JOBS.filter((j) => j.lastStatus === 'failed').length}</p>
+              <p className="text-2xl font-semibold">{loading ? '...' : (statusCounts.failed || 0)}</p>
               <p className="text-xs text-zinc-500">Failed</p>
             </div>
           </div>
@@ -84,24 +104,39 @@ export default function OpsReportsPage() {
             </tr>
           </thead>
           <tbody>
-            {JOBS.map((job) => {
-              const { icon: StatusIcon, color, bg } = statusConfig[job.lastStatus];
-              return (
-                <tr key={job.id} className="border-b border-card-border last:border-b-0">
-                  <td className="px-5 py-3 font-medium">{job.name}</td>
-                  <td className="px-5 py-3 font-mono text-xs">{job.cron}</td>
-                  <td className="px-5 py-3">
-                    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${color} ${bg}`}>
-                      <StatusIcon className="w-3 h-3" />
-                      {job.lastStatus}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-zinc-500 text-xs">{job.lastRun}</td>
-                  <td className="px-5 py-3 text-zinc-500 text-xs">{job.nextRun}</td>
-                  <td className="px-5 py-3 text-xs font-mono">{job.avgDuration}</td>
-                </tr>
-              );
-            })}
+            {loading ? (
+              <tr>
+                <td colSpan={6} className="px-5 py-8 text-center text-zinc-500">
+                  Loading reports...
+                </td>
+              </tr>
+            ) : reports.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-5 py-8 text-center text-zinc-500">
+                  No reports found
+                </td>
+              </tr>
+            ) : (
+              reports.map((report) => {
+                const status = (report.metrics?.status as string) || 'success';
+                const { icon: StatusIcon, color, bg } = statusConfig[status as keyof typeof statusConfig] || statusConfig.success;
+                return (
+                  <tr key={report.id} className="border-b border-card-border last:border-b-0">
+                    <td className="px-5 py-3 font-medium">{report.agent_id}</td>
+                    <td className="px-5 py-3 font-mono text-xs">{report.period || '—'}</td>
+                    <td className="px-5 py-3">
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${color} ${bg}`}>
+                        <StatusIcon className="w-3 h-3" />
+                        {status}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-zinc-500 text-xs">{new Date(report.created_at).toLocaleString()}</td>
+                    <td className="px-5 py-3 text-zinc-500 text-xs">—</td>
+                    <td className="px-5 py-3 text-xs font-mono">{report.summary || '—'}</td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>

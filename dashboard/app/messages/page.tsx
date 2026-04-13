@@ -1,15 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Send, MessageSquare, Users, Hash } from 'lucide-react';
-import { useWebSocket } from '@/lib/ws-client';
-
-const AGENTS = ['ceo', 'coo', 'cpo', 'cro', 'cfo', 'cmo', 'cio', 'physician'];
+import { useWebSocket, getWsUrl } from '@/lib/ws-client';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 interface Thread {
   id: string;
   agentId: string;
-  lastMessage: string;
+  subject: string | null;
+  summary: string | null;
+  status: string | null;
   unread: number;
 }
 
@@ -22,37 +23,138 @@ interface ChatMessage {
   isSelf: boolean;
 }
 
+interface CrudThreadRaw {
+  id: string;
+  subject: string | null;
+  status: string | null;
+  summary: string | null;
+  participants: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface CrudMessageRaw {
+  id: string;
+  thread_id: string;
+  from_agent: string;
+  to_agent: string;
+  content: string;
+  priority: string | null;
+  read: boolean | null;
+  created_at: string;
+}
+
+interface CrudListResponse<T> {
+  success: boolean;
+  data: {
+    items: T[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  };
+}
+
+function mapThread(raw: CrudThreadRaw): Thread {
+  const otherAgents = (raw.participants ?? []).filter((p: string) => p !== 'dashboard');
+  return {
+    id: raw.id,
+    agentId: otherAgents[0] ?? 'unknown',
+    subject: raw.subject,
+    summary: raw.summary,
+    status: raw.status,
+    unread: 0,
+  };
+}
+
+function mapMessage(raw: CrudMessageRaw): ChatMessage {
+  return {
+    id: raw.id,
+    threadId: raw.thread_id,
+    agentId: raw.from_agent,
+    content: raw.content,
+    timestamp: new Date(raw.created_at),
+    isSelf: raw.from_agent === 'dashboard',
+  };
+}
+
 export default function MessagesPage() {
   const [selectedThread, setSelectedThread] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
-  const [threads] = useState<Thread[]>([
-    { id: 't1', agentId: 'ceo', lastMessage: 'Review the Q2 plan', unread: 2 },
-    { id: 't2', agentId: 'coo', lastMessage: 'Tasks completed on schedule', unread: 0 },
-    { id: 't3', agentId: 'cmo', lastMessage: 'Content pipeline updated', unread: 1 },
-  ]);
-  const [messages] = useState<ChatMessage[]>([
-    { id: 'm1', threadId: 't1', agentId: 'ceo', content: 'Can you review the Q2 strategic plan?', timestamp: new Date(Date.now() - 3600000), isSelf: false },
-    { id: 'm2', threadId: 't1', agentId: 'dashboard', content: 'On it — reviewing now.', timestamp: new Date(Date.now() - 3500000), isSelf: true },
-    { id: 'm3', threadId: 't1', agentId: 'ceo', content: 'Thanks, focus on the growth metrics.', timestamp: new Date(Date.now() - 1800000), isSelf: false },
-    { id: 'm4', threadId: 't1', agentId: 'ceo', content: 'Let me know by EOD.', timestamp: new Date(Date.now() - 900000), isSelf: false },
-  ]);
+  const queryClient = useQueryClient();
 
-  const { isConnected, isAuthed, send, subscribe } = useWebSocket({
-    url: `ws://${typeof window !== 'undefined' ? window.location.host : 'localhost:3000'}/api/ws`,
-    queryKeys: [['messages']],
+  const { data: threads, isLoading: threadsLoading } = useQuery<CrudListResponse<CrudThreadRaw>>({
+    queryKey: ['threads'],
+    queryFn: async () => {
+      const res = await fetch('/api/crud/message-threads?sort=updated_at&order=desc&limit=100');
+      if (!res.ok) throw new Error('Failed to fetch threads');
+      return res.json();
+    },
+  });
+
+  const mappedThreads = useMemo(() => {
+    if (!threads?.data?.items) return [];
+    return threads.data.items.map(mapThread);
+  }, [threads]);
+
+  const { data: messagesData, isLoading: messagesLoading } = useQuery<CrudListResponse<CrudMessageRaw>>({
+    queryKey: ['messages', selectedThread],
+    queryFn: async () => {
+      const res = await fetch(`/api/crud/messages?thread_id=${selectedThread}&sort=created_at&order=asc&limit=200`);
+      if (!res.ok) throw new Error('Failed to fetch messages');
+      return res.json();
+    },
+    enabled: !!selectedThread,
+  });
+
+  const mappedMessages = useMemo(() => {
+    if (!messagesData?.data?.items) return [];
+    return messagesData.data.items.map(mapMessage);
+  }, [messagesData]);
+
+  const { isConnected, isAuthed } = useWebSocket({
+    url: getWsUrl('/api/ws'),
+    queryKeys: [['threads'], ['messages']],
     enabled: true,
   });
 
-  const handleSend = () => {
+  const sendMessageMutation = useMutation({
+    mutationFn: async ({ threadId, content }: { threadId: string; content: string }) => {
+      const thread = mappedThreads.find((t) => t.id === threadId);
+      const res = await fetch('/api/crud/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-agent-id': 'dashboard',
+        },
+        body: JSON.stringify({
+          thread_id: threadId,
+          from_agent: 'dashboard',
+          to_agent: thread?.agentId ?? '',
+          content,
+          priority: 'P3',
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Failed to send message');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['messages', selectedThread] });
+      queryClient.invalidateQueries({ queryKey: ['threads'] });
+    },
+  });
+
+  const handleSend = async () => {
     if (!messageInput.trim() || !selectedThread) return;
 
-    send({
-      type: 'chat_message',
-      payload: {
-        threadId: selectedThread,
-        content: messageInput.trim(),
-        mentions: [],
-      },
+    await sendMessageMutation.mutateAsync({
+      threadId: selectedThread,
+      content: messageInput.trim(),
     });
 
     setMessageInput('');
@@ -65,10 +167,6 @@ export default function MessagesPage() {
     }
   };
 
-  const filteredMessages = selectedThread
-    ? messages.filter((m) => m.threadId === selectedThread)
-    : [];
-
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
       <div className="w-72 bg-card-bg border border-card-border rounded-xl flex flex-col">
@@ -80,26 +178,39 @@ export default function MessagesPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {threads.map((thread) => (
-            <button
-              key={thread.id}
-              onClick={() => setSelectedThread(thread.id)}
-              className={`w-full text-left px-4 py-3 border-b border-card-border last:border-b-0 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors ${
-                selectedThread === thread.id ? 'bg-zinc-100 dark:bg-zinc-800' : ''
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <Hash className="w-3 h-3 text-zinc-400" />
-                <span className="text-sm font-medium truncate">{thread.agentId.toUpperCase()}</span>
-                {thread.unread > 0 && (
-                  <span className="ml-auto bg-blue-500 text-white text-xs px-1.5 py-0.5 rounded-full">
-                    {thread.unread}
+          {threadsLoading ? (
+            <div className="px-4 py-3 space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="animate-pulse">
+                  <div className="h-4 bg-zinc-200 dark:bg-zinc-700 rounded w-3/4 mb-1" />
+                  <div className="h-3 bg-zinc-100 dark:bg-zinc-800 rounded w-1/2" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            mappedThreads.map((thread) => (
+              <button
+                key={thread.id}
+                onClick={() => setSelectedThread(thread.id)}
+                className={`w-full text-left px-4 py-3 border-b border-card-border last:border-b-0 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors ${
+                  selectedThread === thread.id ? 'bg-zinc-100 dark:bg-zinc-800' : ''
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Hash className="w-3 h-3 text-zinc-400" />
+                  <span className="text-sm font-medium truncate">
+                    {thread.subject ?? thread.agentId.toUpperCase()}
                   </span>
+                </div>
+                {thread.summary && (
+                  <p className="text-xs text-zinc-500 mt-1 truncate">{thread.summary}</p>
                 )}
-              </div>
-              <p className="text-xs text-zinc-500 mt-1 truncate">{thread.lastMessage}</p>
-            </button>
-          ))}
+              </button>
+            ))
+          )}
+          {!threadsLoading && mappedThreads.length === 0 && (
+            <div className="px-4 py-6 text-center text-sm text-zinc-500">No threads yet</div>
+          )}
         </div>
 
         <div className="px-4 py-2 border-t border-card-border">
@@ -122,30 +233,42 @@ export default function MessagesPage() {
             <div className="px-5 py-3 border-b border-card-border flex items-center gap-2">
               <Users className="w-4 h-4" />
               <span className="text-sm font-medium">
-                {threads.find((t) => t.id === selectedThread)?.agentId.toUpperCase()}
+                {mappedThreads.find((t) => t.id === selectedThread)?.agentId.toUpperCase()}
               </span>
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-              {filteredMessages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.isSelf ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[70%] rounded-2xl px-4 py-2 ${
-                      msg.isSelf
-                        ? 'bg-blue-500 text-white rounded-br-sm'
-                        : 'bg-zinc-100 dark:bg-zinc-800 rounded-bl-sm'
-                    }`}
-                  >
-                    <p className="text-sm">{msg.content}</p>
-                    <p className={`text-xs mt-1 ${msg.isSelf ? 'text-blue-100' : 'text-zinc-400'}`}>
-                      {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </p>
-                  </div>
+              {messagesLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className={`flex ${i % 2 === 0 ? 'justify-end' : 'justify-start'}`}>
+                      <div className="animate-pulse max-w-[70%] rounded-2xl px-4 py-2 bg-zinc-100 dark:bg-zinc-800">
+                        <div className="h-4 bg-zinc-200 dark:bg-zinc-700 rounded w-32" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                mappedMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`flex ${msg.isSelf ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[70%] rounded-2xl px-4 py-2 ${
+                        msg.isSelf
+                          ? 'bg-blue-500 text-white rounded-br-sm'
+                          : 'bg-zinc-100 dark:bg-zinc-800 rounded-bl-sm'
+                      }`}
+                    >
+                      <p className="text-sm">{msg.content}</p>
+                      <p className={`text-xs mt-1 ${msg.isSelf ? 'text-blue-100' : 'text-zinc-400'}`}>
+                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="px-4 py-3 border-t border-card-border">
@@ -160,7 +283,7 @@ export default function MessagesPage() {
                 />
                 <button
                   onClick={handleSend}
-                  disabled={!messageInput.trim()}
+                  disabled={!messageInput.trim() || sendMessageMutation.isPending}
                   className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   <Send className="w-4 h-4" />

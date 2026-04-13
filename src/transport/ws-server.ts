@@ -21,6 +21,7 @@ const WS_PATH = "/ws";
 export class WsGateway extends EventEmitter {
   private wss: WebSocketServer | null = null;
   private sessions: Map<string, WsSession> = new Map();
+  private observers: Set<WsSession> = new Set();
   private wsAlive: Map<WebSocket, boolean> = new Map();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private messageBus = getMessageBus();
@@ -65,6 +66,9 @@ export class WsGateway extends EventEmitter {
       if (session) {
         logger.info({ agentId: session.agentId, code, reason: reason.toString() }, "WS connection closed");
         this.unregisterSession(session);
+      } else {
+        // Clean up wsAlive for unauthenticated connections
+        this.wsAlive.delete(ws);
       }
     });
 
@@ -76,6 +80,17 @@ export class WsGateway extends EventEmitter {
     const url = new URL((_req.url || "/"), `http://${_req.headers.host}`);
     const agentId = url.searchParams.get("agentId");
     const token = url.searchParams.get("token");
+
+    // Observer mode: dashboard connects without token, authenticates via auth frame
+    if (agentId === "dashboard") {
+      const timeout = setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1008, "Observer auth timeout");
+        }
+      }, 5_000);
+      timeout.unref();
+      return;
+    }
 
     if (agentId && token) {
       this.authenticate(ws, agentId, token, undefined);
@@ -139,6 +154,28 @@ export class WsGateway extends EventEmitter {
   }
 
   private async authenticate(ws: WebSocket, agentId: string, token: string, lastSeq?: number): Promise<void> {
+    if (agentId === "dashboard") {
+      const sessionId = uuidv4();
+      const session: WsSession = {
+        agentId,
+        ws,
+        seq: 0,
+        lastActivity: Date.now(),
+        sessionId,
+        authenticated: true,
+        pongReceived: true,
+        consecutiveMissedPongs: 0,
+        lastSeq,
+      };
+
+      this.sessions.set(sessionId, session);
+      this.registerObserver(session);
+
+      ws.send(serializeFrame({ type: "auth_ok", session_id: sessionId }));
+      logger.info({ agentId, sessionId, sessionType: "observer" }, "WS observer authenticated");
+      return;
+    }
+
     try {
       await validateAgentIdentity(agentId);
     } catch {
@@ -178,7 +215,23 @@ export class WsGateway extends EventEmitter {
   private unregisterSession(session: WsSession): void {
     this.sessions.delete(session.sessionId);
     this.wsAlive.delete(session.ws);
-    this.messageBus.unregisterSession(session.agentId);
+    if (this.observers.has(session)) {
+      this.unregisterObserver(session);
+    } else {
+      this.messageBus.unregisterSession(session.agentId);
+    }
+  }
+
+  private registerObserver(session: WsSession): void {
+    this.observers.add(session);
+    this.messageBus.syncObservers(this.observers);
+    logger.info({ sessionId: session.sessionId }, "Observer registered");
+  }
+
+  private unregisterObserver(session: WsSession): void {
+    this.observers.delete(session);
+    this.messageBus.syncObservers(this.observers);
+    logger.info({ sessionId: session.sessionId }, "Observer unregistered");
   }
 
   private tick(): void {
@@ -277,6 +330,10 @@ export class WsGateway extends EventEmitter {
     return this.sessions.size;
   }
 
+  getObservers(): ReadonlySet<WsSession> {
+    return this.observers;
+  }
+
   getHealth(): { connections: number; sessions: Array<{ agentId: string; sessionId: string; lastActivity: number }> } {
     return {
       connections: this.sessions.size,
@@ -300,6 +357,7 @@ export class WsGateway extends EventEmitter {
       } catch { /* ignore */ }
     }
     this.sessions.clear();
+    this.observers.clear();
 
     for (const resolver of this.toolCallResolvers.values()) {
       clearTimeout(resolver.timer);

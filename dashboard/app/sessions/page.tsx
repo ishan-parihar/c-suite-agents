@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Cpu, Play, Square, Clock, Activity, Zap, Database } from 'lucide-react';
-import { useWebSocket } from '@/lib/ws-client';
+import { useWebSocket, getWsUrl } from '@/lib/ws-client';
 
 const AGENTS = ['ceo', 'coo', 'cpo', 'cro', 'cfo', 'cmo', 'cio', 'physician'];
 
@@ -14,18 +14,49 @@ interface Session {
   lastActivity: Date;
   toolCalls: number;
   tokensUsed: number;
+  model: string;
+  contextLength: number;
 }
 
 export default function SessionsPage() {
-  const [sessions] = useState<Session[]>([
-    { id: 's1', agentId: 'ceo', status: 'running', startedAt: new Date(Date.now() - 7200000), lastActivity: new Date(Date.now() - 30000), toolCalls: 42, tokensUsed: 15420 },
-    { id: 's2', agentId: 'coo', status: 'idle', startedAt: new Date(Date.now() - 3600000), lastActivity: new Date(Date.now() - 600000), toolCalls: 18, tokensUsed: 8900 },
-    { id: 's3', agentId: 'cmo', status: 'waiting', startedAt: new Date(Date.now() - 1800000), lastActivity: new Date(Date.now() - 120000), toolCalls: 5, tokensUsed: 2100 },
-    { id: 's4', agentId: 'cfo', status: 'running', startedAt: new Date(Date.now() - 5400000), lastActivity: new Date(Date.now() - 10000), toolCalls: 67, tokensUsed: 23500 },
-  ]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSessions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sessions');
+      if (!res.ok) {
+        throw new Error(`API returned ${res.status}`);
+      }
+      const data = await res.json();
+      setSessions(data.map((s: any) => ({
+        id: s.id,
+        agentId: s.agentId,
+        status: s.status,
+        startedAt: new Date(s.startedAt),
+        lastActivity: new Date(s.lastActivity),
+        toolCalls: s.toolCalls,
+        tokensUsed: s.tokensUsed,
+        model: s.model,
+        contextLength: s.contextLength,
+      })));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load session data');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSessions();
+    const interval = setInterval(fetchSessions, 5000);
+    return () => clearInterval(interval);
+  }, [fetchSessions]);
 
   const { isConnected, subscribe } = useWebSocket({
-    url: `ws://${typeof window !== 'undefined' ? window.location.host : 'localhost:3000'}/api/ws`,
+    url: getWsUrl('/api/ws'),
     queryKeys: [['sessions']],
     enabled: true,
   });
@@ -58,6 +89,16 @@ export default function SessionsPage() {
         </div>
       </div>
 
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <p className="text-text-secondary">Loading sessions...</p>
+        </div>
+      ) : error ? (
+        <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-xl px-5 py-4 mb-8">
+          <p className="text-red-600 dark:text-red-400 text-sm">Unable to load session data: {error}</p>
+        </div>
+      ) : (
+        <>
       <div className="grid gap-4 md:grid-cols-4 mb-8">
         <div className="bg-card-bg border border-card-border rounded-xl px-5 py-4">
           <div className="flex items-center gap-3">
@@ -135,6 +176,8 @@ export default function SessionsPage() {
           </tbody>
         </table>
       </div>
+      </>
+      )}
     </div>
   );
 }

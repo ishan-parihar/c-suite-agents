@@ -1,6 +1,6 @@
 import { useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { useWebSocket } from './ws-client';
+import { useWebSocket, getWsUrl } from './ws-client';
 import type { WsEventPayload, WsNotificationPayload } from '@/src/transport/ws-types';
 
 const toastTypeMap: Record<string, typeof toast.info> = {
@@ -25,7 +25,7 @@ export function useNotifications() {
   }, []);
 
   const { isConnected, subscribe } = useWebSocket({
-    url: `ws://${typeof window !== 'undefined' ? window.location.host : 'localhost:3000'}/api/ws`,
+    url: getWsUrl('/api/ws'),
     queryKeys: [['notifications']],
     onEvent: (event: WsEventPayload) => {
       toast.info(`Event: ${event.eventType}`, {
