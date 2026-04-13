@@ -157,7 +157,7 @@ describe("getAgentToolScope", () => {
 
     test("physician-health returns minimal scope (advisory role)", () => {
       const scope = getAgentToolScope("physician-health");
-      expect(scope.length).toBeLessThan(40);
+      expect(scope.length).toBeLessThan(50);
       expect(scope).not.toContain("board.viewReports");
     });
 

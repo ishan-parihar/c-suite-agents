@@ -366,8 +366,27 @@ async function main() {
       "cron.status", "cron.list", "cron.create", "cron.pause", "cron.resume", "cron.delete", "cron.run",
       // Media
       "image.analyze", "image.generate", "tts.synthesize",
+<<<<<<< Updated upstream
       // Database (PostgreSQL with domain scoping)
       "db.listTables", "db.schema", "db.query", "db.insert", "db.update", "db.delete",
+=======
+      // LifeOS (45 PostgreSQL-native tools)
+      "lifeos_discover", "lifeos_query", "lifeos_query_db_schema", "lifeos_context_card",
+      "lifeos_tasks", "lifeos_projects", "lifeos_quarterly_goals", "lifeos_annual_goals",
+      "lifeos_directives_risks", "lifeos_opportunities_strengths",
+      "lifeos_subjective_journal", "lifeos_relational_journal", "lifeos_systemic_journal",
+      "lifeos_financial_log", "lifeos_diet_log",
+      "lifeos_content", "lifeos_campaigns", "lifeos_people_ops", "lifeos_finance_ops",
+      "lifeos_alignment", "lifeos_project_health", "lifeos_okrs_progress",
+      "lifeos_journal_synthesis", "lifeos_financial_accounts", "lifeos_productivity_report",
+      "lifeos_daily_briefing", "lifeos_temporal_analysis", "lifeos_trajectory",
+      "lifeos_weekday_patterns", "lifeos_health_vitality", "lifeos_financial_productivity",
+      "lifeos_weekly_review", "lifeos_monthly_synthesis", "lifeos_quarterly_retrospective",
+      "lifeos_correlate", "lifeos_planning_ops",
+      "lifeos_create_entry", "lifeos_update_entry", "lifeos_delete_entry", "lifeos_find_entry",
+      "lifeos_create_report", "lifeos_log_activity", "lifeos_complete_task",
+      "lifeos_log_transaction", "lifeos_journal_entry",
+>>>>>>> Stashed changes
     ];
 
     // Build scoped tool sets per agent

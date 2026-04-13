@@ -998,6 +998,647 @@ export function buildToolDefinitions(toolNames: string[]): ToolDefinition[] {
       },
       permissionTier: "write",
     },
+
+    // ============================================================
+    // LifeOS Tools (45 tools)
+    // ============================================================
+
+    // --- READ tools (37) ---
+    "lifeos_discover": {
+      name: "lifeos_discover",
+      description: "List all LifeOS databases with agent domain mapping",
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+      permissionTier: "read",
+    },
+    "lifeos_query": {
+      name: "lifeos_query",
+      description: "Generic query for any LifeOS table with filters",
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string" },
+          filters: { type: "object" },
+          limit: { type: "number" },
+          offset: { type: "number" },
+          orderBy: { type: "array", items: { type: "object", properties: { column: { type: "string" }, direction: { type: "string", enum: ["asc", "desc"] } } } },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_query_db_schema": {
+      name: "lifeos_query_db_schema",
+      description: "Get column names, types, nullability for any LifeOS table",
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_context_card": {
+      name: "lifeos_context_card",
+      description: "Personal context summary: projects, tasks, goals, journals, financial",
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+      permissionTier: "read",
+    },
+    "lifeos_tasks": {
+      name: "lifeos_tasks",
+      description: "Query tasks with filters, includes overdue detection",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+          priority: { type: "string" },
+          project: { type: "string" },
+          search: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_projects": {
+      name: "lifeos_projects",
+      description: "Query project portfolio with health and progress",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_quarterly_goals": {
+      name: "lifeos_quarterly_goals",
+      description: "Query quarterly OKR goals",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_annual_goals": {
+      name: "lifeos_annual_goals",
+      description: "Query annual strategic goals",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_productivity_report": {
+      name: "lifeos_productivity_report",
+      description: "Synthesized productivity report",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_day", "past_week", "past_month"] },
+          date_from: { type: "string" },
+          date_to: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_daily_briefing": {
+      name: "lifeos_daily_briefing",
+      description: "Cross-database daily overview",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_temporal_analysis": {
+      name: "lifeos_temporal_analysis",
+      description: "Time-based pattern detection",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_week", "past_month", "past_quarter"] },
+          metric: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_trajectory": {
+      name: "lifeos_trajectory",
+      description: "Trend analysis and projections",
+      parameters: {
+        type: "object",
+        properties: {
+          metric: { type: "string" },
+          periods: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_weekday_patterns": {
+      name: "lifeos_weekday_patterns",
+      description: "Day-of-week behavior analysis",
+      parameters: {
+        type: "object",
+        properties: {
+          metric: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_weekly_review": {
+      name: "lifeos_weekly_review",
+      description: "Weekly synthesis",
+      parameters: {
+        type: "object",
+        properties: {
+          week_start: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_monthly_synthesis": {
+      name: "lifeos_monthly_synthesis",
+      description: "Monthly pattern analysis",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_quarterly_retrospective": {
+      name: "lifeos_quarterly_retrospective",
+      description: "Quarterly review with OKR progress",
+      parameters: {
+        type: "object",
+        properties: {
+          quarter: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_correlate": {
+      name: "lifeos_correlate",
+      description: "Cross-domain correlation",
+      parameters: {
+        type: "object",
+        properties: {
+          domain_a: { type: "string" },
+          domain_b: { type: "string" },
+          period: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_subjective_journal": {
+      name: "lifeos_subjective_journal",
+      description: "Subjective journal entries",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_day", "past_week", "past_month"] },
+          date_from: { type: "string" },
+          date_to: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_relational_journal": {
+      name: "lifeos_relational_journal",
+      description: "Relational journal entries",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_day", "past_week", "past_month"] },
+          date_from: { type: "string" },
+          date_to: { type: "string" },
+          person: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_systemic_journal": {
+      name: "lifeos_systemic_journal",
+      description: "Systemic journal entries",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_day", "past_week", "past_month"] },
+          date_from: { type: "string" },
+          date_to: { type: "string" },
+          impact: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_journal_synthesis": {
+      name: "lifeos_journal_synthesis",
+      description: "Cross-journal pattern synthesis",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_week", "past_month"] },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_financial_log": {
+      name: "lifeos_financial_log",
+      description: "Financial transactions",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_day", "past_week", "past_month"] },
+          date_from: { type: "string" },
+          date_to: { type: "string" },
+          category: { type: "string" },
+          capitalEngine: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_diet_log": {
+      name: "lifeos_diet_log",
+      description: "Diet/nutrition entries",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_day", "past_week", "past_month"] },
+          date_from: { type: "string" },
+          date_to: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_financial_accounts": {
+      name: "lifeos_financial_accounts",
+      description: "Financial accounts",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_health_vitality": {
+      name: "lifeos_health_vitality",
+      description: "Health and vitality tracking",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_week", "past_month"] },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_financial_productivity": {
+      name: "lifeos_financial_productivity",
+      description: "Finance x productivity correlation",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_month", "past_quarter"] },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_directives_risks": {
+      name: "lifeos_directives_risks",
+      description: "Directives and risk log",
+      parameters: {
+        type: "object",
+        properties: {
+          logType: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_opportunities_strengths": {
+      name: "lifeos_opportunities_strengths",
+      description: "Opportunities and strengths",
+      parameters: {
+        type: "object",
+        properties: {
+          logType: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_people_ops": {
+      name: "lifeos_people_ops",
+      description: "People/relationship operations",
+      parameters: {
+        type: "object",
+        properties: {
+          search: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_finance_ops": {
+      name: "lifeos_finance_ops",
+      description: "Finance operations overview",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["past_month", "past_quarter"] },
+          category: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_alignment": {
+      name: "lifeos_alignment",
+      description: "Goal-to-activity alignment",
+      parameters: {
+        type: "object",
+        properties: {
+          goal_id: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_project_health": {
+      name: "lifeos_project_health",
+      description: "Project health dashboard",
+      parameters: {
+        type: "object",
+        properties: {
+          project_id: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_okrs_progress": {
+      name: "lifeos_okrs_progress",
+      description: "OKR progress tracking",
+      parameters: {
+        type: "object",
+        properties: {
+          quarter: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_content": {
+      name: "lifeos_content",
+      description: "Content pipeline",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_campaigns": {
+      name: "lifeos_campaigns",
+      description: "Campaign calendar",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_planning_ops": {
+      name: "lifeos_planning_ops",
+      description: "Planning operations",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+    "lifeos_find_entry": {
+      name: "lifeos_find_entry",
+      description: "Search across journals",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          tables: { type: "array", items: { type: "string" } },
+          limit: { type: "number" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "read",
+    },
+
+    // --- WRITE tools (8) ---
+    "lifeos_create_entry": {
+      name: "lifeos_create_entry",
+      description: "Insert a new row",
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string" },
+          data: { type: "object" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "lifeos_update_entry": {
+      name: "lifeos_update_entry",
+      description: "Update row by ID",
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string" },
+          id: { type: "string" },
+          data: { type: "object" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "lifeos_delete_entry": {
+      name: "lifeos_delete_entry",
+      description: "Delete/archive row",
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string" },
+          id: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "lifeos_create_report": {
+      name: "lifeos_create_report",
+      description: "Create report",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          type: { type: "string" },
+          content: { type: "string" },
+          period: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "lifeos_log_activity": {
+      name: "lifeos_log_activity",
+      description: "Log activity",
+      parameters: {
+        type: "object",
+        properties: {
+          activityType: { type: "string" },
+          durationHrs: { type: "number" },
+          date: { type: "string" },
+          description: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "lifeos_complete_task": {
+      name: "lifeos_complete_task",
+      description: "Complete task",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "lifeos_log_transaction": {
+      name: "lifeos_log_transaction",
+      description: "Log transaction",
+      parameters: {
+        type: "object",
+        properties: {
+          amount: { type: "number" },
+          category: { type: "string" },
+          date: { type: "string" },
+          description: { type: "string" },
+          capitalEngine: { type: "string" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
+    "lifeos_journal_entry": {
+      name: "lifeos_journal_entry",
+      description: "Create journal entry",
+      parameters: {
+        type: "object",
+        properties: {
+          journal: { type: "string", enum: ["subjective", "relational", "systemic"] },
+          title: { type: "string" },
+          date: { type: "string" },
+          content: { type: "object" },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      permissionTier: "write",
+    },
   };
 
   // Filter to only requested tools
@@ -1034,6 +1675,22 @@ export function getAllToolDefinitions(): ToolDefinition[] {
     "boardmeeting.run", "boardmeeting.status", "boardmeeting.get", "boardmeeting.list",
     // Filesystem tools
     "fs.read", "fs.write", "fs.edit", "bash",
+    // LifeOS (45 PostgreSQL-native tools)
+    "lifeos_discover", "lifeos_query", "lifeos_query_db_schema", "lifeos_context_card",
+    "lifeos_tasks", "lifeos_projects", "lifeos_quarterly_goals", "lifeos_annual_goals",
+    "lifeos_directives_risks", "lifeos_opportunities_strengths",
+    "lifeos_subjective_journal", "lifeos_relational_journal", "lifeos_systemic_journal",
+    "lifeos_financial_log", "lifeos_diet_log",
+    "lifeos_content", "lifeos_campaigns", "lifeos_people_ops", "lifeos_finance_ops",
+    "lifeos_alignment", "lifeos_project_health", "lifeos_okrs_progress",
+    "lifeos_journal_synthesis", "lifeos_financial_accounts", "lifeos_productivity_report",
+    "lifeos_daily_briefing", "lifeos_temporal_analysis", "lifeos_trajectory",
+    "lifeos_weekday_patterns", "lifeos_health_vitality", "lifeos_financial_productivity",
+    "lifeos_weekly_review", "lifeos_monthly_synthesis", "lifeos_quarterly_retrospective",
+    "lifeos_correlate", "lifeos_planning_ops",
+    "lifeos_create_entry", "lifeos_update_entry", "lifeos_delete_entry", "lifeos_find_entry",
+    "lifeos_create_report", "lifeos_log_activity", "lifeos_complete_task",
+    "lifeos_log_transaction", "lifeos_journal_entry",
   ]);
 }
 

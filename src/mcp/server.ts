@@ -13,6 +13,11 @@ import { createBashTool } from "../runtime/tools/bash-exec";
 import { createCodeReadTool } from "../runtime/tools/code-read";
 import { createCodeWriteTool } from "../runtime/tools/code-write";
 import { createCodeEditTool } from "../runtime/tools/code-edit";
+import { registerLifeOSTools } from "../lifeos/tools.js";
+import { PostgresClient } from "../lifeos/postgres/client.js";
+import { DbHealthMonitor } from "../lifeos/health-monitor.js";
+import { dbAuditLogger } from "../lifeos/audit-logger.js";
+import { loadConfigFromPath } from "../lifeos/config.js";
 import { Memory } from "../memory/lancedb";
 import { getMemoryFacade } from "../memory/index";
 import type { MemoryFacade } from "../memory/index";
@@ -71,6 +76,15 @@ export async function startOperant(): Promise<OperantRuntime> {
   const sseTransports = new Map<string, { transport: SSEServerTransport; server: McpServer }>();
   const sessionAgentMap = new Map<string, string>();
   const ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
+
+  // ── LifeOS PostgreSQL client (native 45 tools) ──
+  const lifeosDatabaseUrl = process.env.LIFEOS_DATABASE_URL || process.env.DATABASE_URL;
+  const lifeosConfigPath = process.env.LIFEOS_CONFIG_PATH;
+  const pg = lifeosDatabaseUrl ? new PostgresClient(lifeosDatabaseUrl, 10, dbAuditLogger) : null;
+  const dbMonitor = pg ? new DbHealthMonitor(pg.getPool()) : null;
+  const lifeosConfig = lifeosConfigPath ? loadConfigFromPath(lifeosConfigPath) : null;
+  if (pg) logger.info("LifeOS PostgreSQL client initialized");
+  else logger.warn("LifeOS PostgreSQL not configured — set LIFEOS_DATABASE_URL or DATABASE_URL");
 
   // Factory: create a new McpServer with all tools registered for a given SSE session
   function createSessionServer(callerAgentId?: string, pgClient?: PostgresClient | null): { server: McpServer; toolImpls: Record<string, (args: any) => Promise<ToolResult>> } {
@@ -990,6 +1004,7 @@ export async function startOperant(): Promise<OperantRuntime> {
       const firstText = result.content?.[0]?.text; if (!firstText) return ok("Tool returned empty content"); return ok(firstText);
     });
 
+<<<<<<< Updated upstream
     // === DATABASE TOOLS (PostgreSQL with domain scoping) ===
     // Table-to-domain mapping — derived from LifeOS schema structure
     const TABLE_DOMAIN_MAP: Record<string, string> = {
@@ -1226,6 +1241,11 @@ export async function startOperant(): Promise<OperantRuntime> {
           inputSchema: z.object({}),
         }, dbNotConfigured);
       }
+=======
+    // Register all 45 LifeOS PostgreSQL-native tools (if PG is configured)
+    if (pg && lifeosConfig) {
+      registerLifeOSTools(sessionToolImpls, sessionServer, pg, lifeosConfig);
+>>>>>>> Stashed changes
     }
 
     return { server: sessionServer, toolImpls: sessionToolImpls };
@@ -1286,6 +1306,7 @@ export async function startOperant(): Promise<OperantRuntime> {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const pathname = url.pathname;
 
+<<<<<<< Updated upstream
     if (pathname === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
@@ -1318,6 +1339,17 @@ export async function startOperant(): Promise<OperantRuntime> {
     }
 
     if (pathname === "/mcp" || pathname === "/mcp/") {
+=======
+    if (url.pathname === '/health/db') {
+      res.setHeader('Content-Type', 'application/json');
+      const status = dbMonitor ? dbMonitor.getStatus() : { status: 'unhealthy' as const, error: 'DB not configured' };
+      res.writeHead(status.status === 'unhealthy' ? 503 : 200);
+      res.end(JSON.stringify(status, null, 2));
+      return;
+    }
+
+    if (url.pathname === "/mcp" || url.pathname === "/mcp/") {
+>>>>>>> Stashed changes
       if (req.method === "GET") {
         if (sseTransports.size >= MAX_SSE_SESSIONS) {
           res.writeHead(503, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
@@ -1447,6 +1479,7 @@ export async function startOperant(): Promise<OperantRuntime> {
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(MCP_PORT, "127.0.0.1", () => {
       logger.info({ port: MCP_PORT }, "Operant MCP HTTP server running");
+      dbMonitor?.start();
       resolve();
     }).on("error", reject);
 });
@@ -1471,8 +1504,13 @@ export async function startOperant(): Promise<OperantRuntime> {
   };
 
   const shutdown = async () => {
+<<<<<<< Updated upstream
     dbHealthMonitor?.stop();
     await postgresClient?.close();
+=======
+    if (dbMonitor) await dbMonitor.close();
+    if (pg) await pg.close();
+>>>>>>> Stashed changes
     await new Promise<void>(resolve => httpServer.close(() => resolve()));
     for (const { server } of sseTransports.values()) {
       await server.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "shutdown server close error"));

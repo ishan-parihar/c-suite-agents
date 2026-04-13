@@ -1,0 +1,31 @@
+import { pgTable, uuid, text, numeric, timestamp, index } from 'drizzle-orm/pg-core';
+
+export const financialAccounts = pgTable('financial_accounts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  dataSourceId: uuid('data_source_id').notNull(),
+  name: text('name').notNull(),
+  institution: text('institution'),
+  status: text('status'),
+  subType: text('sub_type'),
+  type: text('type').array(),
+  capitalEngine: text('capital_engine'),
+  currency: text('currency'),
+  currentBalance: numeric('current_balance', { precision: 14, scale: 2 }),
+  interestRate: numeric('interest_rate', { precision: 5, scale: 2 }),
+  balanceAsOf: timestamp('balance_as_of', { withTimezone: true }),
+  relatedStatements: text('related_statements'),
+  relatedTransactions: text('related_transactions'),
+  lastUpdated: timestamp('last_updated', { withTimezone: true }),
+  currentStatus: numeric('current_status', { precision: 14, scale: 2 }),
+  activeRange: text('active_range'),
+  financialLogs: uuid('financial_logs').array(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_financial_accounts_status').on(table.status),
+  index('idx_financial_accounts_sub_type').on(table.subType),
+  index('idx_financial_accounts_capital_engine').on(table.capitalEngine),
+  index('idx_financial_accounts_currency').on(table.currency),
+  index('idx_financial_accounts_type').on(table.type),
+  index('idx_financial_accounts_financial_logs').on(table.financialLogs),
+]);

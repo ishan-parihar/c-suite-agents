@@ -1,0 +1,40 @@
+import { pgTable, uuid, text, numeric, timestamp, index, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { projects } from './projects';
+import { weeks } from './weeks';
+
+export const tasks = pgTable('tasks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  dataSourceId: uuid('data_source_id').notNull(),
+  name: text('name').notNull(),
+  taskId: text('task_id').unique(),
+  status: text('status').notNull().default('Up Next'),
+  parentTaskId: uuid('parent_task_id').references((): AnyPgColumn => tasks.id),
+  subTaskId: uuid('sub_task_id').references((): AnyPgColumn => tasks.id),
+  projectId: uuid('project_id').references(() => projects.id),
+  weekId: uuid('week_id').references(() => weeks.id),
+  blocks: uuid('blocks').array(),
+  blockedBy: uuid('blocked_by').references((): AnyPgColumn => tasks.id),
+  priority: text('priority'),
+  assignee: text('assignee'),
+  tags: text('tags').array(),
+  actionDate: timestamp('action_date', { withTimezone: true }),
+  completedDate: timestamp('completed_date', { withTimezone: true }),
+  estimatedHours: numeric('estimated_hours', { precision: 5, scale: 2 }),
+  description: text('description'),
+  sprintStatus: text('sprint_status'),
+  monitor: text('monitor'),
+  projectStatus: text('project_status'),
+  lastEditedAt: timestamp('last_edited_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_tasks_status').on(table.status),
+  index('idx_tasks_priority').on(table.priority),
+  index('idx_tasks_project_id').on(table.projectId),
+  index('idx_tasks_week_id').on(table.weekId),
+  index('idx_tasks_parent_task_id').on(table.parentTaskId),
+  index('idx_tasks_blocked_by').on(table.blockedBy),
+  index('idx_tasks_action_date').on(table.actionDate),
+  index('idx_tasks_tags').on(table.tags),
+  index('idx_tasks_blocks').on(table.blocks),
+]);
