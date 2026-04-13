@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { Shield, Key, Wrench, Settings as SettingsIcon, Globe, FileText } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Shield, Key, Wrench, Settings as SettingsIcon, Globe, FileText, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 
@@ -29,32 +29,121 @@ interface AgentConfig {
   maxTokens: number;
 }
 
+interface AgentResponse {
+  id: string;
+  name: string;
+  role: string;
+  model: string;
+  maxTokens: number;
+  permissions: Record<string, boolean>;
+}
+
+async function patchConfig(agentId: string, config: AgentConfig): Promise<{ success: boolean }> {
+  const res = await fetch('/api/agent-config', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId, config }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error ?? 'Failed to save config');
+  }
+  return res.json();
+}
+
 export default function SettingsPage() {
   const [selectedAgent, setSelectedAgent] = useState(AGENTS[0].id);
-  const [configs, setConfigs] = useState<Record<string, AgentConfig>>(
-    Object.fromEntries(
-      AGENTS.map((a) => [
-        a.id,
-        {
-          permissions: { bash: false, web: true, file: true, db: false },
-          model: 'gpt-4',
-          maxTokens: 4096,
-        },
-      ])
-    )
+  const [configs, setConfigs] = useState<Record<string, AgentConfig>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/agent-config')
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: { agents: AgentResponse[] }) => {
+        const map: Record<string, AgentConfig> = {};
+        for (const a of data.agents) {
+          map[a.id] = {
+            permissions: a.permissions,
+            model: a.model,
+            maxTokens: a.maxTokens,
+          };
+        }
+        setConfigs(map);
+        setError(null);
+      })
+      .catch((err) => {
+        setError(err.message ?? 'Failed to load agent configurations');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, []);
+
+  const persistAndSet = useCallback(
+    async (agentId: string, updater: (prev: AgentConfig) => AgentConfig) => {
+      setSaving(true);
+      try {
+        setConfigs((prev) => {
+          const current = prev[agentId];
+          if (!current) return prev;
+          const next = updater(current);
+          patchConfig(agentId, next).catch(() => {});
+          return { ...prev, [agentId]: next };
+        });
+      } finally {
+        setSaving(false);
+      }
+    },
+    []
   );
+
+  const togglePermission = (key: string) => {
+    persistAndSet(selectedAgent, (prev) => ({
+      ...prev,
+      permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
+    }));
+  };
 
   const config = configs[selectedAgent];
 
-  const togglePermission = (key: string) => {
-    setConfigs((prev) => ({
-      ...prev,
-      [selectedAgent]: {
-        ...prev[selectedAgent],
-        permissions: { ...prev[selectedAgent].permissions, [key]: !prev[selectedAgent].permissions[key] },
-      },
-    }));
-  };
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center space-y-3">
+          <Loader2 className="w-6 h-6 text-text-muted animate-spin mx-auto" />
+          <p className="text-sm text-text-muted">Loading agent configurations...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center space-y-3">
+          <AlertCircle className="w-6 h-6 text-red-500 mx-auto" />
+          <p className="text-sm text-text-muted">{error}</p>
+          <button
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              window.location.reload();
+            }}
+            className="text-sm text-accent hover:underline"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!config) return null;
 
   return (
     <div className="space-y-6">
@@ -144,10 +233,7 @@ export default function SettingsPage() {
                 <select
                   value={config.model}
                   onChange={(e) =>
-                    setConfigs((prev) => ({
-                      ...prev,
-                      [selectedAgent]: { ...prev[selectedAgent], model: e.target.value },
-                    }))
+                    persistAndSet(selectedAgent, (prev) => ({ ...prev, model: e.target.value }))
                   }
                   className="mt-1 w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-text-primary focus:border-border-strong focus:outline-none"
                 >
@@ -163,9 +249,9 @@ export default function SettingsPage() {
                   type="number"
                   value={config.maxTokens}
                   onChange={(e) =>
-                    setConfigs((prev) => ({
+                    persistAndSet(selectedAgent, (prev) => ({
                       ...prev,
-                      [selectedAgent]: { ...prev[selectedAgent], maxTokens: parseInt(e.target.value, 10) || 0 },
+                      maxTokens: parseInt(e.target.value, 10) || 0,
                     }))
                   }
                   className="mt-1 w-full bg-surface border border-border rounded-md px-3 py-2 text-sm text-text-primary focus:border-border-strong focus:outline-none"

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { logger } from "../logger";
 import type { MessagePayload, ServerFrame, WsSession } from "./ws-types";
+import { serializeFrame } from "./ws-types";
 
 interface QueuedMessage {
   agentId: string;
@@ -15,10 +16,15 @@ export class MessageBus extends EventEmitter {
   private offlineQueues: Map<string, QueuedMessage[]> = new Map();
   private globalSeq = 0;
   private maxQueueSize: number;
+  private observers: Set<WsSession> = new Set();
 
   constructor(options?: { maxQueueSize?: number }) {
     super();
     this.maxQueueSize = options?.maxQueueSize ?? 10000;
+  }
+
+  syncObservers(observers: ReadonlySet<WsSession>): void {
+    this.observers = new Set(observers);
   }
 
   registerSession(session: WsSession): void {
@@ -39,6 +45,17 @@ export class MessageBus extends EventEmitter {
     return this.sessions.has(agentId);
   }
 
+  private broadcastToObservers(frame: ServerFrame): void {
+    for (const observer of this.observers) {
+      if (observer.ws.readyState !== 1) continue; // WebSocket.OPEN
+      try {
+        observer.ws.send(serializeFrame(frame));
+      } catch {
+        // Ignore send errors — observer will be cleaned up on close
+      }
+    }
+  }
+
   publish(agentId: string, payload: MessagePayload): boolean {
     const session = this.sessions.get(agentId);
 
@@ -46,14 +63,21 @@ export class MessageBus extends EventEmitter {
       const seq = this.nextSeq();
       const frame: ServerFrame = { type: "message", payload, seq };
       try {
-        session.ws.send(JSON.stringify(frame));
+        session.ws.send(serializeFrame(frame));
         session.seq = seq;
         session.lastActivity = Date.now();
         logger.debug({ agentId, seq, messageId: payload.message_id }, "Message pushed via WS");
+        // Broadcast to observers with the same seq
+        if (this.observers.size > 0) {
+          this.broadcastToObservers(frame);
+        }
         return true;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn({ agentId, err: msg }, "WS push failed, queuing message");
+        // FIX 2: On WS send failure, queue the message instead of returning true
+        this.queueMessage(agentId, payload);
+        return false;
       }
     }
 

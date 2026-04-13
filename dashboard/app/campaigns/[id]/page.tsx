@@ -1,12 +1,9 @@
-import { Suspense } from "react";
 import Link from "next/link";
 import { ArrowLeft, Calendar, Users, TrendingUp, Target, FileText, Layers, Zap, DollarSign } from "lucide-react";
-import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { StatCard } from "@/components/ui/stat-card";
 import { ProgressBar } from "@/components/ui/progress-bar";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/lib/formatters";
 import type { StatusKey } from "@/lib/constants";
 import { getCampaignDetail } from "@/lib/server/marketing";
@@ -31,7 +28,21 @@ function contentStatusKey(s: string | null): StatusKey {
 
 async function CampaignDetail({ campaignId }: { campaignId: string }) {
   const data = await getCampaignDetail(campaignId);
-  if (!data) notFound();
+
+  if (!data) {
+    return (
+      <div className="space-y-6">
+        <Link href="/campaigns" className="flex items-center gap-1 text-text-secondary hover:text-text-primary transition-colors">
+          <ArrowLeft className="w-4 h-4" />
+          Back to Campaigns
+        </Link>
+        <div className="text-center py-12">
+          <h2 className="text-lg font-medium text-text-muted">Campaign not found</h2>
+          <p className="text-sm text-text-secondary mt-1">The campaign may have been deleted or the database is unavailable.</p>
+        </div>
+      </div>
+    );
+  }
 
   const { campaign, contentItems } = data;
   const reachPct = campaign.targetReach && campaign.targetReach > 0
@@ -225,10 +236,5 @@ async function CampaignDetail({ campaignId }: { campaignId: string }) {
 
 export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-
-  return (
-    <Suspense fallback={<Skeleton variant="card" lines={12} />}>
-      <CampaignDetail campaignId={id} />
-    </Suspense>
-  );
+  return <CampaignDetail campaignId={id} />;
 }

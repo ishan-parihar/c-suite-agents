@@ -5,9 +5,11 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   serverExternalPackages: ['@lancedb/lancedb', 'sql.js', 'telegraf', 'ws', 'better-sqlite3'],
-  turbopack: {
-    resolveExtensions: ['.tsx', '.ts', '.mjs', '.js', '.jsx', '.json'],
+  webpack: (config) => {
+    config.resolve.symlinks = false;
+    return config;
   },
+  turbopack: {},
   async headers() {
     return [
       {

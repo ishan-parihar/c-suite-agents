@@ -1,19 +1,53 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { WsMessage, WsEventPayload, WsSubscribePayload, WsNotificationPayload } from '@/src/transport/ws-types';
+
+/**
+ * Daemon WebSocket frame types.
+ * Defined inline — dashboard must NOT import from daemon source.
+ */
+interface DaemonFrame {
+  type: 'auth_ok' | 'auth_error' | 'message' | 'stream_chunk' | 'stream_end' | 'tool_call' | 'ping' | 'pong';
+  session_id?: string;
+  reason?: string;
+  payload?: Record<string, unknown>;
+  seq?: number;
+}
+
+/**
+ * Construct a WebSocket URL that matches the current page protocol.
+ *
+ * In development, connects to operant daemon on port 3001.
+ * In production, uses environment variable NEXT_PUBLIC_WS_URL or falls back to same-host /ws.
+ */
+export function getWsUrl(path: string = '/ws'): string {
+  if (typeof window === 'undefined') {
+    return `ws://localhost:3000${path}`;
+  }
+
+  const envWsUrl = process.env.NEXT_PUBLIC_WS_URL;
+  if (envWsUrl) {
+    return envWsUrl;
+  }
+
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'ws://localhost:3001/ws';
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${path}`;
+}
 
 interface UseWebSocketOptions {
   url: string;
   queryKeys?: string[][];
-  onEvent?: (event: WsEventPayload) => void;
-  onNotification?: (notification: WsNotificationPayload) => void;
+  onEvent?: (event: any) => void;
+  onNotification?: (notification: any) => void;
   enabled?: boolean;
 }
 
 interface UseWebSocketReturn {
   isConnected: boolean;
   isAuthed: boolean;
-  send: (message: Omit<WsMessage, 'timestamp'>) => void;
   subscribe: (eventTypes: string[]) => void;
   unsubscribe: (eventTypes: string[]) => void;
 }
@@ -33,33 +67,12 @@ export function useWebSocket({
   const backoffRef = useRef(1000);
   const urlRef = useRef(url);
 
-  const subscribe = useCallback((eventTypes: string[]) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const msg: WsMessage<WsSubscribePayload> = {
-        type: 'subscribe',
-        payload: { eventTypes },
-        timestamp: Date.now(),
-      };
-      wsRef.current.send(JSON.stringify(msg));
-    }
-  }, []);
+  useEffect(() => {
+    urlRef.current = url;
+  }, [url]);
 
-  const unsubscribe = useCallback((eventTypes: string[]) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const msg: WsMessage<WsSubscribePayload> = {
-        type: 'unsubscribe',
-        payload: { eventTypes },
-        timestamp: Date.now(),
-      };
-      wsRef.current.send(JSON.stringify(msg));
-    }
-  }, []);
-
-  const send = useCallback((message: Omit<WsMessage, 'timestamp'>) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ ...message, timestamp: Date.now() }));
-    }
-  }, []);
+  const subscribe = useCallback((_eventTypes: string[]) => {}, []);
+  const unsubscribe = useCallback((_eventTypes: string[]) => {}, []);
 
   const connect = useCallback(() => {
     if (!enabled) return;
@@ -70,33 +83,43 @@ export function useWebSocket({
     ws.onopen = () => {
       setIsConnected(true);
       backoffRef.current = 1000;
+      ws.send(JSON.stringify({ type: 'auth', agent_id: 'dashboard', token: '' }));
     };
 
     ws.onmessage = (e) => {
       try {
-        const message = JSON.parse(e.data) as WsMessage;
+        const frame = JSON.parse(e.data) as DaemonFrame;
 
-        switch (message.type) {
+        switch (frame.type) {
           case 'auth_ok':
             setIsAuthed(true);
             break;
-          case 'auth_fail':
+
+          case 'auth_error':
+            console.error('[WS] Auth error:', frame.reason);
             setIsAuthed(false);
             break;
-          case 'event':
-            const eventPayload = message.payload as WsEventPayload;
-            onEvent?.(eventPayload);
+
+          case 'message':
+          case 'stream_chunk':
+          case 'stream_end':
             if (queryKeys.length > 0) {
               queryKeys.forEach((key) => queryClient.invalidateQueries({ queryKey: key }));
             }
             break;
-          case 'notification':
-            const notificationPayload = message.payload as WsNotificationPayload;
-            onNotification?.(notificationPayload);
+
+          case 'ping':
+            ws.send(JSON.stringify({ type: 'ping' }));
+            break;
+
+          case 'tool_call':
+          case 'pong':
+            break;
+
+          default:
             break;
         }
       } catch {
-        // Ignore parse errors
       }
     };
 
@@ -113,7 +136,7 @@ export function useWebSocket({
     ws.onerror = () => {
       ws.close();
     };
-  }, [enabled, queryKeys, queryClient, onEvent, onNotification]);
+  }, [enabled, queryKeys, queryClient]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -126,5 +149,5 @@ export function useWebSocket({
     };
   }, [connect, enabled]);
 
-  return { isConnected, isAuthed, send, subscribe, unsubscribe };
+  return { isConnected, isAuthed, subscribe, unsubscribe };
 }

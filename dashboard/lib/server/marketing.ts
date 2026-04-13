@@ -46,7 +46,8 @@ export async function getCampaignsList() {
       budgetAllocated: r.budget_allocated,
       contentCount: Number(r.content_count) || 0,
     }));
-  } catch {
+  } catch (err) {
+    console.error('[marketing] getCampaignsList failed:', err);
     return [];
   }
 }
@@ -118,7 +119,8 @@ export async function getCampaignDetail(campaignId: string) {
     }));
 
     return { campaign, contentItems };
-  } catch {
+  } catch (err) {
+    console.error('[marketing] getCampaignDetail failed:', err);
     return null;
   }
 }
@@ -157,7 +159,8 @@ export async function getContentPipeline() {
       engagementRate: r.engagement_rate,
       campaignName: r.campaign_name,
     }));
-  } catch {
+  } catch (err) {
+    console.error('[marketing] getContentPipeline failed:', err);
     return [];
   }
 }
