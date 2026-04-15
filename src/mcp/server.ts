@@ -13,6 +13,7 @@ import { createBashTool } from "../runtime/tools/bash-exec";
 import { createCodeReadTool } from "../runtime/tools/code-read";
 import { createCodeWriteTool } from "../runtime/tools/code-write";
 import { createCodeEditTool } from "../runtime/tools/code-edit";
+import { loadConfigFromPath } from "../lifeos/config.js";
 import { Memory } from "../memory/lancedb";
 import { getMemoryFacade } from "../memory/index";
 import type { MemoryFacade } from "../memory/index";
@@ -28,7 +29,7 @@ import { AgentContextManager } from "../organic/context";
 import { sendTelegramMessage } from "../integrations/telegram";
 import { createServer } from "http";
 import { startBoardMeeting, runFullBoardMeeting, getActiveMeeting, getMeeting, getBoardMeetingEngine } from "../organic/board-meeting";
-import { dbAuditLogger, DbAuditLogger } from "../lifeos/audit-logger";
+import { dbAuditLogger } from "../lifeos/audit-logger";
 import { DbHealthMonitor } from "../lifeos/health-monitor";
 import { PostgresClient } from "../lifeos/postgres/client";
 
@@ -71,6 +72,15 @@ export async function startOperant(): Promise<OperantRuntime> {
   const sseTransports = new Map<string, { transport: SSEServerTransport; server: McpServer }>();
   const sessionAgentMap = new Map<string, string>();
   const ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
+
+  // ── LifeOS PostgreSQL client (native 45 tools) ──
+  const lifeosDatabaseUrl = process.env.LIFEOS_DATABASE_URL || process.env.DATABASE_URL;
+  const lifeosConfigPath = process.env.LIFEOS_CONFIG_PATH;
+  const pg = lifeosDatabaseUrl ? new PostgresClient(lifeosDatabaseUrl, 10, dbAuditLogger) : null;
+  const dbMonitor = pg ? new DbHealthMonitor(pg.getPool()) : null;
+  const lifeosConfig = lifeosConfigPath ? loadConfigFromPath(lifeosConfigPath) : null;
+  if (pg) logger.info("LifeOS PostgreSQL client initialized");
+  else logger.warn("LifeOS PostgreSQL not configured — set LIFEOS_DATABASE_URL or DATABASE_URL");
 
   // Factory: create a new McpServer with all tools registered for a given SSE session
   function createSessionServer(callerAgentId?: string, pgClient?: PostgresClient | null): { server: McpServer; toolImpls: Record<string, (args: any) => Promise<ToolResult>> } {
@@ -1447,6 +1457,7 @@ export async function startOperant(): Promise<OperantRuntime> {
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(MCP_PORT, "127.0.0.1", () => {
       logger.info({ port: MCP_PORT }, "Operant MCP HTTP server running");
+      dbMonitor?.start();
       resolve();
     }).on("error", reject);
 });
