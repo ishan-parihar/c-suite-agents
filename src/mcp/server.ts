@@ -17,7 +17,7 @@ import { Memory } from "../memory/lancedb.js";
 import { getMemoryFacade } from "../memory/index.js";
 import type { MemoryFacade } from "../memory/index.js";
 import { Kanban } from "../kanban/sqlite.js";
-import type { StrategosRuntime, ToolExecutor } from "../types.js";
+import type { OperantRuntime, ToolExecutor } from "../types.js";
 import { v4 as uuidv4 } from "uuid";
 import { CORE_STAFF_ROLES, getCoreStaffIds, getOrgChart, getStaffById, getDirectReports } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
@@ -48,7 +48,7 @@ async function initializeCoreStaff(kanban: Kanban, memory: Memory) {
   logger.info(`Core staff initialized: ${getCoreStaffIds().length} agents`);
 }
 
-export async function startStrategos(): Promise<StrategosRuntime> {
+export async function startOperant(): Promise<OperantRuntime> {
   const memory = await Memory.init(process.env.LANCEDB_DIR || ".lancedb");
   const memoryFacade = await getMemoryFacade();
   const kanban = await Kanban.init(process.env.KANBAN_DB || "kanban.db");
@@ -71,7 +71,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
   // Factory: create a new McpServer with all tools registered for a given SSE session
   function createSessionServer(callerAgentId?: string): { server: McpServer; toolImpls: Record<string, (args: any) => Promise<ToolResult>> } {
-    const sessionServer = new McpServer({ name: "strategos", version: "0.1.0" }, { capabilities: { logging: {} } });
+    const sessionServer = new McpServer({ name: "operant", version: "0.1.0" }, { capabilities: { logging: {} } });
     const sessionToolImpls: Record<string, (args: any) => Promise<ToolResult>> = {};
 
     // Identity override: callerAgentId is validated at SSE connection time (rejects unknown agents),
@@ -84,6 +84,20 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       overridden.from_agent = callerAgentId;
       overridden.agent_id = callerAgentId;
       return overridden;
+    }
+
+    function assertCallerIdentity(toolName: string, args: Record<string, unknown>): { ok: boolean; error?: string } {
+      if (!callerAgentId) {
+        return { ok: false, error: `❌ Error: caller identity missing for ${toolName}.` };
+      }
+      const claimedFrom = (args.from ?? args.from_agent ?? args.agent_id) as string | undefined;
+      if (claimedFrom && claimedFrom !== callerAgentId) {
+        return {
+          ok: false,
+          error: `❌ Error: caller identity mismatch for ${toolName} (claimed=${claimedFrom}, session=${callerAgentId}).`,
+        };
+      }
+      return { ok: true };
     }
 
     // === AGENT MANAGEMENT TOOLS ===
@@ -121,6 +135,9 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     // === AGENT COMMUNICATION TOOLS ===
     const agentHandoff = async (args: any): Promise<ToolResult> => {
+      const correlationId = uuidv4();
+      const identity = assertCallerIdentity("agent.handoff", args);
+      if (!identity.ok) return ok(identity.error!);
       const { from_agent, to_agent, context, conversation_id } = withCallerIdentity(args);
       if (!to_agent || !context) return ok("❌ Error: to_agent and context are required");
       const fromStaff = getStaffById(from_agent);
@@ -128,10 +145,10 @@ export async function startStrategos(): Promise<StrategosRuntime> {
       if (!toStaff) return ok(`❌ Agent "${to_agent}" not found.`);
       try {
         await messaging.send({ from: from_agent, to: to_agent, content: `🔄 **HANDOFF**\n\nFrom: ${fromStaff?.name || from_agent}\n\nContext:\n${context}`, priority: "P2", requires_response: true, subject: `Handoff from ${from_agent}`, tags: ["handoff", "agent-transfer"] });
-        logger.info({ from: from_agent, to: to_agent, conversation_id }, "Agent handoff completed");
+        logger.info({ correlationId, from: from_agent, to: to_agent, conversation_id }, "Agent handoff completed");
         return ok(`✅ Conversation handed off to **${toStaff.avatar} ${toStaff.name}**\n\nThey now have full context and will continue the conversation.`);
       } catch (err: any) {
-        logger.error({ err: err.message }, "Handoff failed");
+        logger.error({ correlationId, err: err.message }, "Handoff failed");
         return ok(`❌ Handoff failed: internal error`);
       }
     };
@@ -139,6 +156,9 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     sessionServer.registerTool("agent.handoff", { description: "Hand off a conversation to another agent — they take over with full context. Use when a topic is outside your domain.", inputSchema: z.object({ from_agent: z.string().describe("Your agent ID"), to_agent: z.string().describe("Agent to handoff to"), context: z.string().describe("Conversation context and summary"), conversation_id: z.string().optional().describe("Optional conversation/thread ID") }) }, agentHandoff);
 
     const agentMeeting = async (args: any): Promise<ToolResult> => {
+      const correlationId = uuidv4();
+      const identity = assertCallerIdentity("agent.meeting", args);
+      if (!identity.ok) return ok(identity.error!);
       const { from_agent, participants, topic, urgency = "normal" } = withCallerIdentity(args);
       if (!participants || participants.length === 0) return ok("❌ Error: participants array is required");
       const validParticipants = participants.filter((id: string) => getStaffById(id));
@@ -150,13 +170,13 @@ export async function startStrategos(): Promise<StrategosRuntime> {
         }));
         const failed = results.filter(r => r.status === "rejected");
         if (failed.length > 0) {
-          logger.warn({ failed: failed.length, total: results.length }, "Meeting notification partial failure");
+          logger.warn({ correlationId, failed: failed.length, total: results.length }, "Meeting notification partial failure");
         }
-        logger.info({ caller: from_agent, participants: validParticipants, topic }, "Board meeting called");
+        logger.info({ correlationId, caller: from_agent, participants: validParticipants, topic }, "Board meeting called");
         const names = validParticipants.map((id: string) => { const s = getStaffById(id); return s ? `${s.avatar} ${s.name}` : id; }).join(", ");
         return ok(`🏛 **Board Meeting Called**\n\nTopic: ${topic}\nUrgency: ${urgency}\n\nParticipants:\n${names}\n\nAll agents have been notified and will respond.`);
       } catch (err: any) {
-        logger.error({ err: err.message }, "Failed to call meeting");
+        logger.error({ correlationId, err: err.message }, "Failed to call meeting");
         return ok(`❌ Failed to call meeting: internal error`);
       }
     };
@@ -330,10 +350,14 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     // === MESSAGING TOOLS ===
     const messageSend = async (args: any): Promise<ToolResult> => {
       try {
+        const correlationId = uuidv4();
+        const identity = assertCallerIdentity("message.send", args);
+        if (!identity.ok) return ok(identity.error!);
         const resolved = withCallerIdentity(args);
         if (!resolved.to) return ok("❌ Error: 'to' (recipient agent ID) is required");
         if (!resolved.content) return ok("❌ Error: 'content' (message body) is required");
         const thread = await messaging.send({ from: resolved.from, to: resolved.to, content: resolved.content, priority: resolved.priority || "P3", requires_response: resolved.requires_response || false, subject: resolved.subject, tags: resolved.tags });
+        logger.info({ correlationId, from: resolved.from, to: resolved.to, threadId: thread.id }, "message.send success");
         return ok(`Message sent to ${resolved.to}. Thread ID: ${thread.id}`);
       } catch (err: any) {
         const msg = err?.message || String(err);
@@ -346,10 +370,14 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     const messageReply = async (args: any): Promise<ToolResult> => {
       try {
+        const correlationId = uuidv4();
+        const identity = assertCallerIdentity("message.reply", args);
+        if (!identity.ok) return ok(identity.error!);
         const resolved = withCallerIdentity(args);
         if (!resolved.thread_id) return ok("❌ Error: 'thread_id' is required");
         if (!resolved.content) return ok("❌ Error: 'content' (reply body) is required");
         const thread = await messaging.reply({ thread_id: resolved.thread_id, from: resolved.from, content: resolved.content, requires_response: resolved.requires_response || false, tags: resolved.tags });
+        logger.info({ correlationId, from: resolved.from, threadId: resolved.thread_id }, "message.reply success");
         return ok(`Reply sent. Thread updated: ${thread.id}`);
       } catch (err: any) {
         const msg = err?.message || String(err);
@@ -386,8 +414,12 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     sessionServer.registerTool("message.markRead", { description: "Mark messages or a thread as read. Use after reviewing to clear from inbox.", inputSchema: z.object({ agent_id: z.string().describe("Your agent ID"), thread_id: z.string().optional().describe("Specific thread ID (omit to mark all as read)") }) }, messageMarkRead);
 
     const messageEscalate = async (args: any): Promise<ToolResult> => {
+      const correlationId = uuidv4();
+      const identity = assertCallerIdentity("message.escalate", args);
+      if (!identity.ok) return ok(identity.error!);
       const resolved = withCallerIdentity(args);
       const escalation = await messaging.escalate({ thread_id: resolved.thread_id, from: resolved.from, to: resolved.to, reason: resolved.reason });
+      logger.info({ correlationId, from: resolved.from, to: resolved.to, threadId: resolved.thread_id, escalationId: escalation.id }, "message.escalate success");
       return ok(`Escalated to ${resolved.to}. Escalation ID: ${escalation.id}`);
     };
     sessionToolImpls["message.escalate"] = messageEscalate;
@@ -584,6 +616,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
     // === BOARD MEETING TOOLS ===
     const boardmeetingRun = async (args: any): Promise<ToolResult> => {
+      const correlationId = uuidv4();
       // CEO-only enforcement: runtime identity check
       if (!callerAgentId || callerAgentId !== "ceo-strategic") {
         throw new Error("boardmeeting.run requires CEO identity");
@@ -593,10 +626,11 @@ export async function startStrategos(): Promise<StrategosRuntime> {
         if (!meeting) return ok("❌ Error: Board meeting engine returned null");
         const turns = meeting.turns?.length ?? 0;
         const reportPreview = meeting.report ? meeting.report.slice(0, 500) : "No report generated.";
+        logger.info({ correlationId, meetingId: meeting.id, turns }, "boardmeeting.run success");
         return ok(`✅ Board meeting completed: ${meeting.id}\nTurns: ${turns}\nStatus: ${meeting.status}${args.objective ? `\nObjective: ${args.objective}` : ""}\n\n${reportPreview}${meeting.report && meeting.report.length > 500 ? "\n\n[...report truncated]" : ""}`);
       } catch (err: any) {
         const msg = err?.message || String(err);
-        logger.error({ err: msg }, "Failed to run board meeting");
+        logger.error({ correlationId, err: msg }, "Failed to run board meeting");
         return ok(`❌ Failed to run board meeting: ${msg}`);
       }
     };
@@ -1163,7 +1197,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
 
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(MCP_PORT, "127.0.0.1", () => {
-      logger.info({ port: MCP_PORT }, "Strategos MCP HTTP server running");
+      logger.info({ port: MCP_PORT }, "Operant MCP HTTP server running");
       resolve();
     }).on("error", reject);
 });
@@ -1180,7 +1214,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     Object.assign(toolImpls, stdioTools);
     const stdioTransport = new StdioServerTransport();
     await stdioServer.connect(stdioTransport);
-    logger.info("Strategos MCP stdio transport connected");
+    logger.info("Operant MCP stdio transport connected");
   }
 
   const executor: ToolExecutor = {
@@ -1196,7 +1230,7 @@ export async function startStrategos(): Promise<StrategosRuntime> {
     if (stdioServer) {
       await stdioServer.close().catch((err) => logger.debug({ err: err instanceof Error ? err.message : String(err) }, "shutdown stdio close error"));
     }
-    logger.info("Strategos MCP server shut down");
+    logger.info("Operant MCP server shut down");
   };
 
 

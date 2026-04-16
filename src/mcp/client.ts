@@ -98,7 +98,7 @@ async function connectLocal(
   });
 
   const client = new Client(
-    { name: "strategos-mcp-client", version: "0.1.0" },
+    { name: "operant-mcp-client", version: "0.1.0" },
     { capabilities: {} },
   );
 
@@ -215,7 +215,7 @@ async function connectRemote(
   reconnectAttempt = 0,
 ): Promise<McpServerConnection | null> {
   const client = new Client(
-    { name: "strategos-mcp-client", version: "0.1.0" },
+    { name: "operant-mcp-client", version: "0.1.0" },
     { capabilities: {} },
   );
 

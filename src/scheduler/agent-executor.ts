@@ -28,6 +28,7 @@ import { getHookRegistry, HookType } from "../runtime/hooks.js";
 import { getAgentHealthRegistry } from "./agent-health.js";
 import { getBehavioralProfile, formatBehavioralPrompt, recordInteractionOutcome } from "../memory/behavioral-profile.js";
 import { ErrorBus } from "../runtime/error-emitter.js";
+import { createExecutionContext, elapsedMs, startTimer, withPhase } from "../runtime/observability.js";
 
 export interface AgentExecutorConfig {
   checkIntervalMs: number;
@@ -286,6 +287,8 @@ export class AgentExecutor {
   private async runAgentHeartbeat(agentId: string, messaging: any): Promise<void> {
     const staff = getStaffById(agentId);
     if (!staff) return;
+    const ctx = createExecutionContext({ agentId, phase: "agent.heartbeat" });
+    const startedAt = startTimer();
 
     try {
       const board = await this.kanban.getBoard(agentId);
@@ -430,10 +433,11 @@ export class AgentExecutor {
 
         await SystemEventQueue.clear(agentId);
       }
+      logger.info({ ...withPhase(ctx, "agent.heartbeat.success"), durationMs: elapsedMs(startedAt) }, "Agent heartbeat completed");
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : '';
-      logger.error({ agentId, err: errMsg, stack }, "Proactive domain work failed");
+      logger.error({ ...withPhase(ctx, "agent.heartbeat.failed"), err: errMsg, stack, durationMs: elapsedMs(startedAt) }, "Proactive domain work failed");
       ErrorBus.emit({
         type: "agent:error",
         severity: "error",

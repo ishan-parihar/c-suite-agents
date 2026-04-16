@@ -48,7 +48,7 @@ export function createFsEditTool() {
       }
 
       const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      const workspaceDir = path.join(homeDir, ".operant", "agents", agent_id);
 
       if (file_path.includes("..")) {
         return { content: [{ type: "text", text: "Error: Path traversal not allowed." }] };

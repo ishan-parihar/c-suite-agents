@@ -1,6 +1,6 @@
 // Tool Scoping Tests — 3-tier scoping system validation
 import { describe, test, expect } from "bun:test";
-import { StrategosConfigSchema } from "../config/schema.js";
+import { OperantConfigSchema } from "../config/schema.js";
 import { getAgentToolScope } from "../staff/tool-scoping.js";
 
 // ---------------------------------------------------------------------------
@@ -18,7 +18,7 @@ describe("toolScoping schema validation", () => {
 
   describe("nativeTools field", () => {
     test("accepts config with nativeTools array of strings", () => {
-      const result = StrategosConfigSchema.safeParse({
+      const result = OperantConfigSchema.safeParse({
         agents: {
           ...baseAgents,
           toolScoping: {
@@ -33,7 +33,7 @@ describe("toolScoping schema validation", () => {
     });
 
     test("rejects nativeTools with non-string values", () => {
-      const result = StrategosConfigSchema.safeParse({
+      const result = OperantConfigSchema.safeParse({
         agents: {
           ...baseAgents,
           toolScoping: {
@@ -50,7 +50,7 @@ describe("toolScoping schema validation", () => {
 
   describe("mcpServerTools field", () => {
     test("accepts config with mcpServerTools record of string arrays", () => {
-      const result = StrategosConfigSchema.safeParse({
+      const result = OperantConfigSchema.safeParse({
         agents: {
           ...baseAgents,
           toolScoping: {
@@ -68,7 +68,7 @@ describe("toolScoping schema validation", () => {
     });
 
     test("rejects mcpServerTools with non-array values", () => {
-      const result = StrategosConfigSchema.safeParse({
+      const result = OperantConfigSchema.safeParse({
         agents: {
           ...baseAgents,
           toolScoping: {
@@ -87,7 +87,7 @@ describe("toolScoping schema validation", () => {
 
   describe("combined fields", () => {
     test("accepts config with BOTH nativeTools and mcpServerTools", () => {
-      const result = StrategosConfigSchema.safeParse({
+      const result = OperantConfigSchema.safeParse({
         agents: {
           ...baseAgents,
           toolScoping: {
@@ -108,7 +108,7 @@ describe("toolScoping schema validation", () => {
 
   describe("backward compatibility", () => {
     test("accepts config WITHOUT nativeTools or mcpServerTools", () => {
-      const result = StrategosConfigSchema.safeParse({
+      const result = OperantConfigSchema.safeParse({
         agents: {
           ...baseAgents,
           toolScoping: {
@@ -122,7 +122,7 @@ describe("toolScoping schema validation", () => {
     });
 
     test("accepts config WITHOUT toolScoping at all", () => {
-      const result = StrategosConfigSchema.safeParse({
+      const result = OperantConfigSchema.safeParse({
         agents: baseAgents,
       });
       expect(result.success).toBe(true);

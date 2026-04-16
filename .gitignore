@@ -9,6 +9,8 @@ build/
 
 # Database files
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
@@ -33,6 +35,13 @@ Thumbs.db
 # Local data
 data/
 .temp/
+.operant-data/
+
+# Runtime artifacts
+*.pid
+
+# Next.js build output (if present in mono-repo workspace)
+.next/
 
 # Coverage
 coverage/

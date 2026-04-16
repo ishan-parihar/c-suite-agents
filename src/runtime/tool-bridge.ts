@@ -1,4 +1,4 @@
-// Tool Bridge — Maps Strategos MCP tools to LLM tool-calling format
+// Tool Bridge — Maps Operant MCP tools to LLM tool-calling format
 // Provides tool definitions (JSON Schema) and execution wrappers
 
 import { z } from "zod";

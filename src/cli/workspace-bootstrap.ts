@@ -3,8 +3,8 @@ import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 const AGENT_REGISTRY: Record<string, { name: string; role: string; responsibilities: string }> = {
-  strategos: {
-    name: "Strategos",
+  operant: {
+    name: "Operant",
     role: "CEO — Chief Executive Officer",
     responsibilities: "Overall system orchestration, strategic decisions, user communication",
   },
@@ -127,7 +127,7 @@ working style, and context.
 
 export async function initializeWorkspace(config: any): Promise<void> {
   const home = homedir();
-  const configDir = join(home, ".strategos");
+  const configDir = join(home, ".operant");
 
   // Create root config directory
   safeMkdir(configDir);

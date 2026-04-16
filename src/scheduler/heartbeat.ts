@@ -4,7 +4,7 @@
 // Role-based: only agents with heartbeat enabled in config receive heartbeats.
 
 import { logger } from "../logger.js";
-import type { StrategosRuntime } from "../types.js";
+import type { OperantRuntime } from "../types.js";
 import { getCoreStaffIds, getStaffById } from "../staff/core-staff.js";
 import { SystemEventQueue, ACTIVE_HOURS } from "./system-events.js";
 import { loadConfig } from "../config/loader.js";
@@ -54,7 +54,7 @@ function resolveHeartbeatConfig(): {
   return { mode, defaultAgent, agentConfigs };
 }
 
-export async function startHeartbeat(rt: StrategosRuntime) {
+export async function startHeartbeat(rt: OperantRuntime) {
   const { defaultAgent, agentConfigs } = resolveHeartbeatConfig();
 
   const enabledAgents = getCoreStaffIds().filter(

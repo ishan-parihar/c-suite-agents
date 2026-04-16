@@ -19,6 +19,8 @@ import { getSessionRegistry } from "./session-registry.js";
 import { SystemEventQueue, currentTimeLine } from "./system-events.js";
 import { ErrorBus, createErrorEvent } from "../runtime/error-emitter.js";
 import { autoStore } from "../memory/auto.js";
+import { createExecutionContext, elapsedMs, startTimer, withPhase } from "../runtime/observability.js";
+import { incrementCounter, setGauge } from "../runtime/metrics.js";
 
 export type ScheduleType =
   | "interval"
@@ -70,6 +72,12 @@ export class AgentScheduler {
   private persistLock = Promise.resolve();
   private persistChainLength = 0;
   private static readonly MAX_CHAIN_LENGTH = 100;
+  private runningTaskLeases = new Map<string, number>();
+  private leaseTtlMs = 90_000;
+  private maxMisfireDelayMs = 10 * 60 * 1000;
+  private retryBudgetWindowMs = 30 * 60 * 1000;
+  private retryBudgetMax = 5;
+  private retryBudget = new Map<string, number[]>();
 
   private constructor(dbPath: string) {
     this.dbPath = dbPath;
@@ -121,6 +129,14 @@ export class AgentScheduler {
       CREATE INDEX IF NOT EXISTS idx_tasks_agent ON scheduled_tasks(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_next_run ON scheduled_tasks(next_run);
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON scheduled_tasks(status);
+      CREATE TABLE IF NOT EXISTS task_leases (
+        lease_key TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_leases_expires_at ON task_leases(expires_at);
     `);
 
     try {
@@ -136,6 +152,8 @@ export class AgentScheduler {
       // Index already exists
     }
 
+    await this.persist();
+    this.db.run("DELETE FROM task_leases WHERE expires_at <= ?", [Date.now()]);
     await this.persist();
     await this.loadTasks();
     logger.info({ dbPath: this.dbPath, taskCount: this.tasks.size }, "Agent scheduler initialized");
@@ -381,10 +399,56 @@ export class AgentScheduler {
       } catch (err: any) {
         logger.error({ err: err.message }, "Scheduler loop error");
       }
-      this.schedulerTimer = setTimeout(loop, this.checkIntervalMs);
+      const jitterMs = Math.floor(Math.random() * 1000);
+      this.schedulerTimer = setTimeout(loop, this.checkIntervalMs + jitterMs);
       this.schedulerTimer.unref();
     };
     loop();
+  }
+
+  private async acquireTaskLease(task: ScheduledTask): Promise<boolean> {
+    const key = `${task.agent_id}:${task.id}`;
+    const now = Date.now();
+    const existing = this.runningTaskLeases.get(key);
+    if (existing && existing > now) return false;
+
+    const rows = this.queryAll("SELECT expires_at FROM task_leases WHERE lease_key = ?", [key]);
+    const dbExisting = rows[0]?.expires_at as number | undefined;
+    if (typeof dbExisting === "number" && dbExisting > now) return false;
+
+    const expiresAt = now + this.leaseTtlMs;
+    this.db.run(
+      `INSERT INTO task_leases (lease_key, task_id, agent_id, expires_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(lease_key) DO UPDATE SET
+         expires_at = excluded.expires_at,
+         updated_at = excluded.updated_at`,
+      [key, task.id, task.agent_id, expiresAt, now],
+    );
+    await this.persist();
+    this.runningTaskLeases.set(key, expiresAt);
+    return true;
+  }
+
+  private async releaseTaskLease(task: ScheduledTask): Promise<void> {
+    const key = `${task.agent_id}:${task.id}`;
+    this.runningTaskLeases.delete(key);
+    this.db.run("DELETE FROM task_leases WHERE lease_key = ?", [key]);
+    await this.persist();
+  }
+
+  private consumeRetryBudget(task: ScheduledTask): boolean {
+    const key = `${task.agent_id}:${task.id}`;
+    const now = Date.now();
+    const windowStart = now - this.retryBudgetWindowMs;
+    const attempts = (this.retryBudget.get(key) || []).filter((ts) => ts >= windowStart);
+    if (attempts.length >= this.retryBudgetMax) {
+      this.retryBudget.set(key, attempts);
+      return false;
+    }
+    attempts.push(now);
+    this.retryBudget.set(key, attempts);
+    return true;
   }
 
   private async checkAndRunTasks() {
@@ -393,8 +457,29 @@ export class AgentScheduler {
 
     for (const task of this.getAllActiveTasks()) {
       if (task.next_run > now) continue;
+      const ctx = createExecutionContext({ agentId: task.agent_id, taskId: task.id });
+      const startedAt = startTimer();
 
-      logger.info({ taskId: task.id, agentId: task.agent_id, name: task.name }, "Running scheduled task");
+      if (!(await this.acquireTaskLease(task))) {
+        incrementCounter("operant_scheduler_task_skipped_total", 1, { reason: "lock_held", agent: task.agent_id });
+        logger.debug({ ...withPhase(ctx, "scheduler.task.skip"), reason: "lock-held" }, "Scheduled task skipped");
+        continue;
+      }
+
+      const misfireDelay = now - task.next_run;
+      if (misfireDelay > this.maxMisfireDelayMs) {
+        incrementCounter("operant_scheduler_task_skipped_total", 1, { reason: "misfire", agent: task.agent_id });
+        logger.warn({ ...withPhase(ctx, "scheduler.task.misfire"), misfireDelay }, "Skipping stale scheduled task");
+        task.next_run = now + Math.min(this.checkIntervalMs, 60_000);
+        this.db.run("UPDATE scheduled_tasks SET next_run = ? WHERE id = ?", [task.next_run, task.id]);
+        await this.persist();
+        await this.releaseTaskLease(task);
+        continue;
+      }
+
+      logger.info({ ...withPhase(ctx, "scheduler.task.start"), name: task.name }, "Running scheduled task");
+      incrementCounter("operant_scheduler_task_started_total", 1, { agent: task.agent_id, action: task.action });
+      setGauge("operant_scheduler_active_task_lease", 1, { task_id: task.id, agent: task.agent_id });
 
       try {
         await this.executeTask(task, memory);
@@ -418,8 +503,17 @@ export class AgentScheduler {
           [task.last_run, task.next_run, task.run_count, task.status, task.enabled ? 1 : 0, task.id]
         );
         await this.persist();
+        incrementCounter("operant_scheduler_task_success_total", 1, { agent: task.agent_id, action: task.action });
+        logger.info({ ...withPhase(ctx, "scheduler.task.success"), durationMs: elapsedMs(startedAt) }, "Scheduled task completed");
       } catch (err: any) {
-        logger.error({ taskId: task.id, err: err.message }, "Scheduled task execution failed");
+        if (!this.consumeRetryBudget(task)) {
+          incrementCounter("operant_scheduler_task_retry_budget_exhausted_total", 1, { agent: task.agent_id });
+          logger.error({ ...withPhase(ctx, "scheduler.task.retry_budget_exhausted"), durationMs: elapsedMs(startedAt) }, "Scheduled task retry budget exhausted");
+          await this.releaseTaskLease(task);
+          continue;
+        }
+        incrementCounter("operant_scheduler_task_failed_total", 1, { agent: task.agent_id, action: task.action });
+        logger.error({ ...withPhase(ctx, "scheduler.task.failed"), err: err.message, durationMs: elapsedMs(startedAt) }, "Scheduled task execution failed");
         task.fail_count++;
         this.db.run("UPDATE scheduled_tasks SET fail_count = ? WHERE id = ?", [task.fail_count, task.id]);
         await this.persist();
@@ -434,6 +528,9 @@ export class AgentScheduler {
           agentId: task.agent_id,
           context: { taskId: task.id, failCount: task.fail_count },
         });
+      } finally {
+        setGauge("operant_scheduler_active_task_lease", 0, { task_id: task.id, agent: task.agent_id });
+        await this.releaseTaskLease(task);
       }
     }
   }

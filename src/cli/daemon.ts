@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 //
-// Strategos Daemon Management — runtime systemd service lifecycle
-// Usage: strategos daemon {install|start|stop|restart|status|uninstall} [options]
+// Operant Daemon Management — runtime systemd service lifecycle
+// Usage: operant daemon {install|start|stop|restart|status|uninstall} [options]
 //
 
 import { homedir, userInfo } from "node:os";
@@ -15,7 +15,7 @@ import { loadConfig, getConfigPath } from "../config/loader.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-const SERVICE_NAME = "strategos";
+const SERVICE_NAME = "operant";
 const UNIT_NAME = `${SERVICE_NAME}.service`;
 
 function resolveUnitPath(): string {
@@ -23,11 +23,11 @@ function resolveUnitPath(): string {
 }
 
 function resolveDataDir(): string {
-  return join(homedir(), ".local", "share", "strategos");
+  return join(homedir(), ".local", "share", "operant");
 }
 
 function resolveLogDir(): string {
-  return join(homedir(), ".local", "log", "strategos");
+  return join(homedir(), ".local", "log", "operant");
 }
 
 function resolveAppDir(): string {
@@ -121,7 +121,7 @@ function buildUnitFile(params: {
 
   const lines = [
     "[Unit]",
-    `Description=${params.description || "Strategos Multi-Agent Orchestrator"}`,
+    `Description=${params.description || "Operant Multi-Agent Orchestrator"}`,
     "After=network-online.target",
     "Wants=network-online.target",
     "",
@@ -247,7 +247,7 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
         console.log(JSON.stringify({ ok: true, result: "already-installed", unitPath }));
       } else {
         console.log(ok(`Service already installed at ${unitPath}`));
-        console.log(info(`Reinstall with: strategos daemon install --force`));
+        console.log(info(`Reinstall with: operant daemon install --force`));
       }
       return true;
     }
@@ -292,7 +292,7 @@ export async function runDaemonInstall(args: string[]): Promise<boolean> {
 
   // Build unit file
   const unitContent = buildUnitFile({
-    description: "Strategos Multi-Agent Orchestrator",
+    description: "Operant Multi-Agent Orchestrator",
     nodePath,
     scriptPath,
     workingDirectory: appDir,
@@ -470,7 +470,7 @@ export async function runDaemonStatus(args: string[]): Promise<boolean> {
   }
 
   console.log(``);
-  console.log(`${BOLD}${CYAN}── Strategos Service ──${RESET}`);
+  console.log(`${BOLD}${CYAN}── Operant Service ──${RESET}`);
   console.log(`  ${label("Unit file", unitExists ? unitPath : "not installed")}`);
   console.log(`  ${label("Status", isActive ? GREEN + "active" + RESET : YELLOW + "inactive" + RESET)}`);
   console.log(`  ${label("Enabled", isEnabled ? GREEN + "yes" + RESET : YELLOW + "no" + RESET)}`);
@@ -495,7 +495,7 @@ export async function runDaemonStatus(args: string[]): Promise<boolean> {
   }
 
   if (!unitExists && !isActive) {
-    console.log(`\n${YELLOW}Service not installed. Run: strategos daemon install${RESET}`);
+    console.log(`\n${YELLOW}Service not installed. Run: operant daemon install${RESET}`);
   }
 
   console.log(``);
@@ -525,7 +525,7 @@ export async function runDaemon(args: string[]): Promise<boolean> {
       return runDaemonStatus(subArgs);
     default:
       console.log(`${RED}Unknown daemon command: ${subcommand}${RESET}`);
-      console.log(`\n${BOLD}Usage:${RESET} strategos daemon {install|start|stop|restart|status|uninstall} [options]`);
+      console.log(`\n${BOLD}Usage:${RESET} operant daemon {install|start|stop|restart|status|uninstall} [options]`);
       console.log(`\n${BOLD}Options:${RESET}`);
       console.log(`  --force    Force reinstall (for install)`);
       console.log(`  --json     Output as JSON`);

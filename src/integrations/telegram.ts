@@ -1,7 +1,7 @@
 import { Telegraf, Markup } from "telegraf";
 import { logger } from "../logger.js";
 import { cfg, getConfig } from "../config.js";
-import type { StrategosRuntime } from "../types.js";
+import type { OperantRuntime } from "../types.js";
 import { getOrgChart, getCoreStaffIds, getStaffById, AGENT_ID_MAP } from "../staff/core-staff.js";
 import { getMessagingSystem } from "../organic/messaging.js";
 import { getMeetingGovernance } from "../organic/meetings.js";
@@ -295,8 +295,8 @@ async function sendTelegramHtmlChunks(
   }
 }
 
-const STATE_FILE = path.join(os.homedir(), ".strategos", "state", "telegram-routes.json");
-const SHUTDOWN_TS_FILE = path.join(os.homedir(), ".strategos", "state", "shutdown-timestamp.json");
+const STATE_FILE = path.join(os.homedir(), ".operant", "state", "telegram-routes.json");
+const SHUTDOWN_TS_FILE = path.join(os.homedir(), ".operant", "state", "shutdown-timestamp.json");
 
 // ── Module-level routing state (lifted from startTelegram for board meeting access) ──
 
@@ -413,10 +413,10 @@ function readShutdownTimestamp(): number | null {
 
 async function sendCommandsPage(ctx: any, page: number, totalPages: number) {
   const start = (page - 1) * COMMANDS_PER_PAGE;
-  const end = Math.min(start + COMMANDS_PER_PAGE, STRATEGOS_COMMANDS.length);
-  const pageCommands = STRATEGOS_COMMANDS.slice(start, end);
+  const end = Math.min(start + COMMANDS_PER_PAGE, OPERANT_COMMANDS.length);
+  const pageCommands = OPERANT_COMMANDS.slice(start, end);
 
-  const lines = [`<b>📋 Strategos Commands</b> (Page ${page}/${totalPages})\n`];
+  const lines = [`<b>📋 Operant Commands</b> (Page ${page}/${totalPages})\n`];
   for (let i = 0; i < pageCommands.length; i++) {
     const cmd = pageCommands[i];
     lines.push(`<b>/${escapeHtml(cmd.command)}</b> — ${escapeHtml(cmd.description)}`);
@@ -447,7 +447,7 @@ function formatDowntime(ms: number): string {
   return `${hours}h ${remainingMin}m`;
 }
 
-const STRATEGOS_COMMANDS = [
+const OPERANT_COMMANDS = [
   { command: "start", description: "Welcome message" },
   { command: "agent", description: "Pick an agent from inline menu" },
   { command: "meeting", description: "Start/end board meeting" },
@@ -476,7 +476,7 @@ const COMMANDS_PER_PAGE = 10;
 let boardMeetingActive = false;
 let previousRoute: ChatRoute | null = null;
 
-export async function startTelegram(rt: StrategosRuntime) {
+export async function startTelegram(rt: OperantRuntime) {
   if (telegramBot) {
     logger.warn("Telegram bot already running, ignoring duplicate start");
     return telegramBot;
@@ -532,7 +532,7 @@ export async function startTelegram(rt: StrategosRuntime) {
           .filter(Boolean)
           .join("\n");
         
-        const message = `<b>👋 I'm Strategos, your CEO agent.</b>
+        const message = `<b>👋 I'm Operant, your CEO agent.</b>
 
 <b>Core Staff:</b>
 ${staffList}
@@ -653,7 +653,7 @@ The meeting will be processed through the board meeting engine with turn-based d
         if (args[0].toLowerCase() === "end") {
           setRoute(chatId, { participants: ["ceo-strategic"], mode: "single", lastActive: Date.now(), timeoutMs: defaultTimeoutMs });
           persistState();
-          await ctx.reply(`<b>🛑 Meeting ended. Back to Strategos.</b>`, { parse_mode: "HTML" });
+          await ctx.reply(`<b>🛑 Meeting ended. Back to Operant.</b>`, { parse_mode: "HTML" });
           return;
         }
         const wanted = args.map((a: string) => a.toLowerCase());
@@ -909,7 +909,7 @@ Searches across messages, tasks, and stored memories for the CEO agent.`, { pars
     // /help command
     bot.command("help", async (ctx) => {
       try {
-        const helpText = `<b>📋 Strategos Help</b>
+        const helpText = `<b>📋 Operant Help</b>
 
 <b>Organization Commands:</b>
 /org — Organization chart
@@ -1582,7 +1582,7 @@ Usage:
         if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
         const args = (ctx.message as any)?.text?.split(/\s+/).slice(1) || [];
         let page = parseInt(args[0], 10) || 1;
-        const totalPages = Math.ceil(STRATEGOS_COMMANDS.length / COMMANDS_PER_PAGE);
+        const totalPages = Math.ceil(OPERANT_COMMANDS.length / COMMANDS_PER_PAGE);
         if (page < 1) page = 1;
         if (page > totalPages) page = totalPages;
 
@@ -1664,7 +1664,7 @@ Usage:
             memoryStatus = memoryCount > 0 ? `🟢 Active (${memoryCount} entries)` : "🟡 Empty";
           } catch { memoryStatus = "🔴 Error"; }
 
-          await ctx.reply(`<b>✅ Strategos System Status</b>
+          await ctx.reply(`<b>✅ Operant System Status</b>
 
 <b>Active agent:</b> ${activeAgentDisplay}
 
@@ -1775,7 +1775,7 @@ ${agentLines}`, { parse_mode: "HTML" });
       }
     });
 
-    // /restart — Graceful restart of the Strategos daemon
+    // /restart — Graceful restart of the Operant daemon
     bot.command("restart", async (ctx) => {
       if (ctx.chat.id.toString() !== cfg.telegramChatId) return;
 
@@ -1785,7 +1785,7 @@ ${agentLines}`, { parse_mode: "HTML" });
         recordShutdownTimestamp();
 
         // Reply and wait for it to be sent
-        await ctx.reply(`<b>🔄 Restarting Strategos...</b>
+        await ctx.reply(`<b>🔄 Restarting Operant...</b>
 
 Saving state and restarting. I'll be back in a moment.`, { parse_mode: "HTML" });
 
@@ -2069,9 +2069,9 @@ Usage: /model set [model_name]
 <i>Note: Model switching requires editing the config file.</i>
 
 <b>To change the model:</b>
-1. Run: <code>strategos configure --section llm</code>
+1. Run: <code>operant configure --section llm</code>
 2. Select your desired model
-3. Or edit <code>~/.strategos/config.json</code> directly
+3. Or edit <code>~/.operant/config.json</code> directly
 
 <b>Environment override:</b>
 Set <code>AGENT_LLM_MODEL</code> in your .env file.`, { parse_mode: "HTML" });
@@ -2084,7 +2084,7 @@ Requested: <code>${escapeHtml(modelName)}</code>
 <i>Model switching requires a config change.</i>
 
 <b>To apply:</b>
-1. Run: <code>strategos configure --section llm</code>
+1. Run: <code>operant configure --section llm</code>
 2. Or set <code>AGENT_LLM_MODEL=${escapeHtml(modelName)}</code> in .env
 3. Restart: <code>/restart</code>`, { parse_mode: "HTML" });
           return;
@@ -2228,7 +2228,7 @@ Example:
         let agentReply = "(no reply)";
 
         try {
-          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", contextId: ctx.chat.id.toString() });
           const result = await runtime.sendMessage(sid, taskText, nativeAgentId);
           agentReply = result.text || "(empty response)";
         } catch (err: any) {
@@ -2367,7 +2367,7 @@ Escalates the message to the CEO with P1 priority.`, { parse_mode: "HTML" });
         const runtime = getNativeRuntime();
         const ceoNativeId = AGENT_ID_MAP["ceo-strategic"] || "ceo-strategic";
         try {
-          const ceoSid = await runtime.getOrCreateRuntimeSession(ceoNativeId, { mode: "message" });
+          const ceoSid = await runtime.getOrCreateRuntimeSession(ceoNativeId, { mode: "message", contextId: chatId });
           await runtime.sendMessage(ceoSid, `🚨 ESCALATION from ${activeAgentName}:\n\n${escalationMessage}`, ceoNativeId);
         } catch (err: any) {
           logger.warn({ err: err.message }, "Escalation: direct CEO runtime notify failed — messaging send succeeded");
@@ -2446,7 +2446,7 @@ Example:
         let agentReply = "(no reply)";
 
         try {
-          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+          const sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", contextId: chatId });
           const result = await runtime.sendMessage(sid, messageText, nativeAgentId);
           agentReply = result.text || "(empty response)";
         } catch (err: any) {
@@ -2592,7 +2592,7 @@ Example:
               let reply = "(no reply)";
               let sid: string | undefined;
               try {
-                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", contextId: ctx.chat.id.toString() });
                 logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending media delta to native runtime...");
                 const result = await runtime.sendMessage(sid, delta, nativeAgentId);
                 logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
@@ -2754,7 +2754,7 @@ Example:
               let reply = "(no reply)";
               let sid: string | undefined;
               try {
-                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message" });
+                sid = await runtime.getOrCreateRuntimeSession(nativeAgentId, { mode: "message", contextId: chatId });
                 logger.info({ agentId, nativeAgentId, sessionId: sid }, "Sending delta to native runtime...");
                 const result = await runtime.sendMessage(sid, delta, nativeAgentId);
                 logger.info({ agentId, textLength: result.text?.length, tokens: result.tokens }, "Native runtime response received");
@@ -2973,7 +2973,7 @@ Example:
         return;
       }
       const page = parseInt(ctx.match[1], 10);
-      const totalPages = Math.ceil(STRATEGOS_COMMANDS.length / COMMANDS_PER_PAGE);
+      const totalPages = Math.ceil(OPERANT_COMMANDS.length / COMMANDS_PER_PAGE);
       if (page < 1 || page > totalPages) {
         await ctx.answerCbQuery("Invalid page");
         return;
@@ -2981,10 +2981,10 @@ Example:
       await ctx.answerCbQuery();
       try {
         const start = (page - 1) * COMMANDS_PER_PAGE;
-        const end = Math.min(start + COMMANDS_PER_PAGE, STRATEGOS_COMMANDS.length);
-        const pageCommands = STRATEGOS_COMMANDS.slice(start, end);
+        const end = Math.min(start + COMMANDS_PER_PAGE, OPERANT_COMMANDS.length);
+        const pageCommands = OPERANT_COMMANDS.slice(start, end);
 
-        const lines = [`<b>📋 Strategos Commands</b> (Page ${page}/${totalPages})\n`];
+        const lines = [`<b>📋 Operant Commands</b> (Page ${page}/${totalPages})\n`];
         for (let i = 0; i < pageCommands.length; i++) {
           const cmd = pageCommands[i];
           lines.push(`<b>/${escapeHtml(cmd.command)}</b> — ${escapeHtml(cmd.description)}`);

@@ -328,7 +328,7 @@ export class MeetingGovernance {
       await messaging.send({
         from: "system",
         to: member.id,
-        content: `🏛 BOARD MEETING STARTED: ${proposal.title}\n\nYou're expected to participate. Strategos will facilitate.`,
+        content: `🏛 BOARD MEETING STARTED: ${proposal.title}\n\nYou're expected to participate. Operant will facilitate.`,
         priority: proposal.urgency,
         requires_response: false,
         subject: `Meeting Started: ${proposal.title}`
@@ -336,7 +336,7 @@ export class MeetingGovernance {
     }
 
     logger.info({ meeting_id, title: proposal.title }, "Meeting execution started");
-    return { success: true, message: "Meeting convened, Strategos notified to facilitate" };
+    return { success: true, message: "Meeting convened, Operant notified to facilitate" };
   }
 
   async checkAndExecuteMeetings(): Promise<number> {

@@ -17,7 +17,7 @@ async function run() {
     try {
       mod = await import(srcPath);
     } catch {
-      console.error("Error: Cannot find Strategos CLI program.");
+      console.error("Error: Cannot find Operant CLI program.");
       console.error("Run: bun run build");
       process.exit(1);
     }

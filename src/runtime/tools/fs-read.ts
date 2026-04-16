@@ -35,7 +35,7 @@ export function createFsReadTool() {
 
       // Resolve workspace directory
       const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
-      const workspaceDir = path.join(homeDir, ".strategos", "agents", agent_id);
+      const workspaceDir = path.join(homeDir, ".operant", "agents", agent_id);
 
       // Security: validate path is within workspace
       if (file_path.includes("..")) {

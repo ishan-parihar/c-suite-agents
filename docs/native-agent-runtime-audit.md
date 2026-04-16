@@ -136,4 +136,4 @@ The most severe finding: **compaction does not actually summarize content**. Whe
 
 ---
 
-*Audit conducted by comparing Strategos implementation against OpenClaw (722-line system prompt builder, 530-line compaction module) and OpenCode (428-line compaction module) reference implementations.*
+*Audit conducted by comparing Operant implementation against OpenClaw (722-line system prompt builder, 530-line compaction module) and OpenCode (428-line compaction module) reference implementations.*

@@ -14,11 +14,17 @@ import { retryAsync, isRetryableError, type RetryOptions } from "./retry.js";
 import {
   createFailoverChain,
   getCurrentModel,
+  classifyFailoverReason,
   shouldFailover,
   failoverToNext,
   resetFailover,
+  createBillingBackoffRegistry,
+  recordBillingError,
+  clearBillingBackoff,
+  getBillingBackoffRemainingMs,
   type FailoverState,
   type ModelEntry,
+  type BillingBackoffRegistry,
 } from "./model-fallback.js";
 import { loadConfig } from "../config/loader.js";
 import { OpenAICompatibleProvider, PromptCacheTracker, createPromptFingerprint, type StreamEvent } from "./provider.js";
@@ -92,6 +98,7 @@ export class NativeAgentRuntime {
   private agentSessions = new Map<string, string>();
   private sessionInitPromises = new Map<string, Promise<string>>();
   private failoverState: FailoverState | null = null;
+  private billingBackoff: BillingBackoffRegistry;
   private contextWindowInfo: ContextWindowInfo;
   private skillRegistries = new Map<string, SkillRegistry>();
   private loopDetectionConfig: ToolLoopDetectionConfig;
@@ -113,6 +120,7 @@ export class NativeAgentRuntime {
     });
 
     this.failoverState = this.buildFailoverChain();
+    this.billingBackoff = createBillingBackoffRegistry();
     this.updateClientForModel();
     this.initProvider();
     this.contextManager.setSummarizeFn(this.compactionSummarizeFn.bind(this));
@@ -306,35 +314,39 @@ export class NativeAgentRuntime {
   async getOrCreateRuntimeSession(agentId: string, options?: {
     memoryInjection?: string;
     mode?: "full" | "heartbeat" | "message" | "minimal";
+    contextId?: string;
   }): Promise<string> {
-    const existing = this.agentSessions.get(agentId);
+    const sessionKey = `${agentId}:${options?.contextId ?? "__default__"}`;
+    const existing = this.agentSessions.get(sessionKey);
     if (existing) {
       const session = this.contextManager.getSession(existing);
       if (session) return existing;
     }
 
-    let initPromise = this.sessionInitPromises.get(agentId);
+    let initPromise = this.sessionInitPromises.get(sessionKey);
     if (!initPromise) {
       initPromise = (async () => {
         const sessionId = this.createSession(agentId, options);
-        this.agentSessions.set(agentId, sessionId);
+        this.agentSessions.set(sessionKey, sessionId);
         return sessionId;
       })().then(sessionId => {
-        this.sessionInitPromises.delete(agentId);
+        this.sessionInitPromises.delete(sessionKey);
         return sessionId;
       }).catch((err) => {
-        this.sessionInitPromises.delete(agentId);
-        logger.error({ agentId, err: err.message }, "Session init failed");
+        this.sessionInitPromises.delete(sessionKey);
+        logger.error({ agentId, sessionKey, err: err.message }, "Session init failed");
         throw err;
       });
-      this.sessionInitPromises.set(agentId, initPromise);
+      this.sessionInitPromises.set(sessionKey, initPromise);
     }
     return initPromise;
   }
 
   restoreSession(agentId: string, sessionId: string, options?: {
     mode?: "full" | "heartbeat" | "message" | "minimal";
+    contextId?: string;
   }): boolean {
+    const sessionKey = `${agentId}:${options?.contextId ?? "__default__"}`;
     const systemPrompt = buildSystemPrompt({
       agentId,
       mode: options?.mode || "full",
@@ -345,20 +357,21 @@ export class NativeAgentRuntime {
     });
 
     if (created) {
-      this.agentSessions.set(agentId, sessionId);
+      this.agentSessions.set(sessionKey, sessionId);
       logger.info({ sessionId, agentId }, "Session restored from persisted state");
       return true;
     }
 
     logger.warn({ sessionId, agentId }, "Session restoration failed — creating fresh session");
     const newSessionId = this.createSession(agentId, options);
-    this.agentSessions.set(agentId, newSessionId);
+    this.agentSessions.set(sessionKey, newSessionId);
     return false;
   }
 
   async sendMessage(sessionId: string, message: string, agentId?: string): Promise<AgentExecutionResult> {
     const session = this.contextManager.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const correlationId = uuidv4();
 
     const resolvedAgentId = session.agentId;
 
@@ -387,7 +400,7 @@ export class NativeAgentRuntime {
         }
       }
 
-      const response = await this.callLLMWithRetry(messages, undefined, session.agentId);
+      const response = await this.callLLMWithRetry(messages, undefined, session.agentId, "message");
 
       if (response.usage) {
         if (round === 0) {
@@ -525,6 +538,7 @@ export class NativeAgentRuntime {
         summaryMessages,
         undefined,
         session.agentId,
+        "message",
       );
 
       if (summaryResponse.usage) {
@@ -554,6 +568,7 @@ export class NativeAgentRuntime {
     const substantive = hasSubstantiveFinding(finalText);
 
     logger.info({
+      correlationId,
       sessionId,
       agentId: session.agentId,
       silentAck,
@@ -819,7 +834,7 @@ export class NativeAgentRuntime {
     const response = await this.callLLMWithRetry(summaryMessages, {
       temperature: 0.1,
       maxTokens: 2048,
-    });
+    }, undefined, "summary");
 
     const text = response.content
       .filter(c => c.type === "text")
@@ -843,6 +858,7 @@ export class NativeAgentRuntime {
     messages: ChatMessage[],
     options?: { temperature?: number; maxTokens?: number },
     agentId?: string,
+    executionMode: "message" | "heartbeat" | "stream" | "summary" = "message",
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
@@ -867,7 +883,7 @@ export class NativeAgentRuntime {
     const label = `llm-call:${this.config.llm.model}`;
 
     return retryAsync(
-      () => this.callLLMWithFailover(messages, options, agentId),
+      () => this.callLLMWithFailover(messages, options, agentId, executionMode),
       {
         attempts: retryConfig,
         minDelayMs,
@@ -905,23 +921,53 @@ export class NativeAgentRuntime {
     messages: ChatMessage[],
     options?: { temperature?: number; maxTokens?: number },
     agentId?: string,
+    executionMode: "message" | "heartbeat" | "stream" | "summary" = "message",
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
     usage?: { total_tokens: number; prompt_tokens: number; completion_tokens: number };
   }> {
     if (!this.failoverState) {
-      return this.callLLM(messages, options, agentId);
+      return this.callLLM(messages, options, agentId, executionMode);
     }
 
     const currentModel = getCurrentModel(this.failoverState);
+    const backoffRemaining = getBillingBackoffRemainingMs(
+      this.billingBackoff,
+      currentModel.provider,
+      currentModel.model,
+    );
+    if (backoffRemaining > 0) {
+      const nextModel = failoverToNext(this.failoverState, undefined, "billing_error");
+      if (!nextModel) {
+        throw new Error(`Model in billing cooldown (${Math.ceil(backoffRemaining / 60000)}min remaining): ${currentModel.provider}/${currentModel.model}`);
+      }
+      logger.warn({ fromModel: currentModel.model, toModel: nextModel.model, backoffRemaining }, "Failover due to billing cooldown");
+    }
     this.updateClientForModel();
 
     try {
-      const result = await this.callLLM(messages, options, agentId);
+      const result = await this.callLLM(messages, options, agentId, executionMode);
+      clearBillingBackoff(this.billingBackoff, currentModel.provider, currentModel.model);
       resetFailover(this.failoverState);
       return result;
     } catch (err: unknown) {
+      const classified = classifyFailoverReason(err);
+      if (classified === "billing_error") {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const { cooldownMs } = recordBillingError(
+          this.billingBackoff,
+          currentModel.provider,
+          currentModel.model,
+          errMsg,
+        );
+        logger.error({ provider: currentModel.provider, model: currentModel.model, cooldownMs }, "Billing error, model placed in cooldown");
+        const nextModel = failoverToNext(this.failoverState, err instanceof Error ? err : new Error(errMsg), classified);
+        if (!nextModel) throw new Error(`Billing error with no fallback models: ${errMsg}`);
+        this.updateClientForModel();
+        return this.callLLM(messages, options, agentId, executionMode);
+      }
+
       const { should: shouldFail, reason } = shouldFailover(err);
 
       if (!shouldFail) {
@@ -950,7 +996,7 @@ export class NativeAgentRuntime {
       );
 
       this.updateClientForModel();
-      return this.callLLM(messages, options, agentId);
+      return this.callLLM(messages, options, agentId, executionMode);
     }
   }
 
@@ -960,6 +1006,7 @@ export class NativeAgentRuntime {
     messages: ChatMessage[],
     options?: { temperature?: number; maxTokens?: number },
     agentId?: string,
+    executionMode: "message" | "heartbeat" | "stream" | "summary" = "message",
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     toolCalls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
@@ -997,12 +1044,12 @@ export class NativeAgentRuntime {
       }));
     }
 
-    let timeoutMs = 120000;
+    let timeoutMs = this.resolveTimeoutMs(executionMode);
     try {
       const fullConfig = loadConfig();
-      timeoutMs = fullConfig.llm?.timeoutMs ?? this.config.llm.timeoutMs ?? 120000;
+      timeoutMs = fullConfig.llm?.timeoutMs ?? this.config.llm.timeoutMs ?? this.resolveTimeoutMs(executionMode);
     } catch {
-      timeoutMs = this.config.llm.timeoutMs ?? 120000;
+      timeoutMs = this.config.llm.timeoutMs ?? this.resolveTimeoutMs(executionMode);
     }
 
     const controller = new AbortController();
@@ -1104,7 +1151,7 @@ export class NativeAgentRuntime {
           }))
         : undefined;
 
-      let timeoutMs = this.config.llm.timeoutMs ?? 120000;
+      let timeoutMs = this.resolveTimeoutMs("stream");
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -1291,6 +1338,15 @@ export class NativeAgentRuntime {
 
       // Continue the loop — next iteration will stream with tool results in context
     }
+  }
+
+  private resolveTimeoutMs(mode: "message" | "heartbeat" | "stream" | "summary"): number {
+    const explicit = this.config.llm.timeoutMs;
+    if (typeof explicit === "number" && explicit > 0) return explicit;
+    if (mode === "heartbeat") return 60_000;
+    if (mode === "summary") return 90_000;
+    if (mode === "stream") return 180_000;
+    return 120_000;
   }
 }
 

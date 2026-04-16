@@ -1,7 +1,7 @@
-Strategos — OpenCode MCP Orchestrator (Dev & R&D)
+Operant — OpenCode MCP Orchestrator (Dev & R&D)
 
 Overview
-- Purpose: A headless, OpenCode‑compatible multi‑agent orchestrator (like openclaw, but focused on development/R&D) implemented in TypeScript. Strategos is the primary agent and MCP server. It manages sub‑agents, schedules heartbeat checks, composes instructions with per‑agent memory retrieved from LanceDB (Ollama embeddings), and exposes native tools for lifecycle, tasking, and observability. Access via Telegram and CLI; Kanban stored in SQLite.
+- Purpose: A headless, OpenCode‑compatible multi‑agent orchestrator (like openclaw, but focused on development/R&D) implemented in TypeScript. Operant is the primary agent and MCP server. It manages sub‑agents, schedules heartbeat checks, composes instructions with per‑agent memory retrieved from LanceDB (Ollama embeddings), and exposes native tools for lifecycle, tasking, and observability. Access via Telegram and CLI; Kanban stored in SQLite.
 - Scope: Agent orchestration (ACP/headless), per‑agent memory (vector + metadata), Kanban workflow, heartbeat management, notifications, and integration points to opencode hosts.
 - Non‑goals (initial): Rich UI, long‑term analytics, advanced policy engine. These can be added later.
 
@@ -10,10 +10,10 @@ Key Decisions
 - Protocol: MCP (Model Context Protocol) for tools/resources/prompts; stdio for local & Streamable HTTP for remote
 - Memory: LanceDB per agent with vector column (Ollama embeddings; Qwen3‑0.6B embedding model preferred; fallbacks allowed)
 - Kanban: SQLite (via better‑sqlite3 or prisma/sqlite) per namespace
-- Access: Telegram bot → Strategos MCP tools; CLI/host integration via stdio or HTTP
+- Access: Telegram bot → Operant MCP tools; CLI/host integration via stdio or HTTP
 
 Architecture
-- Strategos (primary)
+- Operant (primary)
   - MCP server exposing tools: agent.*, project.*, board.*, task.*, memory.*, heartbeat.*, notify.*
   - Scheduler: 15/30‑minute heartbeat loop per agent/project; on‑demand trigger
   - Registry: agents, projects, memory DB paths, board IDs, tool configuration
@@ -30,7 +30,7 @@ Architecture
   - Statuses: Backlog → Todo → In Progress → Blocked → Review → Done
   - Every transition writes an event into memory
 - ACP (Headless OpenCode Control)
-  - Strategy: implement ACP as MCP tool schema + optional HTTP endpoint. Strategos emits RegisterAgent, AssignProject, CreateTask, UpdateTask, Heartbeat, MemoryOps. Sub‑agents implement reciprocal tools.
+  - Strategy: implement ACP as MCP tool schema + optional HTTP endpoint. Operant emits RegisterAgent, AssignProject, CreateTask, UpdateTask, Heartbeat, MemoryOps. Sub‑agents implement reciprocal tools.
 
 Data Models (initial)
 - LanceDB (per agent)
@@ -56,7 +56,7 @@ Embedding & Memory
 - Search Path: kNN with filters (tags, project_id, type), re‑rank by importance & recency
 - Rollups: heartbeat composes summaries (structured prompts) and pins references; enforce TTL on low importance events
 
-MCP Surfaces (Strategos)
+MCP Surfaces (Operant)
 - Transport: StdioServerTransport (local), Streamable HTTP (remote)
 - Tools (JSON Schema via Zod). All tools MUST be idempotent where relevant.
   - agent.create { name, role, model, tools[], memory_path?, board_id? } → { agent_id }
@@ -89,14 +89,14 @@ MCP Surfaces (Agent Runner)
   - kanban.update { card_id, status|fields } → { ok }
   - status.report { } → { health, current_tasks, last_error? }
 
-Instruction Composition (Strategos → Sub‑agent)
-- Strategos builds instructions for sub‑agents that include:
+Instruction Composition (Operant → Sub‑agent)
+- Operant builds instructions for sub‑agents that include:
   - System prompt for sub‑agent role (dev/R&D tuned)
   - Project context (objectives, constraints)
   - Kanban focus (current card + acceptance criteria)
   - Retrieved memory (top_k relevant events/decisions/artifacts summaries)
   - Guardrails (time budget, output format expectations)
-- Strategos sends job.execute with composed instructions; captures outputs; updates Kanban; records memory.
+- Operant sends job.execute with composed instructions; captures outputs; updates Kanban; records memory.
 
 Heartbeat (15/30 minute)
 - Quick (15 min): status polling, overdue detection, drift (no update in N hours), recent failures, notify if needed
@@ -109,7 +109,7 @@ Heartbeat (15/30 minute)
   5) Log heartbeat metrics
 
 Telegram Integration
-- Bot wraps Strategos tools
+- Bot wraps Operant tools
   - /agents → agent.status
   - /board <agent> → board.get
   - /task <agent> <title> |desc:...|prio:...|due:... → board.addCard
@@ -124,19 +124,19 @@ OpenCode Headless / ACP Notes
 - Operate over stdio for local orchestration; Streamable HTTP for remote runners
 - ACP is expressed via MCP tool contracts so OpenCode hosts can spawn/connect servers
 - For OpenCode “like openclaw” dev flows:
-  - Strategos exposes native build/test/deploy hooks as tools or delegates to Agent Runners with those tools
-  - Strategos maintains a registry of MCP servers (runners) and their capabilities; can hot‑add/remove runners
+  - Operant exposes native build/test/deploy hooks as tools or delegates to Agent Runners with those tools
+  - Operant maintains a registry of MCP servers (runners) and their capabilities; can hot‑add/remove runners
 
 Example Code (TypeScript snippets)
 
-// Strategos MCP server skeleton
+// Operant MCP server skeleton
 // Tools registration outline; wrap each with Zod schemas
 /*
 import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod";
 
-const server = new McpServer({ name: "strategos", version: "0.1.0" }, { capabilities: { logging: {} } });
+const server = new McpServer({ name: "operant", version: "0.1.0" }, { capabilities: { logging: {} } });
 
 server.registerTool("memory.upsert", {
   description: "Upsert memory row for an agent",
@@ -154,7 +154,7 @@ server.registerTool("memory.upsert", {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Strategos MCP running on stdio");
+  console.error("Operant MCP running on stdio");
 }
 main().catch(e => { console.error("Fatal:", e); process.exit(1); });
 */
@@ -180,7 +180,7 @@ Security & Governance
 
 Deployment
 - Monorepo structure (suggested):
-  - packages/strategos (MCP server + scheduler + Telegram)
+  - packages/operant (MCP server + scheduler + Telegram)
   - packages/agent-runner (generic runner template)
   - packages/shared (schemas, types, clients)
   - infra/ (Dockerfiles, compose, PM2 configs)
@@ -188,7 +188,7 @@ Deployment
 - Remote: Streamable HTTP behind auth; runners containerized; storageOptions for S3 if needed
 
 Milestones
-1) Strategos skeleton + tool stubs; registry; logging
+1) Operant skeleton + tool stubs; registry; logging
 2) Memory MVP: LanceDB events, memory.upsert/search wired to Ollama
 3) Kanban MVP: SQLite schema; board.* tools; transitions write memory events
 4) Heartbeat (quick) + notify (Telegram)
@@ -218,7 +218,7 @@ Open Questions (track)
 - Do we unify Kanban in LanceDB (scalar columns) later or keep SQLite long‑term?
 
 Fork OpenClaw vs Headless OpenCode ACP
-- Summary: Use headless OpenCode ACP with Strategos. Do not fork OpenClaw.
+- Summary: Use headless OpenCode ACP with Operant. Do not fork OpenClaw.
 - Evidence (current ecosystem):
   - OpenCode provides first‑class ACP support (`opencode acp`) and a headless HTTP server (`opencode serve`). Docs: ACP, CLI, Server.
   - ACP is stable across editors/CLIs and works via JSON‑RPC over stdio; systemd‑friendly.
@@ -226,18 +226,18 @@ Fork OpenClaw vs Headless OpenCode ACP
   - OpenClaw has useful patterns (skills, MCP integrations, community skills, Mission Control) but is broader than dev/R&D and adds governance complexity we don’t need.
   - Forking couples us to their internals and release cadence, conflicts with our TypeScript focus, and increases maintenance risk.
 - Recommendation:
-  - Build Strategos as a TypeScript MCP server that drives OpenCode via ACP sessions (stdio) and/or HTTP server. Keep orchestration in Strategos, coding in OpenCode agents.
-  - Reuse MCP servers/skills where helpful by configuring them into OpenCode/Strategos—without forking OpenClaw.
-  - Optionally support `acpx` as an adapter to manage heterogeneous ACP agents; keep Strategos as the single control plane.
+  - Build Operant as a TypeScript MCP server that drives OpenCode via ACP sessions (stdio) and/or HTTP server. Keep orchestration in Operant, coding in OpenCode agents.
+  - Reuse MCP servers/skills where helpful by configuring them into OpenCode/Operant—without forking OpenClaw.
+  - Optionally support `acpx` as an adapter to manage heterogeneous ACP agents; keep Operant as the single control plane.
 
 Systemd/Headless Deployment Notes
-- Run Strategos as a systemd service (Type=simple) that:
-  - Starts Strategos (node dist/index.js) with env for Telegram, Ollama, DB paths.
+- Run Operant as a systemd service (Type=simple) that:
+  - Starts Operant (node dist/index.js) with env for Telegram, Ollama, DB paths.
   - Spawns and supervises `opencode acp` background sessions on demand; reconnects across restarts.
   - On heartbeat or Telegram message, composes instructions (project + Kanban + memory recall) and sends ACP prompts to the appropriate OpenCode session.
 - Ensure journald captures stderr logs; set restart policies according to SLOs.
 
-## Conversational Layer: Headless OpenCode as Strategos Brain
+## Conversational Layer: Headless OpenCode as Operant Brain
 
 ### Investigation Results
 
@@ -249,14 +249,14 @@ Systemd/Headless Deployment Notes
 | `opencode serve` HTTP | ❌ Web UI only | Not a JSON API |
 | `opencode acp` JSON-RPC | ⚠️ Complex | Requires strict protocol params |
 
-**Recommended:** Use `opencode run` as Strategos's brain via subprocess.
+**Recommended:** Use `opencode run` as Operant's brain via subprocess.
 
 ### Architecture
 
 ```
 User Message (Telegram/CLI)
          ↓
-Strategos Brain (src/brain/opencode.ts)
+Operant Brain (src/brain/opencode.ts)
    - Spawns: opencode run "<system prompt + user message>"
    - Parses: JSON response with {analysis, actions[], reply}
    - Executes: MCP tool calls from actions[]
@@ -266,7 +266,7 @@ Natural Language Response to User
 
 ### Implementation
 
-- `src/brain/opencode.ts` — `strategosThink()` function
+- `src/brain/opencode.ts` — `operantThink()` function
 - System prompt defines CEO role, available tools, response format
 - Timeout: 60 seconds per thinking cycle
 - Response: JSON with analysis, actions to execute, natural language reply
@@ -298,7 +298,7 @@ Every 15/30 min:
 
 ### Next Steps
 
-1. Integrate `strategosThink()` into Telegram bot
+1. Integrate `operantThink()` into Telegram bot
 2. Add `agent.spawn` tool that launches `opencode acp` sessions
 3. Build instruction composer for delegation
 4. Implement heartbeat auditing logic
@@ -309,7 +309,7 @@ Every 15/30 min:
 
 ### Organizational Structure
 
-Strategos operates as CEO managing a company of AI agents:
+Operant operates as CEO managing a company of AI agents:
 
 **Core Staff (C-Suite, Predefined):**
 - CTO — Tech architecture, dev team management
@@ -320,7 +320,7 @@ Strategos operates as CEO managing a company of AI agents:
 - Research Lead — R&D, competitive analysis
 
 **Auxiliary Staff (Dynamic, Hired/Fired):**
-- Contractors hired by Strategos based on workload
+- Contractors hired by Operant based on workload
 - Assigned to Core Staff managers
 - Released when tasks complete
 
@@ -376,12 +376,12 @@ See `docs/operational-model.md` for full analysis.
 
 | Agent ID | Role | Avatar | Autonomy | Board Seat | Reports To |
 |----------|------|--------|----------|------------|------------|
-| `strategos` | CEO — Strategic | 👔 | 4 | Yes | — |
-| `coo-productivity` | COO — Productivity | ⚙️ | 3 | Yes | strategos |
-| `cpo-psychologist` | CPO — Psychologist | 🧠 | 3 | Yes | strategos |
-| `cro-relational` | CRO — Relational | 🤝 | 3 | Yes | strategos |
-| `cfo-financial` | CFO — Financial | 💰 | 3 | Yes | strategos |
-| `cmo-content` | CMO — Content | 📝 | 3 | Yes | strategos |
+| `operant` | CEO — Strategic | 👔 | 4 | Yes | — |
+| `coo-productivity` | COO — Productivity | ⚙️ | 3 | Yes | operant |
+| `cpo-psychologist` | CPO — Psychologist | 🧠 | 3 | Yes | operant |
+| `cro-relational` | CRO — Relational | 🤝 | 3 | Yes | operant |
+| `cfo-financial` | CFO — Financial | 💰 | 3 | Yes | operant |
+| `cmo-content` | CMO — Content | 📝 | 3 | Yes | operant |
 | `physician-health` | Physician — Health | 🩺 | 2 | No | coo-productivity |
 
 ### New MCP Tools
@@ -413,7 +413,7 @@ See `docs/operational-model.md` for full analysis.
 ### Testing
 
 ```bash
-# Start Strategos
+# Start Operant
 OLLAMA_EMBED_MODEL="qwen3-embedding:0.6b" npm start
 
 # Telegram commands
@@ -493,7 +493,7 @@ YOUR DATABASES (LifeOS Full Suite):
 YOUR AUTHORITY:
 - Autonomy Level: 3/4
 - Board Seat: Yes (voting rights)
-- Reports To: strategos
+- Reports To: operant
 
 RESPONSE STYLE:
 - Data-driven, precise
@@ -538,14 +538,14 @@ RESPONSE STYLE:
 ### Testing
 
 ```bash
-# Start Strategos
+# Start Operant
 OLLAMA_EMBED_MODEL="qwen3-embedding:0.6b" npm start
 
 # Logs show:
 # "Initializing core staff..."
 # "Core staff initialized: 7 agents"
 # "Company memory initialized"
-# "Strategos MCP running"
+# "Operant MCP running"
 
 # MCP tools available:
 lifeos.query({database: "projects", filter_property: "Status", filter_value: "Active"})
@@ -563,7 +563,7 @@ lifeos.people.reconnect()
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    STRATEGOS (CEO)                              │
+│                    OPERANT (CEO)                              │
 │  Databases: All 19 LifeOS DBs                                   │
 │  Tools: lifeos.*, org.*, staff.*, memory.*, board.*, heartbeat │
 │  Memory: Personal + Project + Company (qwen3-embedding)         │

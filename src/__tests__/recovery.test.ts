@@ -202,6 +202,37 @@ describe("RecoveryRegistry", () => {
       expect(event.escalation_triggered).toBe(false);
       expect(callCount).toBe(2);
     });
+
+    test("respects recipe cooloff window after exhaustion", async () => {
+      const registry = RecoveryRegistry.getInstance();
+      registry.register({
+        scenario: FailureScenario.AgentHeartbeatFailure,
+        steps: [async () => ({ success: false, message: "fail" })],
+        maxAttempts: 1,
+        escalationPolicy: "AlertUser",
+        description: "cooloff recipe",
+        cooloffMs: 60_000,
+      });
+
+      const first = await registry.execute(FailureScenario.AgentHeartbeatFailure, {
+        error: new Error("boom"),
+        scenario: FailureScenario.AgentHeartbeatFailure,
+        attemptNumber: 1,
+        agentId: "agent-cooloff",
+      });
+      expect(first.success).toBe(false);
+      expect(first.escalation_triggered).toBe(true);
+
+      const second = await registry.execute(FailureScenario.AgentHeartbeatFailure, {
+        error: new Error("boom-again"),
+        scenario: FailureScenario.AgentHeartbeatFailure,
+        attemptNumber: 1,
+        agentId: "agent-cooloff",
+      });
+      expect(second.success).toBe(false);
+      expect(second.escalation_triggered).toBe(false);
+      expect(second.message.toLowerCase()).toContain("cooloff");
+    });
   });
 
   describe("event listeners", () => {

@@ -1,5 +1,5 @@
 /**
- * Per-agent native tool scoping for the Strategos multi-agent system.
+ * Per-agent native tool scoping for the Operant multi-agent system.
  *
  * Previously, all 65+ native tools were broadcast to every agent. This module
  * restricts each agent to only the tools relevant to their role, reducing

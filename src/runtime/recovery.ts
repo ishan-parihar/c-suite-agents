@@ -1,4 +1,8 @@
 import { logger } from "../logger.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { startTimer, elapsedMs } from "./observability.js";
+import { incrementCounter } from "./metrics.js";
 
 /**
  * Recovery Recipes — encoded failure playbooks with auto-attempt + escalation.
@@ -37,7 +41,7 @@ import { logger } from "../logger.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Failure scenarios specific to the Strategos multi-agent orchestration system.
+ * Failure scenarios specific to the Operant multi-agent orchestration system.
  * Each scenario represents a distinct failure mode with a dedicated recovery recipe.
  */
 export enum FailureScenario {
@@ -132,6 +136,8 @@ export interface RecoveryRecipe {
   escalationPolicy: EscalationPolicy;
   /** Human-readable description for logging and debugging. */
   description: string;
+  /** Cooloff window after exhausted attempts to avoid thrashing (ms). */
+  cooloffMs?: number;
 }
 
 /**
@@ -155,6 +161,97 @@ export interface RecoveryEvent {
   agentId?: string;
   /** Summary message from the recovery process. */
   message: string;
+  /** Optional correlation id for tracing recovery lifecycle. */
+  correlationId?: string;
+}
+
+interface RecoveryState {
+  attempts: number;
+  lastAttemptAt: number;
+  cooldownUntil: number;
+  lastResult?: string;
+  verificationResult?: string;
+}
+
+class RecoveryStateStore {
+  private filePath: string;
+  private lockPath: string;
+  private state = new Map<string, RecoveryState>();
+
+  constructor() {
+    const base = process.env.OPERANT_DATA_DIR || process.cwd();
+    this.filePath = path.join(base, "data", "recovery-state.json");
+    this.lockPath = `${this.filePath}.lock`;
+    this.load();
+  }
+
+  private load(): void {
+    try {
+      if (!fs.existsSync(this.filePath)) return;
+      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf-8")) as Record<string, RecoveryState>;
+      for (const [k, v] of Object.entries(parsed)) this.state.set(k, v);
+    } catch {
+      // best effort
+    }
+  }
+
+  private persist(): void {
+    const lockFd = this.acquireLock();
+    if (lockFd === null) return;
+    try {
+      fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+      const obj: Record<string, RecoveryState> = {};
+      for (const [k, v] of this.state) obj[k] = v;
+
+      const tmpPath = `${this.filePath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(obj, null, 2), "utf-8");
+      fs.renameSync(tmpPath, this.filePath);
+    } catch {
+      // best effort
+    } finally {
+      this.releaseLock(lockFd);
+    }
+  }
+
+  private acquireLock(): number | null {
+    try {
+      fs.mkdirSync(path.dirname(this.lockPath), { recursive: true });
+      return fs.openSync(this.lockPath, "wx");
+    } catch {
+      return null;
+    }
+  }
+
+  private releaseLock(fd: number): void {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // best effort
+    }
+    try {
+      fs.unlinkSync(this.lockPath);
+    } catch {
+      // best effort
+    }
+  }
+
+  makeKey(scenario: FailureScenario, agentId?: string): string {
+    return `${scenario}:${agentId || "__global__"}`;
+  }
+
+  get(scenario: FailureScenario, agentId?: string): RecoveryState | undefined {
+    return this.state.get(this.makeKey(scenario, agentId));
+  }
+
+  set(scenario: FailureScenario, agentId: string | undefined, value: RecoveryState): void {
+    this.state.set(this.makeKey(scenario, agentId), value);
+    this.persist();
+  }
+
+  clear(): void {
+    this.state.clear();
+    this.persist();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +560,8 @@ export class RecoveryRegistry {
 
   private recipes: Map<FailureScenario, RecoveryRecipe> = new Map();
   private eventListeners: Array<(event: RecoveryEvent) => void> = [];
+  private verifiers: Map<FailureScenario, (context: RecoveryContext) => Promise<RecoveryStepResult>> = new Map();
+  private stateStore = new RecoveryStateStore();
 
   private constructor() {}
 
@@ -506,6 +605,10 @@ export class RecoveryRegistry {
     scenario: FailureScenario,
     context: RecoveryContext,
   ): Promise<RecoveryEvent> {
+    const correlationId = `${scenario}:${context.agentId || "global"}:${Date.now()}`;
+    const startedAt = startTimer();
+    logger.info({ correlationId, scenario, agentId: context.agentId, phase: "recovery.start" }, "Recovery execution started");
+    incrementCounter("operant_recovery_attempt_total", 1, { scenario });
     const recipe = this.getRecipe(scenario);
     if (!recipe) {
       const event: RecoveryEvent = {
@@ -517,8 +620,28 @@ export class RecoveryRegistry {
         escalation_policy: "LogAndContinue",
         agentId: context.agentId,
         message: `No recovery recipe registered for ${scenario}`,
+        correlationId,
       };
       this.notifyListeners(event);
+      logger.warn({ correlationId, scenario, durationMs: elapsedMs(startedAt), phase: "recovery.no_recipe" }, "Recovery execution ended without recipe");
+      return event;
+    }
+
+    const previous = this.stateStore.get(scenario, context.agentId);
+    if (previous && previous.cooldownUntil > Date.now()) {
+      incrementCounter("operant_recovery_cooloff_skip_total", 1, { scenario });
+      const event: RecoveryEvent = {
+        timestamp: new Date().toISOString(),
+        scenario,
+        stepsAttempted: [],
+        success: false,
+        escalation_triggered: false,
+        agentId: context.agentId,
+        message: `Recovery for ${scenario} is in cooloff (${Math.ceil((previous.cooldownUntil - Date.now()) / 1000)}s remaining)`,
+        correlationId,
+      };
+      this.notifyListeners(event);
+      logger.info({ correlationId, scenario, durationMs: elapsedMs(startedAt), phase: "recovery.cooloff" }, "Recovery skipped due to cooloff");
       return event;
     }
 
@@ -548,6 +671,17 @@ export class RecoveryRegistry {
       }
 
       if (attemptSucceeded) {
+        const verifier = this.verifiers.get(scenario);
+        if (verifier) {
+          const verification = await verifier(attemptCtx);
+          if (!verification.success) {
+            attemptSucceeded = false;
+            lastMessage = `Verification failed: ${verification.message}`;
+          }
+        }
+      }
+
+      if (attemptSucceeded) {
         lastSuccess = true;
         lastMessage = `Recovery succeeded on attempt ${attempt}/${recipe.maxAttempts}`;
         break;
@@ -555,6 +689,11 @@ export class RecoveryRegistry {
     }
 
     const escalationTriggered = !lastSuccess;
+    if (lastSuccess) {
+      incrementCounter("operant_recovery_success_total", 1, { scenario });
+    } else {
+      incrementCounter("operant_recovery_failure_total", 1, { scenario });
+    }
     const event: RecoveryEvent = {
       timestamp: new Date().toISOString(),
       scenario,
@@ -568,10 +707,35 @@ export class RecoveryRegistry {
       message: lastSuccess
         ? lastMessage
         : `Recovery exhausted after ${recipe.maxAttempts} attempt(s). Escalation: ${recipe.escalationPolicy}`,
+      correlationId,
     };
 
+    const cooloffMs = lastSuccess ? 0 : (recipe.cooloffMs ?? 0);
+    this.stateStore.set(scenario, context.agentId, {
+      attempts: (previous?.attempts || 0) + 1,
+      lastAttemptAt: Date.now(),
+      cooldownUntil: Date.now() + cooloffMs,
+      lastResult: event.message,
+      verificationResult: lastSuccess ? "ok" : "failed",
+    });
+
     this.notifyListeners(event);
+    logger.info({
+      correlationId,
+      scenario,
+      success: event.success,
+      escalationTriggered: event.escalation_triggered,
+      durationMs: elapsedMs(startedAt),
+      phase: "recovery.finish",
+    }, "Recovery execution completed");
     return event;
+  }
+
+  registerVerifier(
+    scenario: FailureScenario,
+    verifier: (context: RecoveryContext) => Promise<RecoveryStepResult>,
+  ): void {
+    this.verifiers.set(scenario, verifier);
   }
 
   /**
@@ -631,6 +795,7 @@ export class RecoveryRegistry {
         escalationPolicy: "AlertUser",
         description:
           "Agent missed heartbeat — restart the agent and verify connectivity.",
+        cooloffMs: 30_000,
       },
       {
         scenario: FailureScenario.MessageDeliveryFailure,
@@ -639,6 +804,7 @@ export class RecoveryRegistry {
         escalationPolicy: "LogAndContinue",
         description:
           "Message delivery failed — drain the queue and retry delivery.",
+        cooloffMs: 10_000,
       },
       {
         scenario: FailureScenario.MemoryStoreFailure,
@@ -647,6 +813,7 @@ export class RecoveryRegistry {
         escalationPolicy: "AlertUser",
         description:
           "LanceDB memory store failure — reconnect and reinitialise if needed.",
+        cooloffMs: 30_000,
       },
       {
         scenario: FailureScenario.KanbanPersistenceFailure,
@@ -655,6 +822,7 @@ export class RecoveryRegistry {
         escalationPolicy: "AlertUser",
         description:
           "Kanban SQLite persistence failure — reconnect and flush stale state.",
+        cooloffMs: 30_000,
       },
       {
         scenario: FailureScenario.MCPToolExecutionFailure,
@@ -663,6 +831,7 @@ export class RecoveryRegistry {
         escalationPolicy: "LogAndContinue",
         description:
           "MCP tool execution failed — retry once, then switch to fallback tool.",
+        cooloffMs: 10_000,
       },
       {
         scenario: FailureScenario.LLMProviderFailure,
@@ -671,6 +840,7 @@ export class RecoveryRegistry {
         escalationPolicy: "AlertUser",
         description:
           "LLM provider error — switch to fallback model and retry.",
+        cooloffMs: 60_000,
       },
       {
         scenario: FailureScenario.TelegramNotificationFailure,
@@ -679,12 +849,18 @@ export class RecoveryRegistry {
         escalationPolicy: "LogAndContinue",
         description:
           "Telegram notification failed — attempt reconnection via test message, then log alert.",
+        cooloffMs: 20_000,
       },
     ];
 
     for (const recipe of recipes) {
       this.register(recipe);
     }
+
+    // Verification hooks: require actual post-check success signal
+    this.registerVerifier(FailureScenario.TelegramNotificationFailure, reconnectTelegram);
+    this.registerVerifier(FailureScenario.MemoryStoreFailure, reconnectSubsystem);
+    this.registerVerifier(FailureScenario.LLMProviderFailure, retryOperation);
 
     // If hooks are provided, attach them as event listeners so escalation
     // side-effects (Telegram alert, agent abort) are wired up automatically.
@@ -721,6 +897,8 @@ export class RecoveryRegistry {
   reset(): void {
     this.recipes.clear();
     this.eventListeners = [];
+    this.verifiers.clear();
+    this.stateStore.clear();
     RecoveryRegistry.instance = null;
   }
 }

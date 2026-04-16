@@ -406,7 +406,7 @@ let registry: SessionRegistry | null = null;
 export function getSessionRegistry(dbPath?: string): SessionRegistry {
   if (!registry) {
     const defaultPath = path.join(
-      process.env.STRATEGOS_DATA_DIR || process.cwd(),
+      process.env.OPERANT_DATA_DIR || process.cwd(),
       "data",
       "sessions.db"
     );

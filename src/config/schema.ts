@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
-// Strategos Configuration Schema
+// Operant Configuration Schema
 // ---------------------------------------------------------------------------
 // Combines patterns from OpenClaw (providers, agents, MCP, memory, model
 // fallback chains) and OpenCode (compaction, pruning, overflow detection)
@@ -93,7 +93,7 @@ const MediaSchema = z.object({
   apexPython: z.string().optional(), // path to whisper-hindi python
 }).strict().optional();
 
-export const StrategosConfigSchema = z.object({
+export const OperantConfigSchema = z.object({
   $schema: z.string().optional(),
 
   // ── LLM provider (simple flat mode) ──────────────────────────────────
@@ -170,11 +170,11 @@ export const StrategosConfigSchema = z.object({
 
   // ── File paths ───────────────────────────────────────────────────────
   paths: z.object({
-    lancedb: z.string().default("/var/lib/strategos/lancedb"),
-    kanbanDb: z.string().default("/var/lib/strategos/kanban/kanban.db"),
-    messagesDb: z.string().default("/var/lib/strategos/messages/messages.db"),
-    agentOffices: z.string().default("/etc/strategos/agents"),
-    logFile: z.string().default("/var/log/strategos/strategos.log"),
+    lancedb: z.string().default("/var/lib/operant/lancedb"),
+    kanbanDb: z.string().default("/var/lib/operant/kanban/kanban.db"),
+    messagesDb: z.string().default("/var/lib/operant/messages/messages.db"),
+    agentOffices: z.string().default("/etc/operant/agents"),
+    logFile: z.string().default("/var/log/operant/operant.log"),
   }).strict().optional(),
 
   // ── Telegram ─────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ export const StrategosConfigSchema = z.object({
   _version: z.string().optional(),
 }).strict();
 
-export type StrategosConfig = z.infer<typeof StrategosConfigSchema>;
+export type OperantConfig = z.infer<typeof OperantConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingSchema>;
 export type RetryConfig = z.infer<typeof RetrySchema>;
 export type ModelDef = z.infer<typeof ModelDefSchema>;

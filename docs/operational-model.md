@@ -1,8 +1,8 @@
-# Strategos Operational Model: Core Staff + Board Meetings
+# Operant Operational Model: Core Staff + Board Meetings
 
 ## Vision
 
-You want Strategos to operate like a real CEO managing a company:
+You want Operant to operate like a real CEO managing a company:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -11,7 +11,7 @@ You want Strategos to operate like a real CEO managing a company:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  STRATEGOS (CEO) — Conversational, manages through Kanban +     │
+│  OPERANT (CEO) — Conversational, manages through Kanban +     │
 │  direct confrontation, can hire/fire auxiliary staff            │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -19,7 +19,7 @@ You want Strategos to operate like a real CEO managing a company:
               ▼                               ▼
 ┌─────────────────────────┐     ┌─────────────────────────────────┐
 │   CORE STAFF (C-Suite)  │     │   AUXILIARY STAFF (Contractors) │
-│   — Predefined roles    │     │   — Hired/fired by Strategos    │
+│   — Predefined roles    │     │   — Hired/fired by Operant    │
 │   — Permanent           │     │   — Task-based                  │
 │   — Board voting rights │     │   — No board seat               │
 │   — Manage departments  │     │   — Report to Core Staff        │
@@ -49,7 +49,7 @@ You want Strategos to operate like a real CEO managing a company:
 
 ## Auxiliary Staff (Dynamic)
 
-- Hired by Strategos based on workload
+- Hired by Operant based on workload
 - Examples: `dev-contractor-1`, `writer-freelancer-1`
 - Assigned to Core Staff managers
 - Fired when task complete or budget exhausted
@@ -57,18 +57,18 @@ You want Strategos to operate like a real CEO managing a company:
 ## Management Mechanisms
 
 ### 1. Kanban Management
-- Strategos audits each agent's board every 15/30 min
+- Operant audits each agent's board every 15/30 min
 - Stalled cards (>4h) → escalation to manager
-- Blocked cards → Strategos intervention
+- Blocked cards → Operant intervention
 
 ### 2. Direct Confrontation
-- Strategos can initiate 1-on-1 with any agent
+- Operant can initiate 1-on-1 with any agent
 - "CTO, why is the ACP task stalled?"
 - Agent responds based on their memory + context
 
 ### 3. Board Meetings
 - Scheduled (weekly) or ad-hoc (crisis)
-- All Core Staff + Strategos
+- All Core Staff + Operant
 - Shared conversation context
 - Voting on major decisions
 - Meeting minutes stored in shared memory
@@ -106,7 +106,7 @@ export const CORE_STAFF_ROLES = {
   // ...
 };
 
-// On Strategos startup, auto-create core staff
+// On Operant startup, auto-create core staff
 await initializeCoreStaff();
 ```
 
@@ -232,7 +232,7 @@ export class HierarchicalMemory {
 ### Gap 5: Task Delegation Chain
 
 **Current State:**
-- Strategos directly assigns tasks to any agent
+- Operant directly assigns tasks to any agent
 - No management hierarchy
 - No delegation from Core → Auxiliary
 
@@ -271,7 +271,7 @@ export async function delegateTask(from: string, to: string, task: Task) {
 ### Gap 6: Agent Autonomy Levels
 
 **Current State:**
-- Agents only act when Strategos tells them to
+- Agents only act when Operant tells them to
 - No autonomous behavior
 
 **What's Needed:**
@@ -312,7 +312,7 @@ const ACTION_REQUIREMENTS = {
 ### Gap 7: Confrontation Protocol
 
 **Current State:**
-- No mechanism for Strategos to "confront" agents about stalled work
+- No mechanism for Operant to "confront" agents about stalled work
 
 **What's Needed:**
 - Automated confrontation triggers (stalled >4h, quality issues)

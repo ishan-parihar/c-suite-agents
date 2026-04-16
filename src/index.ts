@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { startStrategos, toolImpls } from "./mcp/server.js";
+import { startOperant, toolImpls } from "./mcp/server.js";
 import { startHeartbeat, stopHeartbeat } from "./scheduler/heartbeat.js";
 import { startTelegram, sendTelegramMessage, getTelegramBot, flushChatState } from "./integrations/telegram.js";
 import { startMessageProcessor } from "./scheduler/message-processor.js";
@@ -44,15 +44,21 @@ import { AlertManagerInstance as AlertManager } from "./runtime/alert-manager.js
 import { SelfHealer } from "./runtime/self-healer.js";
 import { HeartbeatMonitor } from "./scheduler/heartbeat-monitor.js";
 import { CronErrorHandler } from "./scheduler/cron-error-handler.js";
+import { renderPrometheusMetrics } from "./runtime/metrics.js";
 
-// Load config early (defaults < .env < ~/.strategos/config.json)
+// Load config early (defaults < .env < ~/.operant/config.json)
 const config = loadConfig();
 if (config.logging?.level) setLogLevel(config.logging.level);
-logger.info({ path: getConfigPath(), level: config.logging?.level }, "Strategos config loaded");
+logger.info({ path: getConfigPath(), level: config.logging?.level }, "Operant config loaded");
 
 // Health check HTTP server — exposes multi-component health status
 const HEALTH_PORT = parseInt(process.env.HEALTH_CHECK_PORT || "4097", 10);
 const healthServer = createServer(async (req, res) => {
+  if (req.url === "/metrics") {
+    res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" });
+    res.end(renderPrometheusMetrics());
+    return;
+  }
   res.writeHead(200, { "Content-Type": "application/json" });
   const body = await healthResponse();
   res.end(JSON.stringify(body));
@@ -175,7 +181,13 @@ const watchdogTimer = setInterval(() => {
 
 async function main() {
   // Single-instance enforcement via exclusive PID file creation (atomic check-and-claim)
-  const pidFile = join(homedir(), ".local/run/strategos.pid");
+  const pidFile = join(homedir(), ".local/run/operant.pid");
+  try {
+    await mkdir(join(homedir(), ".local/run"), { recursive: true });
+  } catch (err: any) {
+    logger.error({ code: "PID_DIR_MISSING", err: err.message }, "Failed to initialize PID directory");
+    throw err;
+  }
   try {
     const fd = openSync(pidFile, 'wx');
     writeSync(fd, String(process.pid));
@@ -186,11 +198,12 @@ async function main() {
         const existingPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
         try {
           process.kill(existingPid, 0);
-          console.error(`Strategos already running (PID ${existingPid}). Exiting.`);
+          console.error(`Operant already running (PID ${existingPid}). Exiting.`);
           process.exit(1);
         } catch (e: any) {
           if (e.code === "ESRCH") {
             // Stale PID file — remove and retry exclusive create
+            logger.warn({ code: "PID_STALE", existingPid }, "Removing stale PID lock");
             try { unlinkSync(pidFile); } catch {}
             const fd = openSync(pidFile, 'wx');
             writeSync(fd, String(process.pid));
@@ -201,7 +214,8 @@ async function main() {
         }
       } catch {
         // Race — another instance took it
-        console.error("Strategos already running. Exiting.");
+        logger.error({ code: "PID_LOCKED" }, "PID lock already held by another instance");
+        console.error("Operant already running. Exiting.");
         process.exit(1);
       }
     } else {
@@ -253,8 +267,8 @@ async function main() {
       markHealthy("plugins", { loaded: pluginHealth.loaded, total: pluginHealth.total });
     }
 
-    // Start Strategos MCP server (provides native tool implementations)
-    const rt = await startStrategos();
+    // Start Operant MCP server (provides native tool implementations)
+    const rt = await startOperant();
     const mcpShutdown = rt.shutdown;
 
     // ── CONNECT MCP BRIDGE: External servers + native tools ──
@@ -442,7 +456,10 @@ async function main() {
 
       for (const record of existingSessions) {
         if (record.has_real_conversation) {
-          const ok = runtime.restoreSession(record.agent_id, record.session_id, { mode: "message" });
+          const ok = runtime.restoreSession(record.agent_id, record.session_id, {
+            mode: "message",
+            contextId: record.chat_id || undefined,
+          });
           if (ok) {
             restored++;
           } else {
@@ -969,7 +986,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
     if (healthProbeTimer && typeof healthProbeTimer.unref === "function") healthProbeTimer.unref();
 
     // Mark as ready — all components initialized
-    logger.info("Strategos boot complete — NATIVE AGENT RUNTIME (no external dependencies)");
+    logger.info("Operant boot complete — NATIVE AGENT RUNTIME (no external dependencies)");
 
     // Graceful shutdown
     const SHUTDOWN_TIMEOUT_MS = 15000;
@@ -1071,7 +1088,7 @@ This is your monthly strategic deep-dive. Think in quarters and years, not days.
         logger.info("Webhook server closed");
 
         // Clean up PID file
-        const pidFile = join(homedir(), ".local/run/strategos.pid");
+        const pidFile = join(homedir(), ".local/run/operant.pid");
         try { await unlink(pidFile); logger.info("PID file removed"); } catch { /* ignore */ }
 
         logger.info("Graceful shutdown complete");

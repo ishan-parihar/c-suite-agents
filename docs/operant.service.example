@@ -1,0 +1,53 @@
+[Unit]
+Description=Operant Orchestrator (MCP + ACP)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=operant
+Group=operant
+WorkingDirectory=/opt/operant
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/operant/.env
+ExecStart=/usr/bin/node /opt/operant/build/index.js
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillSignal=SIGTERM
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+UMask=0077
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths=/var/lib/operant /var/log/operant
+
+# Resource controls
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,10 +1,10 @@
 {
-  "name": "strategos",
+  "name": "operant",
   "version": "0.4.0",
   "private": true,
   "type": "module",
   "bin": {
-    "strategos": "./bin/strategos.mjs"
+    "operant": "./bin/operant.mjs"
   },
   "scripts": {
     "build": "bun build src/index.ts --outdir build --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm && bun build src/cli/program.ts --outdir build/cli --target node --external better-sqlite3 --external @lancedb/lancedb --external ollama --external sql.js --format esm",

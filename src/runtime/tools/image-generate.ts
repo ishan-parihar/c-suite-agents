@@ -16,7 +16,7 @@ interface AnyAgentTool {
   execute: (toolCallId: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: "text"; text: string }> }>;
 }
 
-const MEDIA_DIR = join(homedir(), ".strategos", "media");
+const MEDIA_DIR = join(homedir(), ".operant", "media");
 
 async function ensureMediaDir(): Promise<string> {
   await fs.mkdir(MEDIA_DIR, { recursive: true });

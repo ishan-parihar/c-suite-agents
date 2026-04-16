@@ -94,7 +94,7 @@ COO hires:
 
 **Hierarchy:**
 ```
-CEO (strategos)
+CEO (operant)
 ├─ COO (coo-productivity)
 │  ├─ productivity-coach-1 (hired by COO)
 │  └─ operations-assistant-1 (hired by COO)
@@ -123,7 +123,7 @@ CMO's View:
 │ ▼ content-writer-1's Board                      │
 │   Backlog → Drafting → Review → Done            │
 │   • Blog post: "AI Trends" (In Review)          │
-│   • Case study: "Strategos" (Drafting)          │
+│   • Case study: "Operant" (Drafting)          │
 │ ▼ video-editor-1's Board                        │
 │   Backlog → Editing → Rendering → Complete      │
 │   • Video: "Product Demo" (Rendering)           │

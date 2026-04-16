@@ -5,11 +5,11 @@
 
 ## Context
 
-Strategos currently depends on OpenCode as an external HTTP service. Each C-suite agent (CEO, COO, CFO, CMO, CRO, CPO, CIO, Physician) is spawned as an OpenCode session via HTTP calls. This creates several problems:
+Operant currently depends on OpenCode as an external HTTP service. Each C-suite agent (CEO, COO, CFO, CMO, CRO, CPO, CIO, Physician) is spawned as an OpenCode session via HTTP calls. This creates several problems:
 
-1. **Context injection is rigid** — OpenCode's system prompt composition is internal and not easily customizable from Strategos
+1. **Context injection is rigid** — OpenCode's system prompt composition is internal and not easily customizable from Operant
 2. **External dependency** — Running OpenCode as a separate process adds operational complexity
-3. **No workspace isolation** — Agents share the Strategos project CWD; they have no dedicated "office" to manage their own state, files, and core identity documents
+3. **No workspace isolation** — Agents share the Operant project CWD; they have no dedicated "office" to manage their own state, files, and core identity documents
 4. **No HEARTBEAT_OK bypass** — All agent output routes through CEO validation, making agents less autonomous
 5. **Hardcoded identities** — Agent identity files at `~/.config/opencode/agent/<agent>` are read once at spawn time, not dynamically from a per-agent workspace
 
@@ -68,7 +68,7 @@ We studied three reference implementations to determine the best architecture to
 
 ## Decision
 
-**Adopt OpenClaw's workspace-driven architecture as the conceptual model, but build a NATIVE runtime for Strategos — not wrapping any external tool.**
+**Adopt OpenClaw's workspace-driven architecture as the conceptual model, but build a NATIVE runtime for Operant — not wrapping any external tool.**
 
 ### Why OpenClaw's pattern over OpenCode:
 
@@ -81,13 +81,13 @@ We studied three reference implementations to determine the best architecture to
 
 1. **Oh-My-OpenAgent is not standalone** — it's a plugin. Adopting it means adopting OpenCode anyway.
 2. **OpenCode is too heavy** — Effect framework, SQLite, AI SDK, 19+ packages. The dependency cost outweighs the benefit.
-3. **We need custom agent routing** — Strategos agents need direct-to-user messaging, domain-specific databases, Kanban boards — things neither OpenCode nor OpenClaw provide.
+3. **We need custom agent routing** — Operant agents need direct-to-user messaging, domain-specific databases, Kanban boards — things neither OpenCode nor OpenClaw provide.
 4. **Full control over context injection** — We need to inject LifeOS context, memory scores, agent relationships, and business logic into each agent's prompt.
 
-### Proposed Architecture: Strategos Native Agent Runtime
+### Proposed Architecture: Operant Native Agent Runtime
 
 ```
-~/.strategos/
+~/.operant/
 ├── agents/
 │   ├── ceo/
 │   │   ├── SOUL.md          # Core identity and purpose
@@ -105,7 +105,7 @@ We studied three reference implementations to determine the best architecture to
 │   └── ... (one folder per C-suite agent)
 ├── sessions/
 │   └── <agent-id>/          # Session state per agent
-└── config.json              # Global Strategos configuration
+└── config.json              # Global Operant configuration
 ```
 
 **Key Design Decisions:**

@@ -12,6 +12,8 @@ export type FailoverReason =
   | "rate_limit"
   | "api_error"
   | "context_overflow"
+  | "auth_error"
+  | "billing_error"
   | "unknown";
 
 export interface ModelEntry {
@@ -68,6 +70,34 @@ export function classifyFailoverReason(err: unknown): FailoverReason {
   if (err instanceof Error) {
     const message = err.message.toLowerCase();
     const name = err.name.toLowerCase();
+
+    // Auth errors
+    if (
+      message.includes("unauthorized") ||
+      message.includes("invalid api key") ||
+      message.includes("invalid_api_key") ||
+      message.includes("authentication") ||
+      message.includes("access denied") ||
+      message.includes("forbidden") ||
+      message.includes("permission denied") ||
+      message.includes("api key not valid")
+    ) {
+      return "auth_error";
+    }
+
+    // Billing / credit / quota exhaustion
+    if (
+      message.includes("insufficient") ||
+      message.includes("billing") ||
+      message.includes("payment") ||
+      message.includes("credit") ||
+      message.includes("subscription") ||
+      message.includes("account balance") ||
+      message.includes("top up") ||
+      message.includes("spending limit")
+    ) {
+      return "billing_error";
+    }
 
     // Context overflow — the same error will happen on any fallback model
     if (
@@ -139,6 +169,8 @@ export function classifyFailoverReason(err: unknown): FailoverReason {
       if (status >= 500) return "api_error";
       if (status === 429) return "rate_limit";
       if (status === 404) return "model_not_found";
+      if (status === 401 || status === 403) return "auth_error";
+      if (status === 402) return "billing_error";
     }
   }
 
@@ -148,6 +180,10 @@ export function classifyFailoverReason(err: unknown): FailoverReason {
     if (maybeErr.status === 429) return "rate_limit";
     if (maybeErr.status === 404) return "model_not_found";
     if (maybeErr.status !== undefined && maybeErr.status >= 500) return "api_error";
+    if (maybeErr.status === 401 || maybeErr.status === 403) return "auth_error";
+    if (maybeErr.status === 402) return "billing_error";
+    if (maybeErr.code === "invalid_api_key" || maybeErr.code === "authentication_error") return "auth_error";
+    if (maybeErr.code === "billing_error" || maybeErr.code === "insufficient_funds") return "billing_error";
     if (maybeErr.code === "ETIMEDOUT" || maybeErr.code === "ECONNABORTED") return "timeout";
   }
 
@@ -170,8 +206,88 @@ export function shouldFailover(err: unknown): { should: boolean; reason: Failove
     return { should: false, reason };
   }
 
+  // Billing errors should not immediately fail over to another profile repeatedly.
+  // Caller should place provider/model in cooldown and then decide.
+  if (reason === "billing_error") {
+    return { should: false, reason };
+  }
+
   // All other reasons warrant attempting a failover
   return { should: true, reason };
+}
+
+// ── Billing Backoff Registry ─────────────────────────────────────────
+
+const BILLING_BACKOFF_MIN_MS = 60 * 60 * 1000;
+const BILLING_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
+
+export interface BillingBackoffState {
+  cooldownUntil: number;
+  consecutiveErrors: number;
+  lastError?: string;
+}
+
+export type BillingBackoffRegistry = Map<string, BillingBackoffState>;
+
+export function createBillingBackoffRegistry(): BillingBackoffRegistry {
+  return new Map<string, BillingBackoffState>();
+}
+
+function getBackoffState(registry: BillingBackoffRegistry, key: string): BillingBackoffState {
+  const existing = registry.get(key);
+  if (existing) return existing;
+  const state: BillingBackoffState = { cooldownUntil: 0, consecutiveErrors: 0 };
+  registry.set(key, state);
+  return state;
+}
+
+export function getBillingBackoffRemainingMs(
+  registry: BillingBackoffRegistry,
+  provider: string,
+  model: string,
+): number {
+  const key = `${provider}:${model}`;
+  const state = registry.get(key);
+  if (!state || state.cooldownUntil === 0) return 0;
+  const remaining = state.cooldownUntil - Date.now();
+  if (remaining <= 0) {
+    state.cooldownUntil = 0;
+    state.consecutiveErrors = Math.max(0, state.consecutiveErrors - 1);
+    return 0;
+  }
+  return remaining;
+}
+
+export function recordBillingError(
+  registry: BillingBackoffRegistry,
+  provider: string,
+  model: string,
+  errorMessage: string,
+): { cooldownMs: number; backoffUntil: number } {
+  const key = `${provider}:${model}`;
+  const state = getBackoffState(registry, key);
+  state.consecutiveErrors++;
+  state.lastError = errorMessage;
+
+  const backoffMs = Math.min(
+    BILLING_BACKOFF_MIN_MS * Math.pow(2, state.consecutiveErrors - 1),
+    BILLING_BACKOFF_MAX_MS,
+  );
+  state.cooldownUntil = Date.now() + backoffMs;
+  return { cooldownMs: backoffMs, backoffUntil: state.cooldownUntil };
+}
+
+export function clearBillingBackoff(
+  registry: BillingBackoffRegistry,
+  provider: string,
+  model: string,
+): void {
+  const key = `${provider}:${model}`;
+  const state = registry.get(key);
+  if (!state) return;
+  state.cooldownUntil = 0;
+  state.consecutiveErrors = 0;
+  state.lastError = undefined;
 }
 
 // ── Failover Execution ─────────────────────────────────────────────

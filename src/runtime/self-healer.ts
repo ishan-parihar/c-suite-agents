@@ -1080,7 +1080,7 @@ export class SelfHealerClass {
       }
 
       case "kanban": {
-        // Kanban is only accessible through the StrategosRuntime ctx (not
+        // Kanban is only accessible through the OperantRuntime ctx (not
         // exposed via NativeAgentRuntime). Log best-effort check.
         logger.info({ subsystem: "kanban" },
           "SelfHealer: reconnect kanban — no singleton kanban getter, logged",
@@ -1256,7 +1256,7 @@ export class SelfHealerClass {
 
 
       case "kanban": {
-        // Kanban is only accessible through the StrategosRuntime ctx (not
+        // Kanban is only accessible through the OperantRuntime ctx (not
         // exposed via NativeAgentRuntime). Log best-effort check.
         logger.info({ subsystem: "kanban" },
           "SelfHealer: flush-and-reinit kanban — no singleton kanban getter, logged",

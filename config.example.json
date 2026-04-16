@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/your-org/strategos/main/src/config/schema.json",
+  "$schema": "https://raw.githubusercontent.com/your-org/operant/main/src/config/schema.json",
 
   "llm": {
     "provider": "ollama",
@@ -39,11 +39,11 @@
   },
 
   "paths": {
-    "lancedb": "/var/lib/strategos/lancedb",
-    "kanbanDb": "/var/lib/strategos/kanban/kanban.db",
-    "messagesDb": "/var/lib/strategos/messages/messages.db",
-    "agentOffices": "/etc/strategos/agents",
-    "logFile": "/var/log/strategos/strategos.log"
+    "lancedb": "/var/lib/operant/lancedb",
+    "kanbanDb": "/var/lib/operant/kanban/kanban.db",
+    "messagesDb": "/var/lib/operant/messages/messages.db",
+    "agentOffices": "/etc/operant/agents",
+    "logFile": "/var/log/operant/operant.log"
   },
 
   "telegram": {
@@ -54,7 +54,7 @@
   "mcp": {
     "lifeos": {
       "type": "local",
-      "command": ["node", "/opt/strategos/build/lifeos-mcp-server.js"],
+      "command": ["node", "/opt/operant/build/lifeos-mcp-server.js"],
       "env": {
         "NOTION_API_KEY": "your-notion-api-key"
       },
@@ -72,7 +72,7 @@
 
   "logging": {
     "level": "info",
-    "file": "/var/log/strategos/strategos.log",
+    "file": "/var/log/operant/operant.log",
     "maxFileBytes": 10485760
   }
 }

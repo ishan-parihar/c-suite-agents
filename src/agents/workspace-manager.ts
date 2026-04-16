@@ -1,5 +1,5 @@
 // Workspace Manager — Agent office directories with core files
-// Creates ~/.strategos/agents/<agent_name>/ with SOUL.md, IDENTITY.md, TOOLS.md, AGENTS.md, MEMORY.md
+// Creates ~/.operant/agents/<agent_name>/ with SOUL.md, IDENTITY.md, TOOLS.md, AGENTS.md, MEMORY.md
 // Pattern: OpenClaw workspace architecture — core files loaded by system and injected into prompt
 
 import * as fs from "fs";
@@ -8,8 +8,8 @@ import * as os from "os";
 import { logger } from "../logger.js";
 import { getCoreStaffIds, getStaffById, CORE_STAFF_ROLES, type CoreStaffRole } from "../staff/core-staff.js";
 
-export const STRATEGOS_HOME = path.join(os.homedir(), ".strategos");
-export const AGENTS_DIR = path.join(STRATEGOS_HOME, "agents");
+export const OPERANT_HOME = path.join(os.homedir(), ".operant");
+export const AGENTS_DIR = path.join(OPERANT_HOME, "agents");
 
 // Core file names (matching OpenClaw pattern with .md extension)
 export const CORE_FILES = {
@@ -133,7 +133,7 @@ function readWorkspaceFileWithCache(filePath: string, workspaceDir: string): { c
 // Fix 3: Workspace state tracking
 // =========================================================================
 
-const STATE_DIRNAME = ".strategos";
+const STATE_DIRNAME = ".operant";
 const STATE_FILENAME = "workspace-state.json";
 
 export interface WorkspaceState {
@@ -271,7 +271,7 @@ You can update your MEMORY.md and other core files over time as you learn.`;
 }
 
 // =========================================================================
-// Core File Templates (OpenClaw-inspired, Strategos-adapted)
+// Core File Templates (OpenClaw-inspired, Operant-adapted)
 // =========================================================================
 
 function generateAgentsMd(role: CoreStaffRole): string {
