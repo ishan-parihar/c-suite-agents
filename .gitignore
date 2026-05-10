@@ -50,3 +50,6 @@ coverage/
 *.tsbuildinfo
 /.sisyphus
 /.icode
+.contexty
+.memsearch
+.hive
