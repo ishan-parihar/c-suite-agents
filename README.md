@@ -251,3 +251,5 @@ sudo -u operant node /opt/operant/build/index.js
 ## License
 
 MIT
+---
+Developed by [Ishan Parihar](https://github.com/ishan-parihar) — If you find this useful, [consider supporting](https://rzp.io/rzp/ishan-parihar)
