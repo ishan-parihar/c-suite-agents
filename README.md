@@ -1,8 +1,11 @@
-# Operant
+# C-Suite Agents
 
-Multi-agent orchestration system that runs a C-suite of autonomous AI staff with Kanban workflows, threaded messaging, memory, and Telegram interface.
+> Multi-agent C-suite orchestration — Kanban workflows, threaded messaging, LanceDB memory, and Telegram interface.
 
-## Why This Project
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![Tests](https://img.shields.io/badge/tests-227%20passing-brightgreen)](#testing)
+[![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)](#)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 Operant is built as an operations engine rather than a single chatbot. It coordinates specialized agents (CEO, COO, CFO, etc.) that:
 
@@ -118,4 +121,4 @@ MIT
 
 ---
 
-Developed by [Ishan Parihar](https://github.com/ishan-parihar) — If you find this useful, [consider supporting](https://rzp.io/rzp/ishan-parihar) ☕
+Developed by [Ishan Parihar](https://github.com/ishan-parihar)
