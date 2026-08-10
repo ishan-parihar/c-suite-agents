@@ -1,5 +1,8 @@
 # C-Suite Agents
 
+<!-- T2I HERO SPEC — Subject: a boardroom of C-suite agent roles (CFO/COO/CRO/CMO) around a round table with a PostgreSQL/LanceDB spine beneath, escalation arrows between seats. Composition: conference table hub, agent avatars at cardinal points, data-stack below. Palette: deep slate #0f172a, corporate teal #14b8a6, gold #f59e0b escalation accents. Style: clean flat vector, confident corporate motif, no text. 16:9. -->
+
+
 > Multi-agent C-suite orchestration — Kanban workflows, threaded messaging, LanceDB memory, and Telegram interface.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
