@@ -6,7 +6,7 @@
 > Multi-agent C-suite orchestration — Kanban workflows, threaded messaging, LanceDB memory, and Telegram interface.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
-![LOC](https://img.shields.io/badge/LOC-45.5K-informational?style=flat-square)
+![LOC](https://img.shields.io/badge/LOC-46.6K-informational?style=flat-square)
 [![Tests](https://img.shields.io/badge/tests-227%20passing-brightgreen)](#testing)
 [![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
