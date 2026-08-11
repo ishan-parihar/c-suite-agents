@@ -6,6 +6,7 @@
 > Multi-agent C-suite orchestration — Kanban workflows, threaded messaging, LanceDB memory, and Telegram interface.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
+![LOC](https://img.shields.io/badge/LOC-45.5K-informational?style=flat-square)
 [![Tests](https://img.shields.io/badge/tests-227%20passing-brightgreen)](#testing)
 [![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -125,3 +126,14 @@ MIT
 ---
 
 Developed by [Ishan Parihar](https://github.com/ishan-parihar)
+
+---
+
+## ☕ Support & Sponsorship
+
+If you find this project useful, consider supporting ongoing development:
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat-square&logo=github)](https://github.com/sponsors/ishan-parihar)
+[![Donate](https://img.shields.io/badge/Donate-Razorpay-3395FF?style=flat-square)](https://rzp.io/rzp/ishan-parihar)
+
+Your support funds new features, releases, and infrastructure for the whole ecosystem.
