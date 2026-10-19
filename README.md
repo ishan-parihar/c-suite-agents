@@ -40,13 +40,11 @@ npm start
 ## Production Install (systemd)
 
 ```bash
-sudo ./install.sh
-sudo nano /opt/operant/.env
-sudo systemctl enable --now operant
-sudo ./verify-install.sh
+curl -fsSL https://raw.githubusercontent.com/ishan-parihar/c-suite-agents/main/install.sh | bash
 ```
 
-For full deployment and service operations, see `SETUP.md`.
+The installer runs as your user and uses `sudo` for the privileged steps (system
+user creation, `/opt/operant`, systemd unit).  See `docs/SETUP.md` for full deployment.
 
 ## CLI
 
