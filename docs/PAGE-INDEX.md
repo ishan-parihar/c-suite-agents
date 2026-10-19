@@ -30,3 +30,4 @@ Every page under `docs/`, with the question it answers. Pages named `README.md` 
 | [`2026-04-13-operant-openclaw-hybrid.md`](superpowers/plans/2026-04-13-operant-openclaw-hybrid.md) | PLAN | Operant × OpenClaw Hybrid Implementation Plan | — |
 | [`2026-04-15-remaining-work-plan.md`](superpowers/plans/2026-04-15-remaining-work-plan.md) | PLAN | Operant × OpenClaw Hybrid — Remaining Work Plan | — |
 | [`2026-04-10-operant-dashboard-design.md`](superpowers/specs/2026-04-10-operant-dashboard-design.md) | LIVE | Operant Dashboard — Full-Scale Design Document | — |
+| [`SETUP.md`](SETUP.md) | Operant Setup and Operations — This file is the deployment and operations runbook. For project overview and architecture, see README.md.… |
