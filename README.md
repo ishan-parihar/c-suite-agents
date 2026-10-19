@@ -114,6 +114,8 @@ Current status: `227` tests passing across `11` files.
 - `docs/native-agent-runtime-audit.md`
 - `docs/adr/ADR-002-native-agent-runtime.md`
 
+Every doc in `docs/` is listed with the question it answers in [docs/PAGE-INDEX.md](docs/PAGE-INDEX.md).
+
 ## Scope and Limitations
 
 - Assumes local infrastructure for Ollama and SQLite-backed stores.
